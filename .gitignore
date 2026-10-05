@@ -1,0 +1,17 @@
+# secrets
+.env
+firmware/glasses/config.h
+CLAUDE.local.md
+.claude/settings.local.json
+
+# generated / local
+logs/
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+
+# model files (whisper caches outside the repo; Piper voices are .onnx)
+models/
+*.onnx
+*.onnx.json
