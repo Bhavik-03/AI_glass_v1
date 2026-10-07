@@ -1,0 +1,59 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(.venv\\Scripts\\python -m pytest *)",
+      "PowerShell(.venv\\Scripts\\python -m ruff *)",
+      "PowerShell(git status *)",
+      "PowerShell(git diff *)",
+      "PowerShell(git log *)",
+      "PowerShell(git branch *)",
+      "Bash(.venv/Scripts/python -m pytest *)",
+      "Bash(.venv/Scripts/python -m ruff *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git branch *)"
+    ],
+    "ask": [
+      "Edit(**/docs/brief.md)",
+      "Edit(**/docs/spec.md)",
+      "Edit(**/docs/design.md)",
+      "Edit(**/docs/expense_v1.md)",
+      "Edit(**/tests/questions.csv)"
+    ],
+    "deny": [
+      "Read(**/.env)",
+      "Edit(**/.env)",
+      "Read(**/firmware/glasses/config.h)",
+      "Edit(**/firmware/glasses/config.h)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-shell.ps1"],
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${CLAUDE_PROJECT_DIR}/.claude/hooks/format-python.ps1"],
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
