@@ -6,7 +6,7 @@ Goal: A FastAPI app with /health, settings in config, and a JSONL query logger Â
 | Task | FR | Files | Done when | Test | Issue | Done |
 | --- | --- | --- | --- | --- | --- | --- |
 | M1-T1 | FR-18 | requirements.txt, server/config.py, server/main.py, CLAUDE.md (+ server/__init__.py, tests/test_server.py) | GET /health returns 200 {"status": "ok", "model": "<model name>"}; main.py calls `uvicorn.run(app, host=config.HOST, port=config.PORT)` under `if __name__ == "__main__"` and the CLAUDE.md run command becomes `.venv\Scripts\python -m server.main` | pytest | #6 | [x] |
-| M1-T2 | FR-17 | server/logger.py, server/config.py (+ tests/test_logger.py) | Writes one JSONL line with time, question, answer, per-stage timings, `searched`, tool calls (name, arguments, ok or error) and error; no API key or token ever appears in the log (the test sets a fake GEMINI_API_KEY and asserts it never appears in the line) | pytest | #5 | [ ] |
+| M1-T2 | FR-17 | server/logger.py, server/config.py (+ tests/test_logger.py) | Writes one JSONL line with time, question, answer, per-stage timings, `searched`, tool calls (name, arguments, ok or error) and error; no API key or token ever appears in the log (the test sets a fake GEMINI_API_KEY and asserts it never appears in the line) | pytest | #5 | [x] |
 
 Manual checks: the server binds to the configured host 127.0.0.1, so another device on the same Wi-Fi gets no answer on the port (FR-18).
 
