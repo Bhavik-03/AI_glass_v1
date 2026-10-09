@@ -6,3 +6,6 @@ HOST = "127.0.0.1"
 PORT = 8000
 LLM_MODEL = "gemini-3.8-flash"
 LOG_PATH = ROOT / "logs" / "queries.jsonl"
+STT_MODEL = "small.en"
+STT_DEVICE = "cuda"
+STT_COMPUTE_TYPE = "float16"
