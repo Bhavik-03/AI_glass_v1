@@ -81,7 +81,7 @@ Exact thresholds and the test plan are in spec.md.
 Constraints:
 
 - Team: one person.
-- Compute: HP Omen laptop, RTX 4050 (6 GB VRAM); Gemini API for answers.
+- Compute: HP Omen laptop, RTX 3050 Laptop GPU (4 GB VRAM); Gemini API for answers.
 - Network: internet for the Gemini API; everything else local.
 - Timeline: no fixed deadline.
 
