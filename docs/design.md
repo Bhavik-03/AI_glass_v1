@@ -47,6 +47,12 @@ Current Gemini docs (https://ai.google.dev/gemini-api/docs/generate-content/tool
 - The docs warn that conflicting time or location information in the system instruction can make the combination work poorly. The instruction states only the real current time and the home city; the eval checks live questions and relative times together.
 - SDK details (parameter names, grounding metadata, timeout units, thinking setting) change between versions: check the current `google-genai` docs before writing `llm.py`.
 
+Fallback, used only if the M3 spike shows the combination does not work with our key:
+
+- The main request carries only the function declarations, with a sixth function `web_search(query)` added.
+- `web_search` makes a separate Gemini call with only Google Search grounding and returns the grounded answer text as its result; `searched` is true when that call searched.
+- Everything else stays the same: the tool-call loop, the 3-round limit, the 8 s timeout per call. A live question then costs one extra Gemini call.
+
 System instruction (a constant in `llm.py`, with values filled in per request):
 
 - Current date, weekday and time in the configured time zone (Asia/Kolkata); home city for weather.
@@ -145,7 +151,7 @@ ai-glasses/
 
 | Risk | Mitigation |
 | --- | --- |
-| Search + tool combination is Preview and may change | Pin the SDK version; stage timings and the `searched` flag in the log show regressions; the eval covers both live and tool questions |
+| Combined Search + function calling is Preview and Gemini 3 only, and may not be available on our free-tier key | The first M3 task is a spike that tests it with our key; if it fails, use a `web_search` function that makes a separate grounded call (see Fallback above). Pin the SDK version; the `searched` flag and stage timings in the log show regressions |
 | Time in the system instruction confuses the search tool | Only the real current time and home city in the instruction; check relative-time and live questions together in the eval |
 | Gemini picks the wrong tool or a wrong time | `VALIDATED` mode, clear declarations, actions repeated back so mistakes are heard; the eval measures it per group |
 | Two Gemini calls per tool command push latency past 15 s | Stage timings in the log; minimal thinking; 8 s timeout per call |
