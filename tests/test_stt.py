@@ -1,6 +1,7 @@
 """STT module tests (FR-4). A fake model is used: no download, GPU or CUDA."""
 
 import io
+import re
 import wave
 from types import SimpleNamespace
 
@@ -36,6 +37,9 @@ def test_fr4_load_builds_model_from_config(monkeypatch):
         def __init__(self, *args, **kwargs):
             calls.append((args, kwargs))
 
+        def transcribe(self, audio):
+            return iter([]), SimpleNamespace()
+
     monkeypatch.setattr(stt, "WhisperModel", FakeWhisperModel)
     monkeypatch.setattr(stt, "_model", None)
     monkeypatch.setattr(config, "STT_MODEL", "tiny.en")
@@ -49,6 +53,53 @@ def test_fr4_load_builds_model_from_config(monkeypatch):
     assert args == ("tiny.en",)
     assert kwargs == {"device": "cpu", "compute_type": "int8"}
     assert isinstance(stt._model, FakeWhisperModel)
+
+
+def test_fr4_load_warms_up_with_silent_clip(monkeypatch):
+    """After building the model, load() transcribes one silent WAV clip as a warm-up."""
+    received = []
+
+    class FakeWhisperModel:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def transcribe(self, audio):
+            received.append(audio.read())
+            return iter([]), SimpleNamespace()
+
+    monkeypatch.setattr(stt, "WhisperModel", FakeWhisperModel)
+    monkeypatch.setattr(stt, "_model", None)
+
+    stt.load()
+
+    assert len(received) == 1
+    with wave.open(io.BytesIO(received[0]), "rb") as w:
+        assert w.getnchannels() == 1
+        assert w.getsampwidth() == 2
+        assert w.getframerate() == config.SAMPLE_RATE
+        assert w.getnframes() == config.SAMPLE_RATE * config.STT_WARMUP_S
+        frames = w.readframes(w.getnframes())
+    assert frames == b"\x00" * len(frames)
+
+
+def test_fr4_load_prints_warmup_time_to_stderr(monkeypatch, capsys):
+    """load() prints 'stt warm-up: <ms> ms' to stderr and nothing to stdout."""
+
+    class FakeWhisperModel:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def transcribe(self, audio):
+            return iter([]), SimpleNamespace()
+
+    monkeypatch.setattr(stt, "WhisperModel", FakeWhisperModel)
+    monkeypatch.setattr(stt, "_model", None)
+
+    stt.load()
+
+    captured = capsys.readouterr()
+    assert re.search(r"stt warm-up: \d+ ms", captured.err)
+    assert captured.out == ""
 
 
 def test_fr4_transcribe_passes_wav_bytes_to_model(monkeypatch):

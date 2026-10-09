@@ -9,3 +9,5 @@ LOG_PATH = ROOT / "logs" / "queries.jsonl"
 STT_MODEL = "small.en"
 STT_DEVICE = "cuda"
 STT_COMPUTE_TYPE = "float16"
+SAMPLE_RATE = 16000
+STT_WARMUP_S = 1
