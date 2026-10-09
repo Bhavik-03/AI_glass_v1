@@ -15,10 +15,11 @@
       "Bash(git branch *)"
     ],
     "ask": [
+      "Edit(**/docs/roadmap.md)",
       "Edit(**/docs/brief.md)",
       "Edit(**/docs/spec.md)",
       "Edit(**/docs/design.md)",
-      "Edit(**/docs/expense_v1.md)",
+      "Edit(**/docs/hardware_plan.md)",
       "Edit(**/tests/questions.csv)"
     ],
     "deny": [
