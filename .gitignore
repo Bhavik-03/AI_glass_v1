@@ -29,5 +29,3 @@ __pycache__/
 models/
 *.onnx
 *.onnx.json
-pytest
-ruff

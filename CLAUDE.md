@@ -91,7 +91,7 @@ ai-glasses/
 ```powershell
 py -3.11 -m venv .venv                                    # create the venv once
 .venv\Scripts\python -m pip install -r requirements.txt   # after any dependency change
-.venv\Scripts\python -m uvicorn server.main:app --host 127.0.0.1 --port 8000   # run server
+.venv\Scripts\python -m server.main                       # run server (host and port from server/config.py)
 .venv\Scripts\python -m pytest -q                          # all tests; must pass before any commit
 .venv\Scripts\python -m ruff check .                       # lint
 .venv\Scripts\python -m ruff format --check .              # format check
