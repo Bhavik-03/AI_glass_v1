@@ -1,6 +1,6 @@
 # Plan: AI Assistant v1 Voice assistant
 
-## M1 (v1): Server skeleton, config and logger | in progress
+## M1 (v1): Server skeleton, config and logger | done
 Goal: A FastAPI app with /health, settings in config, and a JSONL query logger · GitHub milestone: #1
 
 | Task | FR | Files | Done when | Test | Issue | Done |
