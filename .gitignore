@@ -4,6 +4,20 @@ firmware/glasses/config.h
 CLAUDE.local.md
 .claude/settings.local.json
 
+# OAuth tokens and certificates (v2 Google Calendar, HTTPS)
+token.json
+credentials.json
+*.pem
+*.key
+*.crt
+
+# databases (notes, reminders, later memory)
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
 # generated / local
 logs/
 .venv/

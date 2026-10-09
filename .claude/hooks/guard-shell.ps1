@@ -13,7 +13,8 @@ if ($cmd -match 'git\s+push\b.*(--force|\s-f\b)')                   { Block "for
 if ($cmd -match '--no-verify')                                      { Block "--no-verify is not allowed" }
 if ($cmd -match 'git\s+add\s+(-A|--all|\.)(\s|$|;)')                { Block "stage files by name, not git add -A or git add ." }
 if ($cmd -match 'git\s+push\b.*(\s|:)main(\s|$)')                   { Block "never push to main; use /ship-milestone" }
-if ($cmd -match 'git\s+(commit|push)\b') {
+$pushTag = $cmd -match '^\s*git\s+push\s+origin\s+v\d+\.\d+\.\d+\s*$'  # /ship-milestone pushes the version tag from main
+if ($cmd -match 'git\s+(commit|push)\b' -and -not $pushTag) {
     if ((git branch --show-current) -eq 'main')                     { Block "never commit or push on main; use the milestone branch" }
 }
 

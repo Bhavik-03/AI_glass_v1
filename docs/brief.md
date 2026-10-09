@@ -1,101 +1,92 @@
-# AI Assistant Glasses — v1 Brief
+Version 1. See roadmap.md.
 
-Updated Oct 5, 2026 · Bhavik Fulfagar
+# AI Assistant v1 Brief: Voice assistant
+
+Updated Oct 9, 2026 · Bhavik Fulfagar
 
 ## 1. One-liner
 
-DIY glasses that let you ask a question out loud, about whatever you're looking at or anything else, and hear a spoken answer in a few seconds, hands-free.
+A push-to-talk voice assistant on my laptop: hold one key, ask a question or give a command, and hear a short spoken answer. It answers with live information, keeps my notes and sets reminders that it speaks when they are due.
 
 ## 2. Problem
 
-Getting AI help about something in front of you takes about five steps and both hands. You stop, pull out your phone, open an app, point the camera, type or speak, then read the answer.
+Quick tasks break focus. Looking something up, writing a note or setting a reminder means picking up the phone, unlocking it, opening an app and typing, often with both hands busy at the lab bench.
 
-That breaks whatever you were doing: walking, cooking, or working at a bench with tools in hand. Commercial AI glasses solve the hands-free part, but they are closed: you can't change the model, the prompts, or add your own features.
+Commercial assistants are closed: I can't change the model, the prompts or where my data is stored. v1 builds the open base the later versions grow from (roadmap.md).
 
 ## 3. User
 
-The builder himself: a robotics and AI engineering student working at a lab bench with both hands busy. He wants to ask things like "what is this?", "how many fingers am I holding up?" or "what component is this?", a quick general question, or a live one like today's weather, without putting down tools or picking up a phone.
-
-Designing for one real daily user keeps v1 honest; wider audiences (visually impaired users, field technicians) come after v1 works.
+Me, the builder: a robotics and AI engineering student working at a laptop or lab bench. I want to ask "what's the weather today?", say "note: the motor driver needs 12 V", "remind me tomorrow at 5 to call the lab", or "what are my reminders?", and hear the answer without typing.
 
 ## 4. Why us
 
 The edge is control, not polish: an open pipeline where every part can be swapped and studied.
 
-| Existing option | Gap | What this project does |
+| Existing option | Gap | What v1 does |
 | --- | --- | --- |
-| Phone apps (camera + AI chat, visual search) | Need hands and 5+ steps | One button press, answer in your ear |
-| Commercial AI glasses | Closed model, prompts and data | Swap any VLM (API or open-source), own prompts, option to keep data local later |
-| Object detectors like YOLO | Fixed labels, can't answer questions | Vision-language model answers open-ended questions |
-
-It is also a low-cost build from off-the-shelf parts, so it doubles as a learning platform for CV, LLMs and embedded systems.
+| Phone assistants | Closed model and prompts; data in the vendor's cloud | Own prompts and models; notes and reminders in a local SQLite file |
+| Notes and reminder apps | Need hands and several taps | One key, one spoken sentence |
+| Chat apps with search | Typing, reading, no reminders | Voice in, voice out, live answers and reminders |
 
 ## 5. v1 scope (in)
 
-v1 proves one loop works end to end: camera + voice in, spoken answer out. It is built in two phases that share one server:
+v1 runs on the laptop only. One FastAPI server and one Python client, both on the same machine.
 
-- **Phase A:** a Python client on the laptop (webcam, built-in mic, two keyboard keys as the Look and Ask buttons).
-- **Phase B:** the glasses replace the Python client.
-
-Hardware (Phase B):
-
-- Seeed XIAO ESP32S3 Sense (camera and mic on board)
-- MAX98357A I2S amplifier and a small 8 Ω, 1 W speaker
-- Two push buttons: Look (photo + question) and Ask (question only), each with its own sound
-- Powered over USB-C from a power bank
-- Mounted on the right arm of a pair of safety glasses
+- **Client:** one push-to-talk key, start, thinking and error sounds, plays the answer. Polls the server every 10 s for due reminders and plays them.
+- **Speech to text:** faster-whisper `small.en`, local.
+- **Answers:** Gemini Flash (a Gemini 3 model) with Google Search grounding and function calling in the same request.
+- **Tools:** `add_note`, `list_notes`, `add_reminder`, `list_reminders`, `cancel_reminder`, stored in a local SQLite database.
+- **Time:** the system prompt includes the current date and time in Asia/Kolkata, so "tomorrow at 5" becomes an exact time.
+- **Confirmation:** every action is repeated back ("Reminder set for 5 pm tomorrow: call the lab").
+- **Due reminders:** spoken when due; a reminder missed while the client was off is spoken at the next poll as a missed reminder.
+- **Text to speech:** Piper, local.
+- **Network:** the server binds to 127.0.0.1; only the laptop can reach it.
 
 The loop:
 
-1. Press and hold **Look** or **Ask**. Look takes one photo (640×480 JPEG) the moment it is pressed and plays a camera-shutter sound; Ask takes no photo and plays a two-note chime.
-2. Speak the question while holding the button.
-3. Release: the audio, plus the photo for Look, goes over Wi-Fi to the laptop server.
-4. STT (faster-whisper `small.en`, running locally) turns the question into text.
-5. Gemini Flash or Flash-Lite answers through the API. Google Search is enabled, so live questions such as today's weather work too.
-6. TTS (Piper, running locally) turns the answer into speech, and the complete audio file plays on the glasses speaker.
+1. Hold the key; the start sound plays. Speak.
+2. Release; the thinking sound plays and the question audio goes to the server.
+3. The server transcribes it, asks Gemini (which may search the web or call a tool), runs any tool calls, and turns the answer into speech.
+4. The client plays the answer.
 
 Single question, single answer, English only.
 
 ## 6. Out of scope
 
-- Display or any visual output
-- Extra sensors (IMU, touch, proximity)
-- YOLO or any always-on, real-time detection
-- Wake word (the buttons replace it in v1)
-- Running models on the glasses themselves
-- A local VLM (planned for a later version; v1 uses the Gemini API)
-- Streaming audio (v1 sends the complete answer file)
-- Battery power (v1 runs on USB; LiPo comes later)
-- Bone-conduction audio
-- Phone app (the laptop acts as the server)
-- Multi-turn conversation or memory of past questions
-- Video input, more than one photo per question
+- Camera, photos, Look button, any vision (v5)
+- Glasses or any other hardware (v4)
+- Phone app, calls, SMS, contacts, Google Calendar (v2)
+- Reminders as phone notifications (v2)
+- Memory of past questions and answers, recording, local text model (v3)
+- Access from other devices on the network, auth tokens (v2)
+- Wake word, streaming audio, multi-turn conversation
+- Editing notes or reminders, repeating reminders
 - Languages other than English
-- Custom PCB, slim form factor, battery optimisation
 
 ## 7. Success criteria and constraints
 
-v1 works if it hits every target below on two fixed test sets: 20 visual questions (10 everyday objects, 10 finger counts) and 10 Ask-button questions, including live ones such as today's weather.
+Measured on 30 spoken questions: 10 general and live, 10 notes commands, 10 reminder commands.
 
 | Metric | Target |
 | --- | --- |
-| End-to-end latency (button release to first audio) | ≤ 15 s (median) |
-| Answer correctness (judged by the user) | ≥ 80% of the visual set and of the audio-only set |
-| Question transcribed correctly by STT | ≥ 90% |
-| Reliability | 20 queries in a row with no crash or reconnect |
-| Power (Phase B) | Runs 1 hour on a USB power bank at about 1 query per minute |
-| Comfort (Phase B) | Worn for 30 min without needing to take it off |
+| Correctness | ≥ 80% per group; a tool question passes when the right tool is called with the right arguments and the result is stored |
+| Latency (key release to first answer audio) | ≤ 15 s median |
+| Transcription | ≥ 90% of questions keep their meaning |
+| Reliability | 20 queries in a row without a crash |
+| Due reminders | Spoken within one poll interval (10 s) of the due time while the client runs; never lost when the client is closed |
+| Secrets | API key, `.env` and the database never in git; keys never logged |
+
+Exact thresholds and the test plan are in spec.md.
 
 Constraints:
 
-- Team: one person (the builder).
-- Compute: HP Omen laptop, RTX 4050 (6 GB VRAM), as the server; Gemini API for the VLM.
-- Network: glasses and laptop on the same Wi-Fi or phone hotspot, with internet for the Gemini API.
-- Hardware: off-the-shelf parts only, no custom PCB.
-- Budget: about ₹4,000 for hardware.
-- Timeline: no fixed deadline. Phase A first, then Phase B.
+- Team: one person.
+- Compute: HP Omen laptop, RTX 4050 (6 GB VRAM); Gemini API for answers.
+- Network: internet for the Gemini API; everything else local.
+- Timeline: no fixed deadline.
 
 ## 8. Deliverables
 
 - GitHub repo with README: what it does, architecture diagram, setup steps
-- 1–2 min demo video of real questions at the lab bench
+- Tag v0.1.0 with the evaluation results
+- 1–2 min demo video: a live question, a note, and a reminder that is spoken when due
