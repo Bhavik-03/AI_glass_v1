@@ -10,7 +10,7 @@ Goal: A FastAPI app with /health, settings in config, and a JSONL query logger Â
 
 Manual checks: the server binds to the configured host 127.0.0.1, so another device on the same Wi-Fi gets no answer on the port (FR-18).
 
-## M2 (v1): Speech-to-text | in progress
+## M2 (v1): Speech-to-text | done
 Goal: Turn question audio into text with faster-whisper `small.en`, loaded once at startup Â· GitHub milestone: #2
 
 | Task | FR | Files | Done when | Test | Issue | Done |
