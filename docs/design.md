@@ -1,124 +1,153 @@
-# AI Assistant Glasses — v1 Design
+Version 1. See roadmap.md.
 
-Updated Oct 5, 2026 · Bhavik Fulfagar
+# AI Assistant v1 Design: Voice assistant
 
-One FastAPI process on the laptop runs speech-to-text and text-to-speech locally and calls Gemini for the answer; the webcam client and the glasses call it the same way. Requirements are in spec.md; hardware, wiring and mounting are in expense_v1.md.
+Updated Oct 9, 2026 · Bhavik Fulfagar
+
+One FastAPI process on the laptop runs speech-to-text and text-to-speech locally, calls Gemini for the answer, and keeps notes and reminders in SQLite. A push-to-talk Python client on the same laptop calls it. Requirements are in spec.md.
 
 ## Architecture
 
-The `/query` handler is the only place that knows the order of the stages; each stage is a small module with one function, so any of them can be swapped without touching the others.
+The `/query` handler is the only place that knows the order of the stages; each stage is a small module, so any of them can be swapped without touching the others.
 
 ```mermaid
 flowchart LR
-    C["Client<br/>Phase A: webcam app<br/>Phase B: glasses"] <-->|"WAV (+ optional JPEG) in, answer WAV out"| Q
-    subgraph S["Laptop server · FastAPI, one process"]
-        Q["/query<br/>runs each stage in order and times it"]
+    C["PC client<br/>push-to-talk key, sounds,<br/>reminder poll every 10 s"] <-->|"WAV in, answer WAV out<br/>reminder JSON + WAV"| Q
+    subgraph S["Laptop server · FastAPI, one process, 127.0.0.1"]
+        Q["/query, /reminders/*, /health"]
         Q --> STT["1 · STT<br/>whisper small.en, GPU"]
-        Q --> VLM["2 · VLM call<br/>8 s timeout"]
+        Q --> LLM["2 · LLM<br/>Gemini + Search + tools,<br/>8 s per call, ≤ 3 tool rounds"]
+        LLM --> TOOLS["tools<br/>declarations + dispatch"]
+        TOOLS --> DB["store<br/>SQLite: notes, reminders"]
         Q --> TTS["3 · TTS<br/>Piper → 16 kHz WAV"]
-        Q --> LOG["4 · Logger<br/>JSONL line + photo"]
+        Q --> LOG["4 · Logger<br/>JSONL line"]
     end
-    VLM <--> G["Gemini API<br/>+ Google Search"]
+    LLM <--> G["Gemini API<br/>+ Google Search"]
 ```
 
 | Block | Job |
 | --- | --- |
-| Client | Has two buttons: Look sends a photo plus the question, Ask sends only the question. Plays a distinct sound for each, then plays the answer. Phase A is a Python webcam app; Phase B is the glasses firmware. |
-| /query | Checks the uploaded files (the photo is optional), calls the stages in order, times each one, returns the answer WAV or an error. |
-| STT | Turns the question WAV into text with faster-whisper small.en, loaded once at server start. |
-| VLM call | Sends the question text, plus the photo when there is one, to Gemini and returns the answer text. The system instruction says: answer in at most 2 short sentences, use the photo only when the question is about what the user sees, and use Google Search when a question needs live information such as weather or news. Search grounding is enabled on every request and Gemini decides when to use it; the home city for weather comes from config. |
-| TTS | Turns the answer text into speech with Piper and resamples it to 16 kHz mono. |
-| Logger | Writes one JSONL line per query (question, answer, stage timings, whether a photo was sent, any error) and saves the photo if there is one. |
-| Gemini API | Google's hosted model; the only part that needs the internet. |
+| PC client | One push-to-talk key; plays start, thinking and error sounds; sends the WAV and plays the answer. Every 10 s, when idle, polls `/reminders/due`, prints each reminder, plays its audio and acks it. |
+| main.py | Validates uploads, runs the stages in order, times each one, returns the WAV or an error. Serves the reminder endpoints and `/health`. |
+| STT (`stt.py`) | Question WAV → text with faster-whisper `small.en`, loaded once at startup. |
+| LLM (`llm.py`) | Sends the question to Gemini with the system instruction, Google Search and the tool declarations; runs the tool-call loop through `tools`; returns the answer, whether Gemini searched, and the tool calls made. |
+| Tools (`tools.py`) | The five function declarations, a dispatcher that runs a call against `store` and always returns a result dict (errors included), and the spoken reminder text ("Reminder, 5 pm: …" / "Missed reminder, …"). |
+| Store (`store.py`) | SQLite access: create tables, add and list notes, add, list, cancel, list due and ack reminders. |
+| TTS (`tts.py`) | Answer text → speech with Piper, resampled to 16 kHz mono 16-bit. |
+| Logger (`logger.py`) | One JSONL line per query, failed ones included. |
+| Gemini API | The only part that needs the internet. |
+
+## Search and tools in one request
+
+Current Gemini docs (https://ai.google.dev/gemini-api/docs/generate-content/tool-combination, updated 2026-10-05) say built-in tools such as Google Search and function calling can be combined in one request. The feature is in Preview and works on Gemini 3 models only, so v1 uses a Gemini 3 Flash model; Flash-Lite is not listed and is not used.
+
+- Every request carries the `google_search` tool and the five function declarations.
+- `include_server_side_tool_invocations` is set to true and function calling uses `VALIDATED` mode (`AUTO` is not supported with the flag).
+- When Gemini returns function calls, the server runs them and sends back all response parts unchanged (including `id`, `tool_type` and `thought_signature`) plus the results, up to 3 rounds.
+- The docs warn that conflicting time or location information in the system instruction can make the combination work poorly. The instruction states only the real current time and the home city; the eval checks live questions and relative times together.
+- SDK details (parameter names, grounding metadata, timeout units, thinking setting) change between versions: check the current `google-genai` docs before writing `llm.py`.
+
+System instruction (a constant in `llm.py`, with values filled in per request):
+
+- Current date, weekday and time in the configured time zone (Asia/Kolkata); home city for weather.
+- Answer in at most 2 short sentences, under 40 words; lists of notes or reminders may be longer and give each reminder's date and time.
+- Use Google Search when a question needs live information.
+- Use the tools for notes and reminders; turn relative times into an exact ISO 8601 time with offset.
+- After any action, repeat it back with the stored values; on a tool error, say what went wrong.
+
+## Storage
+
+One SQLite file at `data/assistant.db` (path in config, gitignored), opened by `store.py`; tables are created at startup.
+
+| Table | Columns |
+| --- | --- |
+| notes | id, text, created_at |
+| reminders | id, text, due_at, created_at, status (pending, delivered, cancelled) |
+
+Times are stored as ISO 8601 strings with the configured offset. A reminder is due when `status = pending` and `due_at ≤ now`; only `POST /reminders/{id}/ack` sets `delivered`, so a reminder survives a client crash. It is "missed" when it was due 60 s or more before the audio is fetched (threshold in config).
 
 ## Tech stack
 
-Everything is Python except the firmware, and only the VLM call leaves the laptop.
+Everything is Python. Only the Gemini call leaves the laptop.
 
 | Part | Choice | Why |
 | --- | --- | --- |
-| Server | Python 3.11, FastAPI + Uvicorn | Handles file uploads cleanly; the auto-generated /docs page lets you test /query from a browser |
-| STT | faster-whisper `small.en` on CUDA, float16 | Fast on the RTX 4050; the English-only model is more accurate for English |
-| VLM | Gemini Flash or Flash-Lite through the `google-genai` Python SDK | No GPU needed; thinking at its lowest setting and an 8 s timeout keep it fast; the Google Search tool gives live answers |
-| TTS | Piper (`piper-tts`) with one English voice | Fast and offline; output resampled to 16 kHz mono so the ESP32 needs no resampling |
-| Phase A client | OpenCV (webcam), sounddevice (mic and playback), pynput (two hold-to-talk keys for Look and Ask), requests | Calls /query exactly the way the glasses will |
-| Firmware | Arduino core 3.x via arduino-cli; esp32-camera, ESP_I2S, HTTPClient | Builds and flashes from the terminal, so Claude Code can do it; pins in expense_v1.md |
-| Config | `.env` for `GEMINI_API_KEY`; `config.py` for port, model names, timeouts and home city | The key never enters git |
-| Tests | pytest for the server; `run_eval.py` for the 30-question set (20 visual, 10 audio-only) | One command reruns the whole evaluation |
+| Server | Python 3.11, FastAPI + Uvicorn, bound to 127.0.0.1 | Clean file uploads; the `/docs` page tests endpoints from a browser; no other device can reach it |
+| STT | faster-whisper `small.en` on CUDA, float16 | Fast on the RTX 4050; English-only model is more accurate for English |
+| LLM | A Gemini 3 Flash model through the `google-genai` SDK; minimal thinking, 8 s timeout per call | Search and function calling in one request; no GPU needed |
+| Storage | SQLite through Python's `sqlite3` | No server, one local file |
+| Time | `zoneinfo` with the configured time zone | Exact times for "tomorrow at 5"; Windows needs the `tzdata` package for zone data |
+| TTS | Piper (`piper-tts`) with one English voice | Fast and offline; resampled to 16 kHz mono |
+| Client | sounddevice (mic and playback), pynput (push-to-talk key), requests | Small and cross-platform |
+| Config | `.env` for `GEMINI_API_KEY`; `server/config.py` and `client_pc/config.py` for host, port, model, timeouts, time zone, home city, poll interval, database path | The key never enters git |
+| Tests | pytest with fakes; `run_eval.py` for the 30 eval questions | One command reruns the evaluation |
 
 ## Timeouts and errors
 
-Each timeout is shorter than the one above it, so a failure is always caught and reported by the layer that knows what went wrong.
+Each timeout is shorter than the one above it, so the layer that knows what went wrong reports it.
 
 | Layer | Timeout | On failure |
 | --- | --- | --- |
-| Gemini call | 8 s | Raises an error naming the VLM stage |
-| Server /query | No timeout of its own; stages are bounded | Returns 400 if the audio is missing or a file is unreadable, 500 with `"<stage>: <reason>"` otherwise; the server keeps running |
-| Client | 20 s | Plays the error tone and is ready for the next press |
-| Glasses Wi-Fi | n/a | Reconnects automatically; calls GET /health at boot and plays the error tone until the server answers |
-
-The logger writes a line for failed queries too, with the stage that failed, so every error can be traced afterwards.
+| Gemini call | 8 s per call, at most 3 tool rounds | Raises an error naming the `llm` stage |
+| Tool call | none (local SQLite) | Returns `{"error": ...}` to Gemini; never raises |
+| Server `/query` | none of its own; stages are bounded | 400 for bad audio, 500 `"<stage>: <reason>"` for a failed stage; the server keeps running |
+| Client query | 20 s | Error sound; ready for the next key press |
+| Client reminder poll | same 20 s | Skipped silently; retried at the next poll, the reminder stays due |
 
 ## Repo structure
 
-One file per architecture block, so each Claude Code task touches as few files as possible.
+One file per block, so each task touches as few files as possible.
 
 ```text
 ai-glasses/
-├── CLAUDE.md            # rules and context Claude Code reads every session
-├── README.md            # what it does, diagram, setup, demo video link
-├── .env.example         # GEMINI_API_KEY= (the real .env is gitignored)
-├── .gitignore           # .env, logs/, model files
+├── CLAUDE.md  README.md  requirements.txt  .env.example  .gitignore
 ├── docs/
-│   ├── brief.md         # v1 Brief
-│   ├── spec.md          # v1 Spec
-│   ├── design.md        # this doc
-│   └── expense_v1.md    # Expense for v1
+│   ├── roadmap.md        # final goal and versions v1–v5
+│   ├── brief.md  spec.md  design.md  plan.md   # current version (v1)
+│   ├── hardware_plan.md  # parts and wiring, for v5
+│   └── archive/          # vN/ copies of finished versions' docs
 ├── server/
-│   ├── main.py          # FastAPI app: /query and /health
-│   ├── config.py        # port, model names, timeouts
-│   ├── stt.py           # faster-whisper wrapper
-│   ├── vlm.py           # Gemini call + system instruction
-│   ├── tts.py           # Piper + resample to 16 kHz
-│   └── logger.py        # JSONL line + saved photo
+│   ├── main.py           # FastAPI app: /query, /reminders/*, /health; stage order
+│   ├── config.py         # all server settings; reads .env
+│   ├── stt.py            # faster-whisper
+│   ├── llm.py            # Gemini + Search + tool-call loop + system instruction
+│   ├── tools.py          # tool declarations, dispatch, spoken reminder text
+│   ├── store.py          # SQLite: notes and reminders
+│   ├── tts.py            # Piper + resample to 16 kHz
+│   └── logger.py         # JSONL line
 ├── client_pc/
-│   └── client.py        # Phase A webcam + mic client
-├── firmware/
-│   └── glasses/
-│       ├── glasses.ino  # 2 buttons, camera, mic, HTTP, sounds
-│       └── config.h     # Wi-Fi name, server IP and port (gitignored)
+│   ├── client.py         # push-to-talk, sounds, reminder polling
+│   └── config.py         # server address, key, timeouts, poll interval
 ├── tests/
-│   ├── questions.csv    # the frozen 30-question set
-│   ├── test_server.py   # pytest: /query happy path and bad input
-│   └── run_eval.py      # runs both sets, writes accuracy and latency
-└── logs/                # query logs and photos (gitignored)
+│   ├── conftest.py       # fakes and a temporary database
+│   ├── test_server.py    # endpoint tests
+│   ├── test_<module>.py  # one module's own logic
+│   ├── questions.csv     # frozen 30-question eval set
+│   └── run_eval.py       # accuracy + latency
+├── data/                 # assistant.db, gitignored
+├── models/               # Piper voice files, gitignored
+└── logs/                 # queries.jsonl, gitignored
 ```
 
-## Key design decisions
-
-Each row records what was picked, what was passed over and why, so a later change can check whether the reason still holds.
+## Key decisions
 
 | Decision | Chosen | Instead of | Why |
 | --- | --- | --- | --- |
-| Server shape | One process, models loaded at startup | Separate services per stage | Loading whisper per request would cost seconds; one process is simplest to debug |
-| Transport | One HTTP POST with the audio and an optional photo | WebSocket streaming | One request and one response matches push-to-talk, and the ESP32's HTTP client handles it |
-| Two kinds of question | Two buttons, Look (photo + question) and Ask (question only), sharing /query with an optional photo | One button with double-tap-and-hold | No tap timing to get wrong, and distinct sounds confirm which mode started |
-| Live information | One Gemini model with the Google Search tool enabled on every request | A second model, or search only on Ask questions | Gemini decides when to search, so one code path covers both buttons |
-| Answer audio | Complete WAV file | Streamed audio | Much simpler firmware, and it fits the 15 s target |
-| Audio format | 16 kHz mono 16-bit everywhere | Each tool's own sample rate | One format means the ESP32 never resamples |
-| Image | 640×480 JPEG straight from the camera | Larger capture, resized on the server | Smaller upload and no extra step |
-| Clients | Phase A and Phase B share /query | A separate endpoint per client | The server is fully tested before the hardware is wired |
+| Live info and tools | Google Search and function calling in one Gemini request | A separate `web_search` function making its own grounded call | The current docs support the combination on Gemini 3 models; one call path, fewer calls |
+| Server shape | One process, models loaded at startup | Separate services per stage | Loading whisper per request costs seconds; one process is simplest to debug |
+| Transport | One HTTP POST per question, complete WAV answer | Streaming | Matches push-to-talk; reused by later clients |
+| Reminder delivery | Client polls `/reminders/due`, fetches audio, then acks | Server push, or marking delivered when listed | Simple over HTTP; no reminder is lost if the client dies before playing it; v2's phone app reuses the same endpoints and shows the text |
+| Storage | SQLite file on the laptop | A hosted database | Private, no setup, enough for one user |
+| Network | 127.0.0.1 only | Listening on Wi-Fi | No auth needed until v2 adds `AUTH_TOKEN` |
+| Audio format | 16 kHz mono 16-bit everywhere | Each tool's own rate | One format for every client, including later hardware |
 
 ## Risks and mitigations
 
-The biggest unknown is Gemini's response time over mobile data, which is why every stage is timed from the first build.
-
 | Risk | Mitigation |
 | --- | --- |
-| Gemini is slow over the phone's mobile data | Stage timings in the log show it at once; try Flash-Lite; the 8 s timeout plays the error tone instead of hanging |
-| Gemini describes the photo when the question has nothing to do with it | The system instruction says to use the photo only when relevant; try a few general questions with a photo attached during Phase A |
-| Google Search slows answers or hits its usage limits | The log records when Gemini searched, so its cost in time shows up; check the grounding limits in Google AI Studio |
-| Free-tier rate limits during the 30-question run | Pace the evaluation script; check the current limits in Google AI Studio |
-| Board runs hot near the face | Heatsink, a gap from the skin, and a touch check after the 30-minute wear test |
-| Speaker too quiet in a noisy lab | Amp powered from 5 V; raise the amp gain or scale the samples in firmware |
-| Hotspot Wi-Fi drops | Auto-reconnect in firmware and a /health check at boot |
+| Search + tool combination is Preview and may change | Pin the SDK version; stage timings and the `searched` flag in the log show regressions; the eval covers both live and tool questions |
+| Time in the system instruction confuses the search tool | Only the real current time and home city in the instruction; check relative-time and live questions together in the eval |
+| Gemini picks the wrong tool or a wrong time | `VALIDATED` mode, clear declarations, actions repeated back so mistakes are heard; the eval measures it per group |
+| Two Gemini calls per tool command push latency past 15 s | Stage timings in the log; minimal thinking; 8 s timeout per call |
+| Free-tier rate limits during the eval | Pace `run_eval.py`; check limits in Google AI Studio |
+| A due reminder plays while I am speaking | The client polls only when idle |

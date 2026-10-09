@@ -1,106 +1,134 @@
-# AI Assistant Glasses — v1 Spec
+Version 1. See roadmap.md.
 
-Updated Oct 5, 2026 · Bhavik Fulfagar
+# AI Assistant v1 Spec: Voice assistant
 
-v1 answers one spoken question, about a photo or on its own, with a spoken answer within 15 s, using two buttons: Look (photo + question) and Ask (question only). Speech-to-text and text-to-speech run locally on the laptop; Gemini Flash or Flash-Lite answers through the API. No fixed deadline: Phase A first, then Phase B. Scope and out-of-scope items are in the v1 Brief.
+Updated Oct 9, 2026 · Bhavik Fulfagar
+
+v1 answers one spoken question or command with a spoken answer within 15 s, using one push-to-talk key on the laptop. It answers with live information (Google Search), keeps notes and reminders in SQLite through Gemini function calling, and speaks reminders when they are due. Scope and out-of-scope items are in brief.md.
 
 ## How it works
 
-Two clients talk to one laptop server through the same API, so the server never changes when the glasses replace the webcam.
+A Python client and a FastAPI server run on the same laptop. The server binds to 127.0.0.1.
 
-- **Phase A:** a Python client on the laptop uses the webcam, the built-in mic and two keyboard keys as the Look and Ask buttons.
-- **Phase B:** the ESP32-S3 glasses replace the Python client, powered over USB-C from a power bank in v1. Glasses and laptop join the same phone hotspot, with mobile data on for the Gemini API.
+User flow, push-to-talk:
 
-User flow, push-to-talk. Each button is one press-and-hold: press to start, speak while holding, release to send. Look takes its photo at the moment of the press, before you speak.
+1. The user holds the key. The client plays the start sound and records.
+2. The user releases the key. The client plays the thinking sound and sends the audio to `POST /query`.
+3. The server transcribes the question and sends it to Gemini with Google Search and the tool functions. Gemini may search, call tools, or both; the server runs the tool calls against SQLite and returns the results to Gemini until it gives a final answer.
+4. The server turns the answer into speech and returns the WAV.
+5. The client plays the answer, or the error sound on failure.
 
-1. User presses and holds Look or Ask. Look takes one photo at that instant and plays a camera-shutter sound; Ask takes no photo and plays a two-note chime.
-2. While the button is held, the client records the spoken question.
-3. User releases the button. The client sends the audio, plus the photo for Look, to the server and plays a "thinking" tone.
-4. The server transcribes the question, asks Gemini (which searches the web itself when a question needs live information), and converts the answer to speech.
-5. The server returns the complete answer audio file.
-6. The client plays the answer through the speaker.
+Reminder flow: every 10 s the client asks `GET /reminders/due`. For each due reminder it prints the text, fetches and plays its audio, then acknowledges it. A reminder stays due until acknowledged, so none is lost if the client is closed.
 
 ## Functional requirements
 
-Eleven requirements cover the loop. Each ID later becomes one build task and one test.
+Each ID later becomes one or more build tasks and tests. Fixed values (rates, timeouts, intervals, limits, model name, time zone) live in config files.
 
 | ID | Requirement | Input → Output | Acceptance criteria |
 | --- | --- | --- | --- |
-| FR-1 | Capture one photo the moment the Look button is pressed | Button press → JPEG, 640×480 (VGA) | 20 of 20 presses give a sharp, well-exposed photo |
-| FR-2 | Record the question while either button is held, 10 s max | Button hold → WAV, 16 kHz mono 16-bit | Speech clear on playback in 20 of 20 tests; stops at release or 10 s |
-| FR-3 | Send the audio and the photo in one request; the photo is optional | WAV + optional JPEG → HTTP POST /query | Reaches the server in ≤ 1 s over the hotspot |
-| FR-4 | Transcribe the question locally with faster-whisper small.en | WAV → question text | ≥ 90% of test questions keep their meaning; ≤ 1 s each |
-| FR-5 | Answer with Gemini Flash or Flash-Lite through the API: thinking off or minimal, 8 s call timeout, answers ≤ 2 short sentences (under 40 words), API key read from an environment variable, Google Search grounding enabled on every request; the system instruction tells Gemini to use the photo only when the question is about what the user sees | Question text, plus JPEG when sent → answer text | ≥ 80% correct on the visual set and on the audio-only set; ≤ 8 s each |
-| FR-6 | Convert the answer to speech with Piper | Answer text → WAV, resampled to 16 kHz mono | ≤ 1 s for a 40-word answer; every word understandable |
-| FR-7 | Return the complete answer audio and play it | WAV → sound from the speaker | Download plus playback start ≤ 1 s; audible in a quiet lab |
-| FR-8 | Play status tones: camera-shutter sound on a Look press, two-note chime on an Ask press, thinking tone after release, error tone on failure | Client events → tones | The user can tell the system's state without a screen |
-| FR-9 | Handle errors: 20 s client timeout, server rejects bad input instead of crashing, client reconnects to Wi-Fi | Failure → error tone, server keeps running | Server survives empty audio and a corrupt image; client recovers after a Wi-Fi drop |
-| FR-10 | Log every query on the server | Each query → one JSONL line (question, answer, per-stage timings, whether a photo was sent, whether Gemini searched) + saved photo if any | Every test query has a complete log line; timings feed the README |
-| FR-11 | Answer Ask-button questions: a request with no photo is answered from the question text, with Google Search for live information such as weather or news | WAV, no JPEG → answer WAV | ≥ 80% of the 10 audio-only test questions correct |
+| FR-1 | Record the question while the push-to-talk key is held, 10 s max | Key hold → WAV, 16 kHz mono 16-bit | Speech clear on playback in 20 of 20 tests; recording stops at release or at 10 s |
+| FR-2 | Play status sounds: start sound on key press, thinking sound after release, error sound on any failure | Client events → sounds | The user can tell the state without a screen; the error sound plays on a 400, a 500, a timeout and a refused connection |
+| FR-3 | Send the question to the server with a 20 s client timeout | WAV → `POST /query` with one `audio` field | After a 20 s timeout the client plays the error sound and accepts the next key press |
+| FR-4 | Transcribe the question locally with faster-whisper `small.en` | WAV → question text | ≥ 90% of the 30 eval questions keep their meaning; ≤ 1 s each |
+| FR-5 | Answer with a Gemini 3 Flash model through `google-genai`: minimal thinking, 8 s timeout per call, API key from an environment variable, Google Search grounding and the tool functions in every request; answers ≤ 2 short sentences (under 40 words) except list answers (FR-8, FR-9) | Question text → answer text, `searched` flag | ≥ 80% of the 10 general and live eval questions correct; each Gemini call ≤ 8 s; `searched` is true in the log when the response's grounding metadata shows a search |
+| FR-6 | Put the current date, weekday and time in the configured time zone (Asia/Kolkata) in the system instruction, so relative times become exact times | Clock → system instruction | With the clock fixed at Fri 9 Oct 2026 14:00 IST, the instruction contains that date, weekday and time; in the eval, "remind me tomorrow at 5 to call the lab" asked on 9 Oct gives `due_at` 2026-10-10T17:00+05:30 |
+| FR-7 | Run Gemini's tool calls: execute each call, send the results back, repeat until Gemini returns text, at most 3 rounds | Function calls → tool results → final answer | A call followed by text runs the tool once and returns the answer; an unknown tool name or bad arguments goes back to Gemini as an error result, not a crash; more than 3 rounds gives 500 `{"error": "llm: too many tool rounds"}` |
+| FR-8 | Notes tools: `add_note(text)` stores a note; `list_notes()` returns every note, newest first | Tool call → SQLite row / list | After `add_note`, the notes table has one new row with that text and its creation time; `list_notes` returns all notes newest first, or an empty list |
+| FR-9 | Reminder tools: `add_reminder(text, due_at)` stores a pending reminder (`due_at` is ISO 8601 with offset); `list_reminders()` returns every pending reminder by due time with id, text and due time; `cancel_reminder(id)` cancels a pending reminder | Tool call → SQLite row / list / status change | `add_reminder` stores one pending row; a `due_at` in the past returns an error result and stores nothing; `list_reminders` excludes delivered and cancelled ones; `cancel_reminder` sets the status to cancelled, and an unknown or non-pending id returns an error result; the spoken list gives each reminder's date and time |
+| FR-10 | Confirm every action by repeating it back with the stored values; on a tool error, say what went wrong | Tool result → answer text | In the eval, every passing notes and reminder answer names the action and its text, plus the time for reminders ("Reminder set for 5 pm tomorrow: call the lab") |
+| FR-11 | Convert the answer to speech with Piper | Text → WAV, resampled to 16 kHz mono 16-bit | ≤ 1 s for a 40-word answer; every word understandable |
+| FR-12 | List due reminders | `GET /reminders/due` → JSON or 204 | 200 with `[{id, text, due_at}]` of pending reminders with `due_at` ≤ now, oldest first; 204 with an empty body when none; future, delivered and cancelled reminders never listed; polling again without an ack returns the same reminders |
+| FR-13 | Speak one reminder | `GET /reminders/{id}/audio` → WAV | Spoken text is "Reminder, 5 pm: call the lab" when due less than 60 s ago, "Missed reminder, 5 pm: call the lab" when due 60 s or more ago, with the date added when it was not today ("Missed reminder, 8 October, 5 pm: …"); unknown id gives 404 `{"error": "reminder not found"}` |
+| FR-14 | Acknowledge a reminder | `POST /reminders/{id}/ack` → JSON | 200 `{"status": "ok"}` and the reminder is marked delivered; it never appears in `/reminders/due` again; acking again gives 200; unknown id gives 404 `{"error": "reminder not found"}` |
+| FR-15 | Client polls for due reminders every 10 s, never while recording or waiting for an answer; for each due reminder it prints the text, plays its audio, then acks it | Poll → printed text + sound | A reminder due while the client runs is heard within 10 s of its due time (or right after a query in progress); a reminder due while the client is closed is heard as a missed reminder within 10 s of the next start; a reminder is acked only after its audio has played |
+| FR-16 | Handle errors without crashing the server | Bad input or failed stage → JSON error | 400 `{"error": "<reason>"}` when audio is missing, empty, not a WAV, or not 16 kHz mono 16-bit; 500 `{"error": "<stage>: <reason>"}` when a stage fails; the server answers the next request normally |
+| FR-17 | Log every query on the server | Each `/query` → one JSONL line | Every query, failed ones included, writes one line with time, question, answer, per-stage timings, `searched`, tool calls (name, arguments, ok or error) and error; no API key or token ever appears in the log |
+| FR-18 | Report health and stay local | `GET /health` → JSON | 200 `{"status": "ok", "model": "<model name>"}`; the server binds to the configured host 127.0.0.1, so another device on the same Wi-Fi gets no answer on the port |
 
 ## Interface contract
 
-Both clients use exactly this API. Freeze it before writing code; changing it later means changing the firmware too.
+The client uses exactly this API. Freeze it before writing code. v2 reuses the reminder endpoints unchanged.
 
 ```text
-POST /query                         # one question, one answer
+POST /query                          # one question, one answer
   Content-Type: multipart/form-data
-  audio  : WAV file, 16 kHz mono    # the question (FR-2), required
-  image  : JPEG file, optional      # the photo (FR-1); omitted = audio-only (FR-11)
+  audio : WAV file, 16 kHz mono 16-bit   # the question (FR-1), required
 
-  200 OK                            # success
-    Content-Type: audio/wav         # complete answer audio (FR-6)
-  400 Bad Request                   # audio missing, or a file unreadable
-    {"error": "<reason>"}
-  500 Internal Server Error         # a stage failed
-    {"error": "<stage>: <reason>"}
+  200 OK          Content-Type: audio/wav      # answer audio (FR-11)
+  400 Bad Request {"error": "<reason>"}        # audio missing, empty or unreadable
+  500 Server Error {"error": "<stage>: <reason>"}   # a stage failed
 
-GET /health                         # is the server up and the model loaded?
-  200 OK  {"status": "ok", "model": "<vlm name>"}
+GET /reminders/due                   # FR-12
+  200 OK  [{"id": 3, "text": "call the lab", "due_at": "2026-10-10T17:00:00+05:30"}]
+  204 No Content                     # nothing due
+
+GET /reminders/{id}/audio            # FR-13
+  200 OK  Content-Type: audio/wav    # "Reminder, 5 pm: call the lab"
+  404 Not Found {"error": "reminder not found"}
+
+POST /reminders/{id}/ack             # FR-14
+  200 OK  {"status": "ok"}
+  404 Not Found {"error": "reminder not found"}
+
+GET /health                          # FR-18
+  200 OK  {"status": "ok", "model": "<model name>"}
 ```
 
-The server listens on a fixed port on the hotspot network. The client stores the laptop's IP and port in one config value.
+The server listens on 127.0.0.1 and a fixed port from config. The client stores the server address and port in its config.
+
+## Tool functions
+
+Gemini sees these declarations. Times are ISO 8601 with the configured offset (+05:30).
+
+| Tool | Arguments | Result sent back to Gemini |
+| --- | --- | --- |
+| `add_note` | `text` | `{id, text, created_at}` |
+| `list_notes` | none | `{notes: [{id, text, created_at}]}` |
+| `add_reminder` | `text`, `due_at` | `{id, text, due_at}` or `{error}` |
+| `list_reminders` | none | `{reminders: [{id, text, due_at}]}` |
+| `cancel_reminder` | `id` | `{id, text, due_at, status: "cancelled"}` or `{error}` |
+
+To cancel by description ("cancel the lab reminder"), Gemini calls `list_reminders` and then `cancel_reminder` with the matching id, within the 3-round limit.
 
 ## Quality targets
 
-v1 is done when every target below is met; power and comfort apply to Phase B only.
+v1 is done, and tagged v0.1.0, when every target below is met.
 
 | Metric | Target | How measured |
 | --- | --- | --- |
-| End-to-end latency (button release → first answer audio) | ≤ 15 s, median over all 30 test questions | Client timer + server stage timings (FR-10) |
-| Answer correctness | ≥ 80% of the 20 visual questions and ≥ 80% of the 10 audio-only questions | Test plan below |
-| Transcription | ≥ 90% of questions keep their meaning | Compare logged question text with the written question |
-| Reliability | 20 queries in a row, no crash or manual reconnect | One continuous run |
-| API key safety | Key never in code or on GitHub | Key read from an environment variable; .env listed in .gitignore |
-| Power (Phase B) | Runs 1 h on a USB power bank at about 1 query per minute | One continuous session; the power bank must not switch itself off |
-| Comfort (Phase B) | Worn 30 min without taking it off | Wear it during a lab session |
+| Correctness | ≥ 80% in each group of 10 (general and live, notes, reminders) | Test plan below |
+| Latency (key release → first answer audio) | ≤ 15 s, median over all 30 eval questions | Client timer + server stage timings (FR-17) |
+| Transcription | ≥ 90% of questions keep their meaning | Logged question text vs the written question |
+| Reliability | 20 queries in a row with no crash or restart | One continuous run |
+| Due reminders | Heard within 10 s of due time; a missed one heard within 10 s of the next client start | FR-15 manual checks |
+| Secrets | API key, `.env` and the database never in git; no key in any log | `.gitignore` check and a search of `logs/` |
 
-The 15 s budget per stage: upload 1 s + STT 1 s + VLM 8 s + TTS 1 s + download and play 1 s = 12 s, leaving 3 s of margin. If a run is slow, the logs show which stage broke its budget and whether Gemini searched.
+Latency budget: STT 1 s + Gemini (one call for a plain answer, usually two for a tool command; 8 s timeout each, typically 2–4 s) + TTS 1 s + playback start 1 s. The log shows which stage broke the budget.
 
 ## Test plan
 
-Two fixed sets are written and frozen before the first test run, then run once in Phase A and once in Phase B: 20 visual questions sent with a photo, and 10 audio-only questions sent without one.
+pytest covers the server with Gemini, whisper and Piper faked and a temporary SQLite database. The evaluation below uses the real models.
 
-| Set | Category | Questions | Example |
-| --- | --- | --- | --- |
-| Visual | Everyday objects | 10 | A phone, book or fan held up: "What is this?" |
-| Visual | Finger counting | 10 | One to five fingers on either hand: "How many fingers am I holding up?" |
-| Audio-only | General and live questions | 10 | "What is the capital of Japan?" or "What's the weather today?" |
+1. Write all 30 rows in `tests/questions.csv` before the first run, then freeze it. Columns: id, group (general, notes, reminders), setup, question, expected.
+   - setup: the notes and reminders that must exist before the question (for list and cancel commands), or "none".
+   - expected: the answer for general questions; the tool name and arguments for tool questions, with times written relative to the run ("tomorrow 17:00") and resolved by `run_eval.py` at run time.
+2. Run against a fresh evaluation database, never the real one.
+3. Grading:
+   - General and live: correct, partial or wrong, judged by me; live answers checked against a trusted website at test time. Only "correct" counts.
+   - Notes and reminders: pass when the right tool is called with the right arguments, the database holds the expected result afterwards, and the answer repeats the action back (FR-10).
+4. Report accuracy per group, median and worst latency, and transcription accuracy.
+5. Re-run the whole set whenever the model, prompt or tool declarations change.
 
-1. Write all 30 rows in `tests/questions.csv` with columns id, category, setup, question, expected_answer. Setup says what is in front of the camera, or "none" for audio-only. Do this before running anything.
-2. Send audio-only questions without a photo, so they test FR-11.
-3. Grade each answer as correct, partial or wrong. Only "correct" counts toward the 80% targets.
-4. Report accuracy per set and per category, plus median and worst latency.
-5. Re-run both sets whenever the VLM, prompt or image resolution changes, so results stay comparable.
+The home city for weather questions comes from the server config.
 
-Live questions such as today's weather or the news are answered through Google Search. Their expected answer is checked against a trusted website at the time of the test, and the home city for weather questions comes from the server config.
+## Open decisions
+
+- How the eval questions are spoken: live into the mic during `run_eval.py`, or recorded once as WAV files. Decide when planning M7.
 
 ## Decisions settled in Design
 
-- [x] VLM: Gemini Flash or Flash-Lite through the API
-- [x] Speech-to-text: faster-whisper small.en, running locally
-- [x] Image: 640×480 JPEG, optional per request
-- [x] Server: FastAPI, with STT and TTS loaded once in a single process (details in design.md)
-- [x] Firmware: Arduino framework built with arduino-cli; pin map in expense_v1.md
-- [x] Parts: about ₹2,345–3,480 within the ₹4,000 budget; list in expense_v1.md
-- [x] Mounting: all parts on the right arm, USB power bank in v1; layout in expense_v1.md
+- [x] Answers: a Gemini 3 Flash model, Google Search grounding and function calling combined in one request
+- [x] Speech-to-text: faster-whisper `small.en`, local
+- [x] Text-to-speech: Piper, local, 16 kHz output
+- [x] Storage: one SQLite file on the laptop, gitignored
+- [x] Server: FastAPI, one process, models loaded once at startup, bound to 127.0.0.1

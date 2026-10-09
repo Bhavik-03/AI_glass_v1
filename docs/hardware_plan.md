@@ -1,6 +1,8 @@
-# Expense for v1
+# Hardware plan
 
 Updated Oct 5, 2026 · Bhavik Fulfagar
+
+> For v5 (Camera). v4 needs a board with Bluetooth call audio; to be decided. Written for the earlier camera-first plan: "v1" below means this hardware build, not roadmap v1 (see roadmap.md).
 
 v1 hardware for the AI Assistant Glasses costs about ₹2,345–3,480 against a ₹4,000 budget. Every part is off-the-shelf, nothing needs a custom PCB, and v1 runs on USB power from a power bank.
 
