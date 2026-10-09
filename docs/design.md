@@ -79,7 +79,7 @@ Everything is Python. Only the Gemini call leaves the laptop.
 | Part | Choice | Why |
 | --- | --- | --- |
 | Server | Python 3.11, FastAPI + Uvicorn, bound to 127.0.0.1 | Clean file uploads; the `/docs` page tests endpoints from a browser; no other device can reach it |
-| STT | faster-whisper `small.en` on CUDA, float16 | Fast on the RTX 4050; English-only model is more accurate for English |
+| STT | faster-whisper `small.en` on CUDA, float16 | Fast on the RTX 3050 Laptop GPU (4 GB); English-only model is more accurate for English |
 | LLM | A Gemini 3 Flash model through the `google-genai` SDK; minimal thinking, 8 s timeout per call | Search and function calling in one request; no GPU needed |
 | Storage | SQLite through Python's `sqlite3` | No server, one local file |
 | Time | `zoneinfo` with the configured time zone | Exact times for "tomorrow at 5"; Windows needs the `tzdata` package for zone data |

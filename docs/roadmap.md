@@ -52,7 +52,7 @@ Glasses that act as my second brain and handle most quick phone tasks hands-free
 - **Key pieces:**
   - Voice memory of questions, answers and notes; a personal profile file.
   - Consent-aware conversation and lecture recording with an audible start signal, then a summary and follow-ups.
-  - `SEND_MEMORY_TO_GEMINI=false` by default: memory questions go to a small local text model that fits 6 GB VRAM, chosen by a bake-off of current models.
+  - `SEND_MEMORY_TO_GEMINI=false` by default: memory questions go to a small local text model that fits 4 GB VRAM, chosen by a bake-off of current models.
 - **Out of scope:** photo memory, glasses hardware, camera.
 - **Done when:** targets set in the v3 spec.
 
