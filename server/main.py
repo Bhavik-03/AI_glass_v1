@@ -11,7 +11,7 @@ import uvicorn
 from fastapi import FastAPI, File, Response, UploadFile
 from fastapi.responses import JSONResponse
 
-from server import config, llm, stt, tts
+from server import config, llm, logger, stt, tts
 
 
 @asynccontextmanager
@@ -25,10 +25,11 @@ app = FastAPI(lifespan=lifespan)
 
 
 class StageFailed(Exception):
-    def __init__(self, stage: str, reason: str) -> None:
+    def __init__(self, stage: str, reason: str, tool_calls: list[dict]) -> None:
         super().__init__(f"{stage}: {reason}")
         self.stage = stage
         self.reason = reason
+        self.tool_calls = tool_calls
 
 
 def now() -> datetime:
@@ -49,7 +50,8 @@ def run_stage(name: str, timings: dict, fn, *args):
     try:
         return fn(*args)
     except Exception as e:
-        raise StageFailed(name, _reason(e)) from e
+        # llm.ask attaches the tool calls made before it failed (FR-17).
+        raise StageFailed(name, _reason(e), getattr(e, "tool_calls", [])) from e
     finally:
         timings[name] = round((time.perf_counter() - t0) * 1000)
 
@@ -73,8 +75,27 @@ def _audio_problem(data: bytes | None) -> str | None:
     return None
 
 
-def _error(status_code: int, message: str) -> JSONResponse:
+def _error(status_code: int, message: str, record: dict) -> JSONResponse:
+    record["error"] = message
     return JSONResponse(status_code=status_code, content={"error": message})
+
+
+def _answer(data: bytes | None, record: dict) -> Response:
+    if problem := _audio_problem(data):
+        return _error(400, problem, record)
+    timings = record["timings_ms"]
+    try:
+        record["question"] = run_stage("stt", timings, stt.transcribe, data)
+        if not record["question"].strip():
+            return _error(400, "no speech detected", record)
+        record["answer"], record["searched"], record["tool_calls"] = run_stage(
+            "llm", timings, llm.ask, record["question"], now()
+        )
+        wav = run_stage("tts", timings, tts.synthesize, record["answer"])
+    except StageFailed as e:
+        record["tool_calls"] = e.tool_calls or record["tool_calls"]
+        return _error(500, f"{e.stage}: {e.reason}", record)
+    return Response(content=wav, media_type="audio/wav")
 
 
 @app.get("/health")
@@ -85,21 +106,18 @@ def health() -> dict:
 # Plain def, not async: FastAPI runs it in a thread pool, so a slow query doesn't block other endpoints.
 @app.post("/query")
 def query(audio: Annotated[UploadFile | None, File()] = None) -> Response:
-    data = audio.file.read() if audio else None
-    if problem := _audio_problem(data):
-        return _error(400, problem)
-    timings: dict[str, int] = {}
+    record = {
+        "question": None,
+        "answer": None,
+        "timings_ms": {},
+        "searched": False,
+        "tool_calls": [],
+        "error": None,
+    }
     try:
-        question = run_stage("stt", timings, stt.transcribe, data)
-        if not question.strip():
-            return _error(400, "no speech detected")
-        answer, _searched, _tool_calls = run_stage(
-            "llm", timings, llm.ask, question, now()
-        )
-        wav = run_stage("tts", timings, tts.synthesize, answer)
-    except StageFailed as e:
-        return _error(500, f"{e.stage}: {e.reason}")
-    return Response(content=wav, media_type="audio/wav")
+        return _answer(audio.file.read() if audio else None, record)
+    finally:
+        logger.log_query(record)
 
 
 if __name__ == "__main__":

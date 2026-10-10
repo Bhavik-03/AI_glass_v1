@@ -1,5 +1,6 @@
 import inspect
 import io
+import json
 import wave
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -18,6 +19,21 @@ FAKE_TTS_WAV = b"RIFF-fake-wav-bytes"
 FIXED_NOW = datetime(2026, 10, 9, 14, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def log_path(tmp_path, monkeypatch):
+    """Point the query log at a temporary file so tests never touch logs/."""
+    path = tmp_path / "queries.jsonl"
+    monkeypatch.setattr(config, "LOG_PATH", path)
+    return path
+
+
+def _log_lines(path) -> list[dict]:
+    if not path.exists():
+        return []
+    text = path.read_text(encoding="utf-8")
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
 def test_fr18_health_returns_ok_and_model():
@@ -318,6 +334,158 @@ def test_fr16_run_stage_failure_raises_stage_failed_and_times():
         server.main.run_stage("tts", timings, boom)
     assert isinstance(timings["tts"], int)
     assert timings["tts"] >= 0
+
+
+def test_fr17_success_writes_one_complete_line(fake_stages, silent_wav, log_path):
+    """FR-17: a successful /query writes exactly one JSONL line with question,
+    answer, per-stage timings (stt, llm, tts), searched, tool_calls and error."""
+    response = _post_query(silent_wav)
+    assert response.status_code == 200
+    lines = _log_lines(log_path)
+    assert len(lines) == 1
+    line = lines[0]
+    assert line["question"] == FAKE_TRANSCRIPT
+    assert line["answer"] == FAKE_ANSWER
+    assert set(line["timings_ms"]) == {"stt", "llm", "tts"}
+    assert all(isinstance(v, int) and v >= 0 for v in line["timings_ms"].values())
+    assert line["searched"] is False
+    assert line["tool_calls"] == []
+    assert line["error"] is None
+
+
+@pytest.mark.parametrize(
+    "files, error",
+    [
+        (None, "audio missing"),
+        ({"audio": ("q.wav", b"", "audio/wav")}, "audio empty"),
+        (
+            {"audio": ("q.wav", b"not a wav", "audio/wav")},
+            "audio is not a readable WAV",
+        ),
+        (
+            {"audio": ("q.wav", _wav(rate=44100), "audio/wav")},
+            "audio must be 16 kHz mono 16-bit",
+        ),
+    ],
+    ids=["missing", "zero-bytes", "not-a-wav", "wrong-format"],
+)
+def test_fr17_audio_400_writes_one_line(fake_stages, log_path, files, error):
+    """FR-17: each 400 audio problem writes exactly one line with the reason as
+    error and empty question, answer, timings and tool calls."""
+    response = client.post("/query", files=files) if files else client.post("/query")
+    assert response.status_code == 400
+    assert response.json() == {"error": error}
+    lines = _log_lines(log_path)
+    assert len(lines) == 1
+    line = lines[0]
+    assert line["question"] is None
+    assert line["answer"] is None
+    assert line["timings_ms"] == {}
+    assert line["searched"] is False
+    assert line["tool_calls"] == []
+    assert line["error"] == error
+
+
+def test_fr17_no_speech_400_logs_only_stt_timing(
+    fake_stages, silent_wav, monkeypatch, log_path
+):
+    """FR-17: a no-speech 400 writes one line whose timings_ms has only 'stt'
+    and error 'no speech detected'."""
+    monkeypatch.setattr("server.stt.transcribe", lambda wav: "   ")
+    response = _post_query(silent_wav)
+    assert response.status_code == 400
+    assert response.json() == {"error": "no speech detected"}
+    lines = _log_lines(log_path)
+    assert len(lines) == 1
+    line = lines[0]
+    assert set(line["timings_ms"]) == {"stt"}
+    assert line["answer"] is None
+    assert line["error"] == "no speech detected"
+
+
+@pytest.mark.parametrize("stage", ["stt", "llm", "tts"])
+def test_fr17_stage_failure_logs_one_line_with_timing(
+    fake_stages, silent_wav, monkeypatch, log_path, stage
+):
+    """FR-17: a failing stage still writes exactly one line with error
+    '<stage>: boom' and the failed stage's timing; a tts failure keeps the answer."""
+    _make_stage_raise(monkeypatch, fake_stages, stage, RuntimeError("boom"))
+    response = _post_query(silent_wav)
+    assert response.status_code == 500
+    assert response.json() == {"error": f"{stage}: boom"}
+    lines = _log_lines(log_path)
+    assert len(lines) == 1
+    line = lines[0]
+    assert line["error"] == f"{stage}: boom"
+    order = ["stt", "llm", "tts"]
+    assert set(line["timings_ms"]) == set(order[: order.index(stage) + 1])
+    assert all(isinstance(v, int) for v in line["timings_ms"].values())
+    if stage == "stt":
+        assert line["question"] is None
+    else:
+        assert line["question"] == FAKE_TRANSCRIPT
+    if stage == "tts":
+        assert line["answer"] == FAKE_ANSWER
+    else:
+        assert line["answer"] is None
+
+
+def test_fr17_llm_failure_logs_exception_tool_calls(
+    fake_stages, silent_wav, monkeypatch, log_path
+):
+    """FR-17: when the llm exception has a tool_calls list, the line logs it."""
+    calls = [{"name": "web_search", "args": {"query": "x"}, "ok": True}]
+    exc = RuntimeError("deadline exceeded")
+    exc.tool_calls = calls
+    _make_stage_raise(monkeypatch, fake_stages, "llm", exc)
+    response = _post_query(silent_wav)
+    assert response.status_code == 500
+    assert response.json() == {"error": "llm: deadline exceeded"}
+    lines = _log_lines(log_path)
+    assert len(lines) == 1
+    assert lines[0]["tool_calls"] == calls
+
+
+def test_fr17_llm_failure_without_tool_calls_logs_empty_list(
+    fake_stages, silent_wav, monkeypatch, log_path
+):
+    """FR-17: an llm exception without a tool_calls attribute logs tool_calls []."""
+    _make_stage_raise(monkeypatch, fake_stages, "llm", RuntimeError("boom"))
+    _post_query(silent_wav)
+    lines = _log_lines(log_path)
+    assert len(lines) == 1
+    assert lines[0]["tool_calls"] == []
+
+
+def test_fr17_api_keys_absent_from_log_and_response(
+    fake_stages, silent_wav, monkeypatch, log_path
+):
+    """FR-17: a stage exception containing the Gemini and Tavily keys leaves
+    neither key in the log file nor in the response body."""
+    gemini_key = "fake-gemini-key-AAA111"
+    tavily_key = "fake-tavily-key-BBB222"
+    monkeypatch.setattr(config, "GEMINI_API_KEY", gemini_key)
+    monkeypatch.setattr(config, "TAVILY_API_KEY", tavily_key)
+    _make_stage_raise(
+        monkeypatch,
+        fake_stages,
+        "llm",
+        RuntimeError(f"bad {gemini_key} and {tavily_key}"),
+    )
+    response = _post_query(silent_wav)
+    assert response.status_code == 500
+    raw = log_path.read_text(encoding="utf-8")
+    assert len(_log_lines(log_path)) == 1
+    for key in (gemini_key, tavily_key):
+        assert key not in raw
+        assert key not in response.text
+
+
+def test_fr17_two_requests_write_two_lines(fake_stages, silent_wav, log_path):
+    """FR-17: every request appends exactly one line; two requests give two."""
+    _post_query(silent_wav)
+    _post_query(silent_wav)
+    assert len(_log_lines(log_path)) == 2
 
 
 def test_fr18_default_host_is_localhost():
