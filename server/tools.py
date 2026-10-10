@@ -3,6 +3,9 @@ from zoneinfo import ZoneInfo
 
 from server import config, search, store
 
+# Larger integers can't be bound as SQLite parameters (OverflowError).
+SQLITE_MAX_INT = 2**63 - 1
+
 DECLARATIONS = [
     {
         "name": "web_search",
@@ -44,6 +47,25 @@ DECLARATIONS = [
                 },
             },
             "required": ["text", "due_at"],
+        },
+    },
+    {
+        "name": "list_reminders",
+        "description": "List every pending reminder by due time, with its id.",
+        "parameters_json_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "cancel_reminder",
+        "description": (
+            "Cancel a pending reminder by its id. To cancel by description, call "
+            "list_reminders first and use the id of the matching reminder."
+        ),
+        "parameters_json_schema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "integer", "description": "Id from list_reminders"}
+            },
+            "required": ["id"],
         },
     },
     {
@@ -92,10 +114,37 @@ def _add_reminder(args: dict, now: datetime) -> dict:
     return store.add_reminder(text, due_at, now.isoformat(timespec="seconds"))
 
 
+def _list_reminders(args: dict, now: datetime) -> dict:
+    return {"reminders": store.list_pending()}
+
+
+def _reminder_id(value: object) -> int | None:
+    # Gemini may send 3.0 for 3; bool is an int subclass but never an id.
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if isinstance(value, int) and abs(value) <= SQLITE_MAX_INT:
+        return value
+    return None
+
+
+def _cancel_reminder(args: dict, now: datetime) -> dict:
+    reminder_id = _reminder_id(args.get("id"))
+    if reminder_id is None:
+        return {"error": "cancel_reminder needs an integer id"}
+    reminder = store.cancel(reminder_id)
+    if reminder is None:
+        return {"error": f"no pending reminder with id {reminder_id}"}
+    return {**reminder, "status": store.CANCELLED}
+
+
 _HANDLERS = {
     "web_search": _web_search,
     "add_note": _add_note,
     "add_reminder": _add_reminder,
+    "list_reminders": _list_reminders,
+    "cancel_reminder": _cancel_reminder,
     "list_notes": _list_notes,
 }
 

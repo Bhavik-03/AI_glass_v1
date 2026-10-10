@@ -1,5 +1,6 @@
 """Tool declarations and dispatch tests (FR-5, FR-7). search.search is faked: no network."""
 
+import sqlite3
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -346,3 +347,218 @@ def test_fr10_add_reminder_result_matches_stored_values(db, fixed_now):
 
     assert len(rows) == 1
     assert {k: rows[0][k] for k in ("id", "text", "due_at")} == added
+
+
+DUE_A = "2026-10-10T10:00:00+05:30"
+DUE_B = "2026-10-10T12:00:00+05:30"
+DUE_C = "2026-10-10T15:00:00+05:30"
+
+
+def add_pending(text, due_at):
+    return store.add_reminder(text, due_at, FIXED_ISO)
+
+
+def status_in_db(db_path, reminder_id):
+    con = sqlite3.connect(db_path)
+    try:
+        row = con.execute(
+            "SELECT status FROM reminders WHERE id = ?", (reminder_id,)
+        ).fetchone()
+    finally:
+        con.close()
+    return row[0]
+
+
+def test_fr9_declares_list_reminders_without_required_parameters():
+    """DECLARATIONS has one list_reminders entry that requires no parameters."""
+    decl = declaration("list_reminders")
+    assert decl["description"]
+    schema = decl["parameters_json_schema"]
+    assert schema["type"] == "object"
+    assert not schema.get("required")
+
+
+def test_fr9_declares_cancel_reminder_with_required_integer_id():
+    """DECLARATIONS has one cancel_reminder entry whose schema requires an integer 'id'."""
+    decl = declaration("cancel_reminder")
+    assert decl["description"]
+    schema = decl["parameters_json_schema"]
+    assert schema["type"] == "object"
+    assert schema["properties"]["id"]["type"] == "integer"
+    assert "id" in schema["required"]
+
+
+def test_fr9_list_reminders_empty_returns_empty_list(db, fixed_now):
+    """run('list_reminders') with no pending reminders returns {reminders: []}."""
+    assert tools.run("list_reminders", {}, fixed_now) == {"reminders": []}
+
+
+def test_fr9_list_reminders_returns_pending_ordered_by_due_at(db, fixed_now):
+    """list_reminders returns pending reminders as {id, text, due_at}, ordered by due_at."""
+    late = add_pending("late", DUE_C)
+    early = add_pending("early", DUE_A)
+    middle = add_pending("middle", DUE_B)
+
+    out = tools.run("list_reminders", {}, fixed_now)
+
+    assert list(out) == ["reminders"]
+    assert [r["id"] for r in out["reminders"]] == [
+        early["id"],
+        middle["id"],
+        late["id"],
+    ]
+    for r in out["reminders"]:
+        assert set(r) == {"id", "text", "due_at"}
+    assert [r["text"] for r in out["reminders"]] == ["early", "middle", "late"]
+    assert [r["due_at"] for r in out["reminders"]] == [DUE_A, DUE_B, DUE_C]
+
+
+def test_fr9_list_reminders_excludes_cancelled_and_delivered(db, fixed_now):
+    """list_reminders never lists cancelled or delivered reminders."""
+    keep = add_pending("keep", DUE_C)
+    cancelled = add_pending("cancelled", DUE_A)
+    delivered = add_pending("delivered", DUE_B)
+    store.cancel(cancelled["id"])
+    store.ack(delivered["id"])
+
+    out = tools.run("list_reminders", {}, fixed_now)
+
+    assert [r["id"] for r in out["reminders"]] == [keep["id"]]
+
+
+def test_fr9_list_reminders_ignores_extra_arguments(db, fixed_now):
+    """list_reminders takes no arguments: extra ones are ignored."""
+    added = add_pending("x", DUE_A)
+
+    out = tools.run("list_reminders", {"junk": 1}, fixed_now)
+
+    assert [r["id"] for r in out["reminders"]] == [added["id"]]
+
+
+def test_fr9_cancel_reminder_returns_stored_values_and_cancels(db, fixed_now):
+    """cancel_reminder returns exactly {id, text, due_at, status: cancelled} and cancels the row."""
+    added = add_pending("call the lab", DUE_A)
+
+    out = tools.run("cancel_reminder", {"id": added["id"]}, fixed_now)
+
+    assert set(out) == {"id", "text", "due_at", "status"}
+    assert out["id"] == added["id"]
+    assert out["text"] == "call the lab"
+    assert out["due_at"] == DUE_A
+    assert out["status"] == store.CANCELLED
+    assert status_in_db(db, added["id"]) == store.CANCELLED
+    assert store.list_pending() == []
+
+
+def test_fr9_cancel_reminder_accepts_integral_float_id(db, fixed_now):
+    """cancel_reminder accepts an integral float id such as 3.0 and treats it as the int."""
+    added = add_pending("call the lab", DUE_A)
+
+    out = tools.run("cancel_reminder", {"id": float(added["id"])}, fixed_now)
+
+    assert out["id"] == added["id"]
+    assert out["status"] == store.CANCELLED
+    assert status_in_db(db, added["id"]) == store.CANCELLED
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"id": True},
+        {"id": False},
+        {"id": "abc"},
+        {"id": "3"},
+        {"id": None},
+        {"id": 3.5},
+        {"id": [1]},
+        {"id": 10**30},
+        {"id": -(10**30)},
+        {"id": 1e30},
+        {},
+    ],
+    ids=[
+        "true",
+        "false",
+        "abc",
+        "numeric-string",
+        "none",
+        "fraction",
+        "list",
+        "huge-int",
+        "huge-negative-int",
+        "huge-float",
+        "missing",
+    ],
+)
+def test_fr9_cancel_reminder_bad_id_returns_error_and_cancels_nothing(
+    db, fixed_now, args
+):
+    """A missing, bool, string, None, fractional, list or out-of-range id returns {error} naming 'id'."""
+    added = add_pending("keep", DUE_A)
+
+    out = tools.run("cancel_reminder", args, fixed_now)
+
+    assert "id" in out["error"]
+    assert [r["id"] for r in store.list_pending()] == [added["id"]]
+    assert status_in_db(db, added["id"]) == store.PENDING
+
+
+def test_fr9_cancel_reminder_unknown_id_returns_error(db, fixed_now):
+    """An unknown id returns {error} containing 'no pending reminder' and changes nothing."""
+    added = add_pending("keep", DUE_A)
+
+    out = tools.run("cancel_reminder", {"id": 999}, fixed_now)
+
+    assert "no pending reminder" in out["error"]
+    assert [r["id"] for r in store.list_pending()] == [added["id"]]
+
+
+def test_fr9_cancel_reminder_already_cancelled_returns_error(db, fixed_now):
+    """Cancelling twice: the second call returns 'no pending reminder' and the row stays cancelled."""
+    added = add_pending("call the lab", DUE_A)
+    tools.run("cancel_reminder", {"id": added["id"]}, fixed_now)
+
+    out = tools.run("cancel_reminder", {"id": added["id"]}, fixed_now)
+
+    assert "no pending reminder" in out["error"]
+    assert status_in_db(db, added["id"]) == store.CANCELLED
+
+
+def test_fr9_cancel_reminder_delivered_returns_error_and_stays_delivered(db, fixed_now):
+    """A delivered reminder returns 'no pending reminder' and is not changed to cancelled."""
+    added = add_pending("call the lab", DUE_A)
+    store.ack(added["id"])
+
+    out = tools.run("cancel_reminder", {"id": added["id"]}, fixed_now)
+
+    assert "no pending reminder" in out["error"]
+    assert status_in_db(db, added["id"]) == store.DELIVERED
+    assert tools.run("list_reminders", {}, fixed_now) == {"reminders": []}
+
+
+def test_fr9_cancelled_reminder_disappears_from_list_reminders(db, fixed_now):
+    """After a successful cancel, list_reminders no longer returns that reminder."""
+    gone = add_pending("gone", DUE_A)
+    keep = add_pending("keep", DUE_B)
+
+    tools.run("cancel_reminder", {"id": gone["id"]}, fixed_now)
+
+    out = tools.run("list_reminders", {}, fixed_now)
+    assert [r["id"] for r in out["reminders"]] == [keep["id"]]
+
+
+def test_fr10_cancel_by_description_flow_returns_stored_values(db, fixed_now):
+    """list_reminders then cancel_reminder with the listed id cancels it and returns the stored values."""
+    add_pending("water plants", DUE_A)
+    lab = add_pending("call the lab", DUE_B)
+
+    listed = tools.run("list_reminders", {}, fixed_now)["reminders"]
+    match = next(r for r in listed if "lab" in r["text"])
+    out = tools.run("cancel_reminder", {"id": match["id"]}, fixed_now)
+
+    assert out == {
+        "id": lab["id"],
+        "text": "call the lab",
+        "due_at": DUE_B,
+        "status": store.CANCELLED,
+    }
