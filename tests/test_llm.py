@@ -258,6 +258,66 @@ def test_fr5_deadline_before_second_gemini_call(monkeypatch) -> None:
     assert len(fake.models.calls) == 1
 
 
+def test_fr17_too_many_rounds_error_carries_tool_calls(monkeypatch) -> None:
+    """'too many tool rounds' is still a RuntimeError and carries the tool calls made so far."""
+    rounds = config.MAX_TOOL_ROUNDS
+    install_fake(monkeypatch, [call_response() for _ in range(rounds + 1)])
+    install_run(monkeypatch, SEARCH_RESULT)
+    with pytest.raises(RuntimeError, match="too many tool rounds") as exc:
+        llm.ask("q?", fixed_now())
+    expected = {"name": "web_search", "args": {"query": "q"}, "ok": True}
+    assert exc.value.tool_calls == [expected] * rounds
+
+
+def test_fr17_deadline_error_carries_tool_calls(monkeypatch) -> None:
+    """'deadline exceeded' after a tool call is still a RuntimeError and carries that call."""
+    clock = FakeClock()
+    monkeypatch.setattr(llm, "_clock", clock)
+
+    def advance() -> None:
+        clock.t = 6.0
+
+    install_fake(monkeypatch, [call_response(), text_response()])
+    install_run(monkeypatch, SEARCH_RESULT, on_call=advance)
+    with pytest.raises(RuntimeError, match="deadline exceeded") as exc:
+        llm.ask("q?", fixed_now())
+    assert exc.value.tool_calls == [
+        {"name": "web_search", "args": {"query": "q"}, "ok": True}
+    ]
+
+
+def test_fr17_failed_tool_call_is_recorded_on_error(monkeypatch) -> None:
+    """A tool call that returned an error is carried with ok False when the query then fails."""
+    rounds = config.MAX_TOOL_ROUNDS
+    install_fake(monkeypatch, [call_response() for _ in range(rounds + 1)])
+    install_run(monkeypatch, {"error": "x"})
+    with pytest.raises(RuntimeError, match="too many tool rounds") as exc:
+        llm.ask("q?", fixed_now())
+    expected = {"name": "web_search", "args": {"query": "q"}, "ok": False}
+    assert exc.value.tool_calls == [expected] * rounds
+
+
+def test_fr17_first_call_failure_has_empty_tool_calls(monkeypatch) -> None:
+    """A failure before any tool call propagates the same exception with tool_calls == []."""
+    error = ConnectionError("boom")
+    install_fake(monkeypatch, [error])
+    with pytest.raises(ConnectionError, match="boom") as exc:
+        llm.ask("hi", fixed_now())
+    assert exc.value is error
+    assert exc.value.tool_calls == []
+
+
+def test_fr17_deadline_before_any_call_has_empty_tool_calls(monkeypatch) -> None:
+    """'deadline exceeded' before the first Gemini call carries an empty tool_calls list."""
+    monkeypatch.setattr(llm, "_clock", FakeClock())
+    monkeypatch.setattr(config, "LLM_DEADLINE_S", config.LLM_TIMEOUT_S - 1)
+    fake = install_fake(monkeypatch, [text_response()])
+    with pytest.raises(RuntimeError, match="deadline exceeded") as exc:
+        llm.ask("hi", fixed_now())
+    assert exc.value.tool_calls == []
+    assert fake.models.calls == []
+
+
 def test_fr5_api_failure_propagates(monkeypatch) -> None:
     """An exception from generate_content propagates out of ask."""
     install_fake(monkeypatch, [ConnectionError("boom")])
