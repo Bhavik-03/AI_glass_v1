@@ -1,6 +1,7 @@
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
-from server import search, store
+from server import config, search, store
 
 DECLARATIONS = [
     {
@@ -24,6 +25,25 @@ DECLARATIONS = [
             "type": "object",
             "properties": {"text": {"type": "string", "description": "The note text"}},
             "required": ["text"],
+        },
+    },
+    {
+        "name": "add_reminder",
+        "description": (
+            "Set a reminder. due_at is an exact ISO 8601 time with offset, e.g. "
+            "2026-10-10T17:00:00+05:30, worked out from the current time. "
+            "Repeat the stored reminder back to the user."
+        ),
+        "parameters_json_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "What to be reminded of"},
+                "due_at": {
+                    "type": "string",
+                    "description": "ISO 8601 time with offset",
+                },
+            },
+            "required": ["text", "due_at"],
         },
     },
     {
@@ -56,9 +76,26 @@ def _list_notes(args: dict, now: datetime) -> dict:
     return {"notes": store.list_notes()}
 
 
+def _add_reminder(args: dict, now: datetime) -> dict:
+    text = args.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return {"error": "add_reminder needs a non-empty text"}
+    try:
+        due = datetime.fromisoformat(args["due_at"])
+    except (KeyError, TypeError, ValueError):
+        return {"error": "add_reminder needs due_at as an ISO 8601 time"}
+    if due.tzinfo is None:
+        return {"error": "due_at needs a UTC offset, e.g. +05:30"}
+    if due < now:
+        return {"error": "due_at is in the past"}
+    due_at = due.astimezone(ZoneInfo(config.TIMEZONE)).isoformat(timespec="seconds")
+    return store.add_reminder(text, due_at, now.isoformat(timespec="seconds"))
+
+
 _HANDLERS = {
     "web_search": _web_search,
     "add_note": _add_note,
+    "add_reminder": _add_reminder,
     "list_notes": _list_notes,
 }
 
