@@ -34,7 +34,7 @@ v1 runs on the laptop only. One FastAPI server and one Python client, both on th
 
 - **Client:** one push-to-talk key, start, thinking and error sounds, plays the answer. Polls the server every 10 s for due reminders and plays them.
 - **Speech to text:** faster-whisper `small.en`, local.
-- **Answers:** Gemini Flash (a Gemini 3 model) with Google Search grounding and function calling in the same request.
+- **Answers:** Gemini (`gemini-3.5-flash-lite`) with function calling; live information through a `web_search` tool that the server runs against a web search API.
 - **Tools:** `add_note`, `list_notes`, `add_reminder`, `list_reminders`, `cancel_reminder`, stored in a local SQLite database.
 - **Time:** the system prompt includes the current date and time in Asia/Kolkata, so "tomorrow at 5" becomes an exact time.
 - **Confirmation:** every action is repeated back ("Reminder set for 5 pm tomorrow: call the lab").

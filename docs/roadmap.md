@@ -23,7 +23,7 @@ Glasses that act as my second brain and handle most quick phone tasks hands-free
 - **At the end I can:** hold one key, ask a general or live question, add or list notes, set, list or cancel reminders, and hear due reminders spoken on time.
 - **Key pieces:**
   - Push-to-talk PC client: one key, start, thinking and error sounds; polls for due reminders.
-  - Server: faster-whisper `small.en` → Gemini Flash with Google Search and function calling → Piper TTS.
+  - Server: faster-whisper `small.en` → Gemini Flash-Lite with function calling and a `web_search` tool → Piper TTS.
   - Tools: `add_note`, `list_notes`, `add_reminder`, `list_reminders`, `cancel_reminder`, stored in SQLite.
   - Current date and time (Asia/Kolkata) in the system prompt; every action is repeated back.
   - Server binds to 127.0.0.1.

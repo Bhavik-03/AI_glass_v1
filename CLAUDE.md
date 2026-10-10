@@ -4,7 +4,7 @@ Final goal: glasses that act as my second brain and handle quick phone tasks han
 Current version: **v1 Voice assistant** (tag v0.1.0). Versions v1–v5 are in `docs/roadmap.md`.
 
 v1: push-to-talk PC client (one key) → FastAPI server on 127.0.0.1: STT (faster-whisper, local) →
-Gemini 3 Flash with Google Search + function calling (notes and reminders in SQLite) → TTS (Piper,
+Gemini 3.5 Flash-Lite with function calling (web_search via Tavily; notes and reminders in SQLite) → TTS (Piper,
 local) → answer WAV back. The client polls for due reminders and speaks them.
 
 <!-- Doc paths are in backticks, not @-imports, so they load only when Claude opens them. -->
@@ -32,8 +32,9 @@ ai-glasses/
 │   ├── main.py            # FastAPI app: /query, /reminders/*, /health; only file that knows stage order
 │   ├── config.py          # all server settings; reads .env
 │   ├── stt.py             # faster-whisper
-│   ├── llm.py             # Gemini + Search + tool-call loop + system instruction
+│   ├── llm.py             # Gemini + tool-call loop + system instruction
 │   ├── tools.py           # tool declarations, dispatch, spoken reminder text
+│   ├── search.py          # Tavily web search for the web_search tool
 │   ├── store.py           # SQLite: notes and reminders
 │   ├── tts.py             # Piper + resample to 16 kHz
 │   └── logger.py          # JSONL line
@@ -60,9 +61,11 @@ ai-glasses/
 
 ## Fixed values (ask before changing)
 - Audio: 16 kHz, mono, 16-bit WAV everywhere, in and out
-- Gemini: a Gemini 3 Flash model via `google-genai`, minimal thinking, 8 s timeout per call,
-  Google Search and the tool functions in every request, at most 3 tool rounds, answers ≤ 2 short
+- Gemini: `gemini-3.5-flash-lite` via `google-genai`, minimal thinking, 10 s timeout per call (API minimum),
+  the tool functions (incl. `web_search`, run by the server against Tavily) in every request, at most 3 tool rounds, answers ≤ 2 short
   sentences (< 40 words) except lists. Home city for weather comes from config.
+- LLM stage deadline 15 s: a Gemini or search call starts only if its full timeout fits in the time
+  left; search timeout 5 s. Worst case STT + LLM + TTS = 17 s stays under the client's 20 s.
 - Time zone Asia/Kolkata; current date and time in the system instruction
 - Server binds to 127.0.0.1 in v1
 - Client timeout 20 s; recording max 10 s; reminder poll every 10 s; "missed" after 60 s
@@ -74,7 +77,7 @@ ai-glasses/
 ## Code rules
 - Files go only where "Project structure" shows. No new files or folders without asking.
 - One job per file. One module per stage in `server/` (stt, llm, tts, logger): one stage function
-  each, plus `load()` for stt and tts; `tools` and `store` serve the llm stage and the reminder
+  each, plus `load()` for stt and tts; `tools`, `search` and `store` serve the llm stage and the reminder
   endpoints. Only `server/main.py` knows the stage order.
 - No hard-coded tunable values (ports, hosts, model names, timeouts, paths, sample rates, limits,
   intervals, time zone, home city). They live in `server/config.py` and `client_pc/config.py`.
@@ -112,7 +115,9 @@ Use PowerShell syntax: run commands on separate lines, not `&&` (Windows PowerSh
 
 ## Never
 - Commit `.env`, OAuth tokens, certificates or databases (`data/`, `*.db`)
-- Print or log API keys or tokens (the Gemini key, later `AUTH_TOKEN` and OAuth tokens)
+- Print or log API keys or tokens (the Gemini and Tavily keys, later `AUTH_TOKEN` and OAuth tokens)
+- Send anything but the search query to Tavily: no notes, reminders or (from v3) memory content
+  in a `web_search` query (Tavily may use queries to improve its models)
 - Commit `logs/`, `.venv/`, `models/`, or model files
 - Edit `tests/questions.csv` after the first eval run: the set is frozen
 - Add a dependency without adding it to `requirements.txt`
