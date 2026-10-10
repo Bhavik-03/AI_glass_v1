@@ -85,8 +85,8 @@ Gemini sees these declarations. Times are ISO 8601 with the configured offset (+
 | `web_search` | `query` | `{results: [{title, url, content}]}` or `{error}` |
 | `add_note` | `text` | `{id, text, created_at}` |
 | `list_notes` | none | `{notes: [{id, text, created_at}]}` |
-| `add_reminder` | `text`, `due_at` | `{id, text, due_at}` or `{error}` |
-| `list_reminders` | none | `{reminders: [{id, text, due_at}]}` |
+| `add_reminder` | `text`, `due_at` | `{id, text, due_at, due_spoken}` or `{error}` |
+| `list_reminders` | none | `{reminders: [{id, text, due_at, due_spoken}]}` |
 | `cancel_reminder` | `id` | `{id, text, due_at, status: "cancelled"}` or `{error}` |
 
 To cancel by description ("cancel the lab reminder"), Gemini calls `list_reminders` and then `cancel_reminder` with the matching id, within the 3-round limit.

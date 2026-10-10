@@ -111,11 +111,17 @@ def _add_reminder(args: dict, now: datetime) -> dict:
     if due < now:
         return {"error": "due_at is in the past"}
     due_at = due.astimezone(ZoneInfo(config.TIMEZONE)).isoformat(timespec="seconds")
-    return store.add_reminder(text, due_at, now.isoformat(timespec="seconds"))
+    reminder = store.add_reminder(text, due_at, now.isoformat(timespec="seconds"))
+    return {**reminder, "due_spoken": spoken_when(due, now)}
 
 
 def _list_reminders(args: dict, now: datetime) -> dict:
-    return {"reminders": store.list_pending()}
+    return {
+        "reminders": [
+            {**r, "due_spoken": spoken_when(datetime.fromisoformat(r["due_at"]), now)}
+            for r in store.list_pending()
+        ]
+    }
 
 
 def _reminder_id(value: object) -> int | None:
@@ -156,17 +162,22 @@ def _spoken_time(moment: datetime) -> str:
     return f"{clock} {'am' if moment.hour < 12 else 'pm'}"
 
 
+def spoken_when(due: datetime, now: datetime) -> str:
+    """'5 pm', or '10 October, 5 pm' when the due date is not today in the configured zone."""
+    zone = ZoneInfo(config.TIMEZONE)
+    due = due.astimezone(zone)
+    when = _spoken_time(due)
+    if due.date() != now.astimezone(zone).date():
+        when = f"{due.day} {due.strftime('%B')}, {when}"
+    return when
+
+
 def reminder_text(reminder: dict, now: datetime) -> str:
     """Spoken form of a due reminder: 'Reminder, 5 pm: …' or 'Missed reminder, …' (FR-13)."""
-    zone = ZoneInfo(config.TIMEZONE)
-    due = datetime.fromisoformat(reminder["due_at"]).astimezone(zone)
-    today = now.astimezone(zone).date()
-    age_s = (now - due).total_seconds()
-    prefix = "Missed reminder" if age_s >= config.MISSED_AFTER_S else "Reminder"
-    when = _spoken_time(due)
-    if due.date() != today:
-        when = f"{due.day} {due.strftime('%B')}, {when}"
-    return f"{prefix}, {when}: {reminder['text']}"
+    due = datetime.fromisoformat(reminder["due_at"])
+    missed = (now - due).total_seconds() >= config.MISSED_AFTER_S
+    prefix = "Missed reminder" if missed else "Reminder"
+    return f"{prefix}, {spoken_when(due, now)}: {reminder['text']}"
 
 
 def run(name: str, args: dict, now: datetime) -> dict:

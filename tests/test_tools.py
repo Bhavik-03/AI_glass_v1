@@ -194,16 +194,17 @@ def test_fr9_declares_add_reminder_with_required_text_and_due_at():
 
 
 def test_fr9_add_reminder_returns_id_text_due_at_and_stores_one_row(db, fixed_now):
-    """run('add_reminder') returns exactly {id, text, due_at} and stores one pending reminder."""
+    """run('add_reminder') returns exactly {id, text, due_at, due_spoken} and stores one pending reminder."""
     out = tools.run(
         "add_reminder",
         {"text": "call the lab", "due_at": "2026-10-10T17:00:00+05:30"},
         fixed_now,
     )
 
-    assert set(out) == {"id", "text", "due_at"}
+    assert set(out) == {"id", "text", "due_at", "due_spoken"}
     assert out["text"] == "call the lab"
     assert out["due_at"] == "2026-10-10T17:00:00+05:30"
+    assert out["due_spoken"] == "10 October, 5 pm"
     rows = store.list_pending()
     assert len(rows) == 1
     assert rows[0]["id"] == out["id"]
@@ -241,8 +242,9 @@ def test_fr9_add_reminder_due_at_equal_to_now_is_accepted(db, fixed_now):
         "add_reminder", {"text": "right now", "due_at": FIXED_ISO}, fixed_now
     )
 
-    assert set(out) == {"id", "text", "due_at"}
+    assert set(out) == {"id", "text", "due_at", "due_spoken"}
     assert out["due_at"] == FIXED_ISO
+    assert out["due_spoken"] == "2 pm"
     assert len(store.list_pending()) == 1
 
 
@@ -346,7 +348,12 @@ def test_fr10_add_reminder_result_matches_stored_values(db, fixed_now):
     rows = store.list_pending()
 
     assert len(rows) == 1
-    assert {k: rows[0][k] for k in ("id", "text", "due_at")} == added
+    assert added == {
+        "id": rows[0]["id"],
+        "text": rows[0]["text"],
+        "due_at": rows[0]["due_at"],
+        "due_spoken": "10 October, 5 pm",
+    }
 
 
 DUE_A = "2026-10-10T10:00:00+05:30"
@@ -394,7 +401,7 @@ def test_fr9_list_reminders_empty_returns_empty_list(db, fixed_now):
 
 
 def test_fr9_list_reminders_returns_pending_ordered_by_due_at(db, fixed_now):
-    """list_reminders returns pending reminders as {id, text, due_at}, ordered by due_at."""
+    """list_reminders returns pending reminders as {id, text, due_at, due_spoken}, ordered by due_at."""
     late = add_pending("late", DUE_C)
     early = add_pending("early", DUE_A)
     middle = add_pending("middle", DUE_B)
@@ -408,9 +415,14 @@ def test_fr9_list_reminders_returns_pending_ordered_by_due_at(db, fixed_now):
         late["id"],
     ]
     for r in out["reminders"]:
-        assert set(r) == {"id", "text", "due_at"}
+        assert set(r) == {"id", "text", "due_at", "due_spoken"}
     assert [r["text"] for r in out["reminders"]] == ["early", "middle", "late"]
     assert [r["due_at"] for r in out["reminders"]] == [DUE_A, DUE_B, DUE_C]
+    assert [r["due_spoken"] for r in out["reminders"]] == [
+        "10 October, 10 am",
+        "10 October, 12 pm",
+        "10 October, 3 pm",
+    ]
 
 
 def test_fr9_list_reminders_excludes_cancelled_and_delivered(db, fixed_now):
@@ -732,3 +744,248 @@ def test_fr13_age_is_computed_across_different_offsets():
 def test_fr13_reminder_text_is_spoken_unchanged(text):
     """The reminder's text follows the colon unchanged, punctuation and spacing included."""
     assert spoken_at_age(0, text=text) == f"Reminder, 5 pm: {text}"
+
+
+# --- due_spoken: speakable time string shared with reminder_text (FR-9, FR-10). ---
+
+MIDNIGHT = datetime(2026, 10, 9, 0, 0, tzinfo=IST)
+
+
+@pytest.mark.parametrize(
+    ("due", "now", "spoken"),
+    [
+        (datetime(2026, 10, 10, 17, 0, tzinfo=IST), NOW, "5 pm"),
+        (datetime(2026, 10, 9, 17, 0, tzinfo=IST), NOW, "9 October, 5 pm"),
+        (datetime(2026, 10, 10, 17, 0, tzinfo=IST), MIDNIGHT, "10 October, 5 pm"),
+        (datetime(2026, 10, 9, 17, 30, tzinfo=IST), MIDNIGHT, "5:30 pm"),
+        (datetime(2026, 10, 9, 0, 47, tzinfo=IST), MIDNIGHT, "12:47 am"),
+        (datetime(2026, 10, 9, 0, 0, tzinfo=IST), MIDNIGHT, "12 am"),
+        (datetime(2026, 10, 9, 12, 0, tzinfo=IST), MIDNIGHT, "12 pm"),
+        (datetime(2026, 10, 9, 12, 5, tzinfo=IST), MIDNIGHT, "12:05 pm"),
+        (datetime(2026, 10, 9, 23, 59, tzinfo=IST), MIDNIGHT, "11:59 pm"),
+        (datetime(2026, 10, 9, 9, 5, tzinfo=IST), MIDNIGHT, "9:05 am"),
+        (datetime(2026, 3, 5, 9, 30, tzinfo=IST), MIDNIGHT, "5 March, 9:30 am"),
+        (datetime(2026, 10, 8, 17, 0, tzinfo=IST), MIDNIGHT, "8 October, 5 pm"),
+        (datetime(2026, 10, 9, 17, 0, 42, tzinfo=IST), MIDNIGHT, "5 pm"),
+    ],
+    ids=[
+        "today-5pm",
+        "yesterday-vs-now-10th",
+        "other-day-5pm",
+        "today-5-30pm",
+        "today-12-47am",
+        "midnight",
+        "noon",
+        "12-05pm",
+        "11-59pm",
+        "9-05am",
+        "other-month-no-leading-zero",
+        "yesterday",
+        "seconds-ignored",
+    ],
+)
+def test_fr10_spoken_when_formats_time_and_adds_date_only_when_not_today(
+    due, now, spoken
+):
+    """spoken_when gives '5 pm' / '5:30 pm' / '12:47 am' today and '<day> <Month>, <time>' on another day."""
+    assert tools.spoken_when(due, now) == spoken
+
+
+def test_fr10_spoken_when_due_in_utc_is_converted_to_configured_zone():
+    """A due in UTC is converted to Asia/Kolkata first: 2026-10-09T19:00Z is 10 Oct 00:30 IST."""
+    now = datetime(2026, 10, 10, 0, 30, tzinfo=IST)
+    due = datetime(2026, 10, 9, 19, 0, tzinfo=UTC)
+
+    assert tools.spoken_when(due, now) == "12:30 am"
+
+
+def test_fr10_spoken_when_due_utc_date_differs_from_kolkata_date():
+    """2026-10-09T19:00Z is 10 Oct in Kolkata: with now on 9 Oct (Kolkata) the date is added."""
+    now = datetime(2026, 10, 9, 14, 0, tzinfo=IST)
+    due = datetime(2026, 10, 9, 19, 0, tzinfo=UTC)
+
+    assert tools.spoken_when(due, now) == "10 October, 12:30 am"
+
+
+def test_fr10_spoken_when_now_in_utc_is_converted_to_configured_zone():
+    """now 2026-10-09T20:00 UTC is 10 Oct 01:30 IST, so a 10 Oct 02:00 IST due is today: no date."""
+    now = datetime(2026, 10, 9, 20, 0, tzinfo=UTC)
+    due = datetime(2026, 10, 10, 2, 0, tzinfo=IST)
+
+    assert tools.spoken_when(due, now) == "2 am"
+
+
+@pytest.mark.parametrize(
+    ("hour", "minute", "spoken"),
+    [(14, 0, "2 pm"), (17, 0, "5 pm"), (17, 30, "5:30 pm"), (23, 59, "11:59 pm")],
+)
+def test_fr10_add_reminder_due_spoken_today(db, fixed_now, hour, minute, spoken):
+    """A reminder due later today has a due_spoken without a date, e.g. '5 pm', '5:30 pm'."""
+    due_at = datetime(2026, 10, 9, hour, minute, tzinfo=IST).isoformat()
+
+    out = tools.run("add_reminder", {"text": "x", "due_at": due_at}, fixed_now)
+
+    assert out["due_spoken"] == spoken
+
+
+@pytest.mark.parametrize(
+    ("hour", "minute", "spoken"),
+    [(0, 0, "12 am"), (0, 47, "12:47 am"), (12, 0, "12 pm"), (12, 30, "12:30 pm")],
+)
+def test_fr10_add_reminder_due_spoken_midnight_and_noon(db, hour, minute, spoken):
+    """12 am / 12 pm use the 12-hour clock: '12 am', '12:47 am', '12 pm', '12:30 pm'."""
+    due_at = datetime(2026, 10, 9, hour, minute, tzinfo=IST).isoformat()
+
+    out = tools.run("add_reminder", {"text": "x", "due_at": due_at}, MIDNIGHT)
+
+    assert out["due_spoken"] == spoken
+
+
+def test_fr10_add_reminder_due_spoken_other_day_has_date(db, fixed_now):
+    """A reminder due on another day has '<day> <Month>, <time>' as due_spoken."""
+    out = tools.run(
+        "add_reminder",
+        {"text": "call the lab", "due_at": "2026-10-10T17:00:00+05:30"},
+        fixed_now,
+    )
+
+    assert out["due_spoken"] == "10 October, 5 pm"
+
+
+def test_fr10_add_reminder_due_spoken_utc_is_converted_to_kolkata(db, fixed_now):
+    """A due_at given as UTC is converted to Kolkata before formatting: 11:30Z is 5 pm IST."""
+    out = tools.run(
+        "add_reminder",
+        {"text": "x", "due_at": "2026-10-09T11:30:00Z"},
+        fixed_now,
+    )
+
+    assert out["due_at"] == "2026-10-09T17:00:00+05:30"
+    assert out["due_spoken"] == "5 pm"
+
+
+def test_fr10_add_reminder_due_spoken_utc_date_is_kolkata_date(db, fixed_now):
+    """A UTC due_at on 9 Oct that is 10 Oct in Kolkata gets the Kolkata date in due_spoken."""
+    out = tools.run(
+        "add_reminder",
+        {"text": "x", "due_at": "2026-10-09T19:00:00Z"},
+        fixed_now,
+    )
+
+    assert out["due_at"] == "2026-10-10T00:30:00+05:30"
+    assert out["due_spoken"] == "10 October, 12:30 am"
+
+
+def test_fr10_add_reminder_due_spoken_uses_seconds_precision_stored_value(
+    db, fixed_now
+):
+    """due_spoken is built from the stored (seconds precision) due_at: fractions are ignored."""
+    out = tools.run(
+        "add_reminder",
+        {"text": "x", "due_at": "2026-10-09T16:00:00.789+05:30"},
+        fixed_now,
+    )
+
+    assert out["due_spoken"] == "4 pm"
+
+
+def test_fr10_add_reminder_error_has_no_due_spoken(db, fixed_now):
+    """An add_reminder error is only {error}: no due_spoken."""
+    out = tools.run(
+        "add_reminder", {"text": "x", "due_at": "2026-10-09T13:00:00+05:30"}, fixed_now
+    )
+
+    assert list(out) == ["error"]
+
+
+def test_fr10_list_reminders_items_carry_due_spoken_today_and_other_day(db, fixed_now):
+    """Each list_reminders item has the right due_spoken: no date for today, a date for another day."""
+    today = add_pending("water plants", "2026-10-09T17:30:00+05:30")
+    tomorrow = add_pending("call the lab", "2026-10-10T17:00:00+05:30")
+
+    out = tools.run("list_reminders", {}, fixed_now)
+
+    assert out == {
+        "reminders": [
+            {
+                "id": today["id"],
+                "text": "water plants",
+                "due_at": "2026-10-09T17:30:00+05:30",
+                "due_spoken": "5:30 pm",
+            },
+            {
+                "id": tomorrow["id"],
+                "text": "call the lab",
+                "due_at": "2026-10-10T17:00:00+05:30",
+                "due_spoken": "10 October, 5 pm",
+            },
+        ]
+    }
+
+
+def test_fr10_list_reminders_due_spoken_uses_now_passed_to_run(db):
+    """due_spoken depends on the `now` given to run: the same row is 'today' on 10 Oct."""
+    add_pending("call the lab", "2026-10-10T17:00:00+05:30")
+
+    out = tools.run("list_reminders", {}, NOW)
+
+    assert [r["due_spoken"] for r in out["reminders"]] == ["5 pm"]
+
+
+def test_fr10_list_reminders_due_spoken_converts_utc_stored_value(db, fixed_now):
+    """A row stored with a Z offset is formatted in Kolkata time: 11:30Z is 5 pm IST."""
+    add_pending("x", "2026-10-09T11:30:00Z")
+
+    out = tools.run("list_reminders", {}, fixed_now)
+
+    assert [r["due_spoken"] for r in out["reminders"]] == ["5 pm"]
+
+
+def test_fr10_cancel_reminder_result_has_no_due_spoken(db, fixed_now):
+    """cancel_reminder is unchanged: exactly {id, text, due_at, status}, no due_spoken."""
+    added = add_pending("call the lab", DUE_A)
+
+    out = tools.run("cancel_reminder", {"id": added["id"]}, fixed_now)
+
+    assert set(out) == {"id", "text", "due_at", "status"}
+
+
+@pytest.mark.parametrize(
+    ("due_at", "now", "prefix"),
+    [
+        (
+            "2026-10-09T17:00:00+05:30",
+            datetime(2026, 10, 9, 14, 0, tzinfo=IST),
+            "Reminder",
+        ),
+        (
+            "2026-10-10T17:00:00+05:30",
+            datetime(2026, 10, 9, 14, 0, tzinfo=IST),
+            "Reminder",
+        ),
+        (
+            "2026-10-09T17:30:00+05:30",
+            datetime(2026, 10, 9, 18, 0, tzinfo=IST),
+            "Missed reminder",
+        ),
+        (
+            "2026-10-10T17:00:00+05:30",
+            datetime(2026, 10, 11, 9, 0, tzinfo=IST),
+            "Missed reminder",
+        ),
+    ],
+    ids=["fresh-today", "fresh-other-day", "missed-today", "missed-other-day"],
+)
+def test_fr10_reminder_text_is_prefix_due_spoken_and_text(db, due_at, now, prefix):
+    """reminder_text equals '<Reminder|Missed reminder>, ' + due_spoken + ': ' + text, so both
+    use the same time wording."""
+    added = tools.run(
+        "add_reminder",
+        {"text": "call the lab", "due_at": due_at},
+        datetime(2026, 10, 9, 14, 0, tzinfo=IST),
+    )
+    stored = {k: added[k] for k in ("id", "text", "due_at")}
+
+    spoken = tools.reminder_text(stored, now)
+
+    assert spoken == f"{prefix}, {added['due_spoken']}: call the lab"

@@ -19,14 +19,47 @@ def test_fr6_instruction_has_date_weekday_time() -> None:
     text = llm.system_instruction(fixed_now())
     assert "Friday" in text
     assert "9 October 2026" in text
-    assert "14:00" in text
+    assert "14:00:00" in text
 
 
 def test_fr6_instruction_has_iso_time_and_timezone() -> None:
     """The instruction contains the ISO time with offset and the time zone name."""
     text = llm.system_instruction(fixed_now())
-    assert "2026-10-09T14:00+05:30" in text
+    assert "2026-10-09T14:00:00+05:30" in text
     assert config.TIMEZONE in text
+
+
+@pytest.mark.parametrize("second", [7, 59], ids=["7s", "59s"])
+def test_fr6_instruction_time_includes_seconds(second: int) -> None:
+    """The instruction's clock and ISO time carry the seconds of `now`, so 'in two minutes'
+    lands within a few seconds of 120 s; seconds are not rounded."""
+    now = datetime(2026, 10, 9, 14, 0, second, tzinfo=ZoneInfo(config.TIMEZONE))
+    text = llm.system_instruction(now)
+    assert f"14:00:{second:02d}" in text
+    assert f"2026-10-09T14:00:{second:02d}+05:30" in text
+
+
+def test_fr6_instruction_iso_time_drops_microseconds() -> None:
+    """The ISO time has seconds precision: microseconds of `now` are not shown."""
+    now = datetime(2026, 10, 9, 14, 0, 7, 900000, tzinfo=ZoneInfo(config.TIMEZONE))
+    text = llm.system_instruction(now)
+    assert "2026-10-09T14:00:07+05:30" in text
+    assert "14:00:07.9" not in text
+
+
+def test_fr10_instruction_says_to_repeat_due_spoken_not_iso() -> None:
+    """The instruction tells Gemini to say the due_spoken text for a reminder time, never an ISO timestamp."""
+    text = llm.system_instruction(fixed_now())
+    assert (
+        "When you tell the user a reminder time, say the due_spoken text from the "
+        "tool result, never an ISO timestamp."
+    ) in text
+
+
+def test_fr10_instruction_says_never_to_say_ids_aloud() -> None:
+    """The instruction tells Gemini never to say an id aloud; ids are only for cancel_reminder."""
+    text = llm.system_instruction(fixed_now())
+    assert "Never say an id aloud; ids are only for calling cancel_reminder." in text
 
 
 def test_fr6_instruction_reads_home_city_per_call(monkeypatch) -> None:
@@ -365,10 +398,15 @@ def test_fr6_fr9_fr10_add_reminder_stores_row_and_repeats_values(
 
     instruction = fake.models.calls[0]["config"].system_instruction
     assert "Friday" in instruction
-    assert "2026-10-09T14:00+05:30" in instruction
+    assert "2026-10-09T14:00:00+05:30" in instruction
 
     assert len(fake.models.calls) == 2
-    stored = {k: pending[0][k] for k in ("id", "text", "due_at")}
+    stored = {
+        "id": pending[0]["id"],
+        "text": pending[0]["text"],
+        "due_at": pending[0]["due_at"],
+        "due_spoken": "10 October, 5 pm",
+    }
     assert response_of(fake.models.calls[1]["contents"][2]) == stored
 
     assert result == (
@@ -438,7 +476,20 @@ def test_fr9_fr10_cancel_by_description_within_round_limit(monkeypatch, db) -> N
 
     listed = response_of(fake.models.calls[1]["contents"][2])
     assert listed == {
-        "reminders": [{k: r[k] for k in ("id", "text", "due_at")} for r in (lab, other)]
+        "reminders": [
+            {
+                "id": lab["id"],
+                "text": "call the lab",
+                "due_at": DUE_TOMORROW_5PM,
+                "due_spoken": "10 October, 5 pm",
+            },
+            {
+                "id": other["id"],
+                "text": "buy milk",
+                "due_at": "2026-10-11T09:00:00+05:30",
+                "due_spoken": "11 October, 9 am",
+            },
+        ]
     }
     cancelled = response_of(fake.models.calls[2]["contents"][4])
     assert cancelled == {

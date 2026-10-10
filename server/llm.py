@@ -17,7 +17,9 @@ give each reminder's date and time.
 query when the question depends on them. Never put note or reminder content in a query.
 - Use the tools for notes and reminders. Turn relative times into an exact ISO 8601 time with \
 offset, based on the time above.
-- After any action, repeat it back with the stored values. On a tool error, say what went wrong."""
+- After any action, repeat it back with the stored values. On a tool error, say what went wrong.
+- When you tell the user a reminder time, say the due_spoken text from the tool result, never an ISO timestamp.
+- Never say an id aloud; ids are only for calling cancel_reminder."""
 
 _client: genai.Client | None = None
 _clock = time.monotonic
@@ -29,8 +31,8 @@ def system_instruction(now: datetime) -> str:
         weekday=now.strftime("%A"),
         day=now.day,
         month_year=now.strftime("%B %Y"),
-        time=now.strftime("%H:%M"),
-        iso=now.isoformat(timespec="minutes"),
+        time=now.strftime("%H:%M:%S"),
+        iso=now.isoformat(timespec="seconds"),
         timezone=config.TIMEZONE,
         home_city=config.HOME_CITY,
     )
