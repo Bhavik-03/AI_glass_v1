@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from server import search
+from server import search, store
 
 DECLARATIONS = [
     {
@@ -16,11 +16,25 @@ DECLARATIONS = [
             },
             "required": ["query"],
         },
-    }
+    },
+    {
+        "name": "add_note",
+        "description": "Save a note. Repeat the stored note back to the user.",
+        "parameters_json_schema": {
+            "type": "object",
+            "properties": {"text": {"type": "string", "description": "The note text"}},
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "list_notes",
+        "description": "List every saved note, newest first.",
+        "parameters_json_schema": {"type": "object", "properties": {}},
+    },
 ]
 
 
-def _web_search(args: dict) -> dict:
+def _web_search(args: dict, now: datetime) -> dict:
     query = args.get("query")
     if not isinstance(query, str) or not query.strip():
         return {"error": "web_search needs a non-empty text query"}
@@ -31,7 +45,22 @@ def _web_search(args: dict) -> dict:
         return {"error": f"web search failed: {e}"}
 
 
-_HANDLERS = {"web_search": _web_search}
+def _add_note(args: dict, now: datetime) -> dict:
+    text = args.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return {"error": "add_note needs a non-empty text"}
+    return store.add_note(text, now.isoformat(timespec="seconds"))
+
+
+def _list_notes(args: dict, now: datetime) -> dict:
+    return {"notes": store.list_notes()}
+
+
+_HANDLERS = {
+    "web_search": _web_search,
+    "add_note": _add_note,
+    "list_notes": _list_notes,
+}
 
 
 def run(name: str, args: dict, now: datetime) -> dict:
@@ -41,4 +70,4 @@ def run(name: str, args: dict, now: datetime) -> dict:
         return {"error": f"unknown tool: {name}"}
     if not isinstance(args, dict):
         return {"error": f"{name}: arguments must be an object"}
-    return handler(args)
+    return handler(args, now)

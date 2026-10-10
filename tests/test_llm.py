@@ -127,7 +127,7 @@ def enum_value(x):
 
 
 def test_fr5_plain_answer_request_settings(monkeypatch) -> None:
-    """ask calls the configured model once with instruction, web_search, VALIDATED, MINIMAL."""
+    """ask calls the configured model once with instruction, the tool declarations, VALIDATED, MINIMAL."""
     fake = install_fake(monkeypatch, [text_response("answer")])
     now = fixed_now()
     assert llm.ask("hi", now) == ("answer", False, [])
@@ -136,7 +136,9 @@ def test_fr5_plain_answer_request_settings(monkeypatch) -> None:
     assert call["model"] == config.LLM_MODEL
     cfg = call["config"]
     assert cfg.system_instruction == llm.system_instruction(now)
-    assert [d.name for d in cfg.tools[0].function_declarations] == ["web_search"]
+    sent = [d.name for d in cfg.tools[0].function_declarations]
+    assert sent == [d["name"] for d in tools.DECLARATIONS]
+    assert "web_search" in sent
     fc = cfg.tool_config.function_calling_config
     assert enum_value(fc.mode) == types.FunctionCallingConfigMode.VALIDATED.value
     assert enum_value(cfg.thinking_config.thinking_level) == "MINIMAL"
