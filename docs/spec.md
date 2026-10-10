@@ -55,7 +55,7 @@ POST /query                          # one question, one answer
   audio : WAV file, 16 kHz mono 16-bit   # the question (FR-1), required
 
   200 OK          Content-Type: audio/wav      # answer audio (FR-11)
-  400 Bad Request {"error": "<reason>"}        # audio missing, empty or unreadable
+  400 Bad Request {"error": "<reason>"}        # audio missing, empty or unreadable, or no speech detected
   500 Server Error {"error": "<stage>: <reason>"}   # a stage failed
 
 GET /reminders/due                   # FR-12
