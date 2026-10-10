@@ -183,6 +183,143 @@ def test_fr16_empty_transcript_returns_no_speech(
     assert again.status_code == 200
 
 
+STAGE_FAKES = {
+    "stt": "server.stt.transcribe",
+    "llm": "server.llm.ask",
+    "tts": "server.tts.synthesize",
+}
+
+
+def _post_query(silent_wav):
+    return client.post("/query", files={"audio": ("q.wav", silent_wav, "audio/wav")})
+
+
+def _make_stage_raise(monkeypatch, fake_stages, stage, exc):
+    """Replace one stage fake with one that records its call, then raises exc.
+
+    Returns the normal fake so the test can restore it.
+    """
+    module_name, attr = STAGE_FAKES[stage].rsplit(".", 1)
+    module = __import__(module_name, fromlist=[attr])
+    normal = getattr(module, attr)
+
+    def failing(*args):
+        fake_stages["order"].append(stage)
+        raise exc
+
+    monkeypatch.setattr(STAGE_FAKES[stage], failing)
+    return normal
+
+
+@pytest.mark.parametrize("stage", ["stt", "llm", "tts"])
+def test_fr16_stage_failure_returns_500_and_stops(
+    fake_stages, silent_wav, monkeypatch, stage
+):
+    """FR-16: a stage failure -> 500 {"error": "<stage>: <reason>"}; later stages
+    do not run; the next valid request returns 200."""
+    normal = _make_stage_raise(monkeypatch, fake_stages, stage, RuntimeError("boom"))
+    response = _post_query(silent_wav)
+    assert response.status_code == 500
+    assert response.json() == {"error": f"{stage}: boom"}
+    order = ["stt", "llm", "tts"]
+    assert fake_stages["order"] == order[: order.index(stage) + 1]
+
+    monkeypatch.setattr(STAGE_FAKES[stage], normal)
+    fake_stages["order"].clear()
+    again = _post_query(silent_wav)
+    assert again.status_code == 200
+    assert again.content == FAKE_TTS_WAV
+
+
+def test_fr16_llm_too_many_tool_rounds_message(fake_stages, silent_wav, monkeypatch):
+    """FR-16: llm raising "too many tool rounds" -> 500 {"error": "llm: too many tool rounds"}."""
+    _make_stage_raise(
+        monkeypatch, fake_stages, "llm", RuntimeError("too many tool rounds")
+    )
+    response = _post_query(silent_wav)
+    assert response.status_code == 500
+    assert response.json() == {"error": "llm: too many tool rounds"}
+    assert fake_stages["order"] == ["stt", "llm"]
+
+
+def test_fr16_empty_exception_message_uses_type_name(
+    fake_stages, silent_wav, monkeypatch
+):
+    """FR-16: an exception with no message -> reason is the exception type name."""
+    _make_stage_raise(monkeypatch, fake_stages, "llm", TimeoutError())
+    response = _post_query(silent_wav)
+    assert response.status_code == 500
+    assert response.json() == {"error": "llm: TimeoutError"}
+
+
+def test_fr16_error_redacts_api_keys(fake_stages, silent_wav, monkeypatch):
+    """FR-16: configured Gemini and Tavily key values never appear in the response;
+    they are replaced by "[redacted]"."""
+    gemini_key = "fake-gemini-key-AAA111"
+    tavily_key = "fake-tavily-key-BBB222"
+    monkeypatch.setattr(config, "GEMINI_API_KEY", gemini_key)
+    monkeypatch.setattr(config, "TAVILY_API_KEY", tavily_key)
+    _make_stage_raise(
+        monkeypatch,
+        fake_stages,
+        "llm",
+        RuntimeError(f"bad {gemini_key} and {tavily_key}"),
+    )
+    response = _post_query(silent_wav)
+    assert response.status_code == 500
+    assert gemini_key not in response.text
+    assert tavily_key not in response.text
+    assert "[redacted]" in response.text
+
+
+def test_fr16_error_reason_truncated_to_max_chars(fake_stages, silent_wav, monkeypatch):
+    """FR-16: the reason is cut to config.ERROR_MAX_CHARS characters."""
+    monkeypatch.setattr(config, "ERROR_MAX_CHARS", 20)
+    _make_stage_raise(monkeypatch, fake_stages, "llm", RuntimeError("x" * 100))
+    response = _post_query(silent_wav)
+    assert response.status_code == 500
+    assert response.json() == {"error": "llm: " + "x" * 20}
+
+
+def test_fr16_key_straddling_cut_point_is_not_leaked(
+    fake_stages, silent_wav, monkeypatch
+):
+    """FR-16: redaction happens before truncation, so a key that straddles the
+    cut point leaves no key fragment in the response."""
+    key = "SECRETKEY123"
+    monkeypatch.setattr(config, "ERROR_MAX_CHARS", 20)
+    monkeypatch.setattr(config, "GEMINI_API_KEY", key)
+    monkeypatch.setattr(config, "TAVILY_API_KEY", "")
+    _make_stage_raise(monkeypatch, fake_stages, "llm", RuntimeError("x" * 15 + key))
+    response = _post_query(silent_wav)
+    assert response.status_code == 500
+    assert "SECRE" not in response.text
+    reason = response.json()["error"].removeprefix("llm: ")
+    assert len(reason) == 20
+
+
+def test_fr16_run_stage_success_returns_result_and_times():
+    """FR-16: run_stage returns fn's result and sets timings[name] to int ms >= 0."""
+    timings: dict = {}
+    result = server.main.run_stage("stt", timings, lambda a, b: a + b, 1, 2)
+    assert result == 3
+    assert isinstance(timings["stt"], int)
+    assert timings["stt"] >= 0
+
+
+def test_fr16_run_stage_failure_raises_stage_failed_and_times():
+    """FR-16: run_stage wraps a failure in StageFailed and still sets timings[name]."""
+    timings: dict = {}
+
+    def boom():
+        raise RuntimeError("boom")
+
+    with pytest.raises(server.main.StageFailed):
+        server.main.run_stage("tts", timings, boom)
+    assert isinstance(timings["tts"], int)
+    assert timings["tts"] >= 0
+
+
 def test_fr18_default_host_is_localhost():
     """FR-18: the server binds to the configured host, which is 127.0.0.1."""
     assert config.HOST == "127.0.0.1"

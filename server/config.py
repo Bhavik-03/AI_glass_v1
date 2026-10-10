@@ -19,6 +19,7 @@ HOME_CITY = "Pune"
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 SEARCH_MAX_RESULTS = 5
 SEARCH_TIMEOUT_S = 5
+ERROR_MAX_CHARS = 200
 LOG_LEVEL = "INFO"
 LOG_PATH = ROOT / "logs" / "queries.jsonl"
 STT_MODEL = "small.en"
