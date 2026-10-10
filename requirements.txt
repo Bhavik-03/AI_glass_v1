@@ -7,3 +7,4 @@ faster-whisper==1.2.1
 tzdata==2026.5
 tavily-python==0.8.5
 python-dotenv==1.2.4
+google-genai==2.29.0
