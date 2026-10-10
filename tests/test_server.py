@@ -735,3 +735,116 @@ def test_fr14_ack_handler_is_plain_def():
 def test_fr18_default_host_is_localhost():
     """FR-18: the server binds to the configured host, which is 127.0.0.1."""
     assert config.HOST == "127.0.0.1"
+
+
+def _audio_ok(fake_stages, due_at: str, expected_text: str):
+    rid = _add("call the lab", due_at)
+    response = client.get(f"/reminders/{rid}/audio")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.content == FAKE_TTS_WAV
+    assert fake_stages["tts"] == [expected_text]
+
+
+def test_fr13_audio_fresh_reminder_age_zero(fake_stages):
+    """FR-13: a reminder due exactly now is spoken as "Reminder, 2 pm: ..." and
+    returned as audio/wav made by tts.synthesize."""
+    _audio_ok(fake_stages, EQUAL, "Reminder, 2 pm: call the lab")
+
+
+def test_fr13_audio_fresh_reminder_59_seconds_old(fake_stages):
+    """FR-13: a reminder 59 s old is still fresh: "Reminder, 1:59 pm: ..."."""
+    _audio_ok(
+        fake_stages, "2026-10-09T13:59:01+05:30", "Reminder, 1:59 pm: call the lab"
+    )
+
+
+def test_fr13_audio_reminder_exactly_60_seconds_old_is_missed(fake_stages):
+    """FR-13: a reminder exactly 60 s old is "Missed reminder, 1:59 pm: ..."."""
+    _audio_ok(
+        fake_stages,
+        "2026-10-09T13:59:00+05:30",
+        "Missed reminder, 1:59 pm: call the lab",
+    )
+
+
+def test_fr13_audio_missed_reminder_an_hour_old(fake_stages):
+    """FR-13: a missed reminder from an hour ago is "Missed reminder, 1 pm: ..."."""
+    _audio_ok(fake_stages, PAST, "Missed reminder, 1 pm: call the lab")
+
+
+def test_fr13_audio_missed_reminder_from_another_day(fake_stages):
+    """FR-13: a missed reminder from another day includes the date:
+    "Missed reminder, 8 October, 5 pm: ..."."""
+    _audio_ok(
+        fake_stages,
+        "2026-10-08T17:00:00+05:30",
+        "Missed reminder, 8 October, 5 pm: call the lab",
+    )
+
+
+def test_fr13_audio_fetch_keeps_status_pending(fake_stages):
+    """FR-13: fetching the audio never changes status; only ack marks delivered.
+    The reminder stays pending and due after one and after two fetches."""
+    rid = _add("call the lab", PAST)
+    for _ in range(2):
+        assert client.get(f"/reminders/{rid}/audio").status_code == 200
+        assert rid in _pending_ids()
+        due = client.get("/reminders/due")
+        assert due.status_code == 200
+        assert [r["id"] for r in due.json()] == [rid]
+
+
+def test_fr13_audio_unknown_id_returns_404(fake_stages):
+    """FR-13: an unknown id gives 404 {"error": "reminder not found"} and TTS
+    is not called."""
+    response = client.get("/reminders/999/audio")
+    assert response.status_code == 404
+    assert response.json() == NOT_FOUND
+    assert fake_stages["tts"] == []
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    ["abc", "1.5", "-1", "1_0", "%20", "%D9%A3", "1" + "0" * 30, "9" * 5000],
+    ids=[
+        "letters",
+        "decimal",
+        "negative",
+        "underscore",
+        "space",
+        "arabic-digit",
+        "huge",
+        "over-4300-digits",
+    ],
+)
+def test_fr13_audio_non_integer_id_returns_404(fake_stages, bad_id):
+    """FR-13: a non-integer or out-of-range id gives 404
+    {"error": "reminder not found"}, never 422 or 500, and TTS is not called."""
+    rid = _add("keep me", PAST)
+    response = client.get(f"/reminders/{bad_id}/audio")
+    assert response.status_code == 404
+    assert response.json() == NOT_FOUND
+    assert fake_stages["tts"] == []
+    assert _pending_ids() == [rid]
+
+
+def test_fr13_audio_writes_no_log_line(fake_stages, log_path):
+    """FR-13: the audio endpoint (200 and 404) writes no JSONL line."""
+    rid = _add("a", PAST)
+    assert client.get(f"/reminders/{rid}/audio").status_code == 200
+    assert client.get("/reminders/999/audio").status_code == 404
+    assert _log_lines(log_path) == []
+
+
+def test_fr13_audio_handler_is_plain_def():
+    """FR-13: GET /reminders/{reminder_id}/audio is a plain def so sqlite and
+    Piper run in the thread pool."""
+    routes = [
+        r
+        for r in app.routes
+        if getattr(r, "path", None) == "/reminders/{reminder_id}/audio"
+        and "GET" in getattr(r, "methods", set())
+    ]
+    assert len(routes) == 1
+    assert not inspect.iscoroutinefunction(routes[0].endpoint)

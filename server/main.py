@@ -11,7 +11,7 @@ import uvicorn
 from fastapi import FastAPI, File, Response, UploadFile
 from fastapi.responses import JSONResponse
 
-from server import config, llm, logger, store, stt, tts
+from server import config, llm, logger, store, stt, tools, tts
 
 
 @asynccontextmanager
@@ -112,19 +112,36 @@ def reminders_due() -> Response:
     return JSONResponse(content=due)
 
 
+def _find_reminder(reminder_id: str, lookup) -> dict | None:
+    """Apply lookup to the id; None when it isn't a usable id, so the caller answers 404."""
+    # The id is a string so a non-numeric one is a 404, not FastAPI's 422.
+    if not (reminder_id.isascii() and reminder_id.isdigit()):
+        return None
+    try:
+        return lookup(int(reminder_id))
+    # Too large for int() (over 4300 digits) or for an SQLite integer: no such reminder.
+    except (ValueError, OverflowError):
+        return None
+
+
+def _reminder_not_found() -> JSONResponse:
+    return JSONResponse(status_code=404, content={"error": "reminder not found"})
+
+
 @app.post("/reminders/{reminder_id}/ack")
 def reminder_ack(reminder_id: str) -> Response:
-    # Taken as a string so a non-numeric id is a 404, not FastAPI's 422.
-    reminder = None
-    if reminder_id.isascii() and reminder_id.isdigit():
-        try:
-            reminder = store.ack(int(reminder_id))
-        # Too large for int() (over 4300 digits) or for an SQLite integer: no such reminder.
-        except (ValueError, OverflowError):
-            pass
-    if reminder is None:
-        return JSONResponse(status_code=404, content={"error": "reminder not found"})
+    if _find_reminder(reminder_id, store.ack) is None:
+        return _reminder_not_found()
     return JSONResponse(content={"status": "ok"})
+
+
+@app.get("/reminders/{reminder_id}/audio")
+def reminder_audio(reminder_id: str) -> Response:
+    reminder = _find_reminder(reminder_id, store.get)
+    if reminder is None:
+        return _reminder_not_found()
+    wav = tts.synthesize(tools.reminder_text(reminder, now()))
+    return Response(content=wav, media_type="audio/wav")
 
 
 # Plain def, not async: FastAPI runs it in a thread pool, so a slow query doesn't block other endpoints.
