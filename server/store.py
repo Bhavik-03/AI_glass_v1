@@ -72,16 +72,47 @@ def list_pending() -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def list_due(now: str) -> list[dict]:
+    with _connect() as con:
+        rows = con.execute(
+            "SELECT id, text, due_at FROM reminders"
+            " WHERE status = ? AND due_at <= ? ORDER BY due_at, id",
+            (PENDING, now),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _fetch(con: sqlite3.Connection, reminder_id: int) -> dict | None:
+    row = con.execute(
+        "SELECT id, text, due_at FROM reminders WHERE id = ?", (reminder_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def get(reminder_id: int) -> dict | None:
+    with _connect() as con:
+        return _fetch(con, reminder_id)
+
+
+def _move_pending(con: sqlite3.Connection, reminder_id: int, status: str) -> int:
+    """One conditional UPDATE, so a concurrent change can't slip in between check and write."""
+    cur = con.execute(
+        "UPDATE reminders SET status = ? WHERE id = ? AND status = ?",
+        (status, reminder_id, PENDING),
+    )
+    return cur.rowcount
+
+
 def cancel(reminder_id: int) -> dict | None:
     """Cancel a pending reminder; None if the id is unknown or not pending."""
     with _connect() as con:
-        row = con.execute(
-            "SELECT id, text, due_at FROM reminders WHERE id = ? AND status = ?",
-            (reminder_id, PENDING),
-        ).fetchone()
-        if row is None:
-            return None
-        con.execute(
-            "UPDATE reminders SET status = ? WHERE id = ?", (CANCELLED, reminder_id)
-        )
-    return dict(row)
+        if _move_pending(con, reminder_id, CANCELLED):
+            return _fetch(con, reminder_id)
+    return None
+
+
+def ack(reminder_id: int) -> dict | None:
+    """Mark a pending reminder delivered; any existing reminder is returned, None if unknown."""
+    with _connect() as con:
+        _move_pending(con, reminder_id, DELIVERED)
+        return _fetch(con, reminder_id)

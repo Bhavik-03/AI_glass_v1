@@ -212,3 +212,143 @@ def test_fr9_cancel_delivered_returns_none_and_keeps_status(db):
 
     assert store.cancel(added["id"]) is None
     assert status_of(db, added["id"]) == store.DELIVERED
+
+
+NOW = "2026-10-09T16:00:00+05:30"
+
+
+def test_fr12_list_due_includes_due_now_and_past_oldest_first(db):
+    """list_due returns pending reminders with due_at <= now (equal included), oldest first."""
+    store.add_reminder("now", NOW, CREATED)
+    store.add_reminder("older", DUE_A, CREATED)
+    store.add_reminder("oldest", "2026-10-09T14:30:00+05:30", CREATED)
+
+    due = store.list_due(NOW)
+
+    assert [r["text"] for r in due] == ["oldest", "older", "now"]
+    assert all(set(r) == {"id", "text", "due_at"} for r in due)
+    assert due[-1]["due_at"] == NOW
+
+
+def test_fr12_list_due_excludes_future(db):
+    """list_due never lists a reminder whose due_at is after now."""
+    due = store.add_reminder("due", DUE_A, CREATED)
+    store.add_reminder("future", DUE_C, CREATED)
+
+    assert store.list_due(NOW) == [due]
+
+
+def test_fr12_list_due_excludes_delivered(db):
+    """list_due never lists a delivered reminder."""
+    keep = store.add_reminder("keep", DUE_B, CREATED)
+    done = store.add_reminder("done", DUE_A, CREATED)
+    set_status(db, done["id"], store.DELIVERED)
+
+    assert store.list_due(NOW) == [keep]
+
+
+def test_fr12_list_due_excludes_cancelled(db):
+    """list_due never lists a cancelled reminder."""
+    keep = store.add_reminder("keep", DUE_B, CREATED)
+    drop = store.add_reminder("drop", DUE_A, CREATED)
+    store.cancel(drop["id"])
+
+    assert store.list_due(NOW) == [keep]
+
+
+def test_fr12_list_due_empty(db):
+    """list_due returns an empty list when nothing is due."""
+    assert store.list_due(NOW) == []
+
+
+def test_fr12_list_due_does_not_change_status(db):
+    """Polling again without an ack returns the same reminders; list_due changes no status."""
+    a = store.add_reminder("a", DUE_A, CREATED)
+    b = store.add_reminder("b", DUE_B, CREATED)
+    before = reminder_rows(db)
+
+    first = store.list_due(NOW)
+    second = store.list_due(NOW)
+
+    assert first == second == [a, b]
+    assert reminder_rows(db) == before
+    assert status_of(db, a["id"]) == store.PENDING
+    assert status_of(db, b["id"]) == store.PENDING
+
+
+def test_fr12_get_returns_reminder(db):
+    """get returns {id, text, due_at} for an existing reminder."""
+    added = store.add_reminder("call mom", DUE_A, CREATED)
+
+    assert store.get(added["id"]) == added
+
+
+def test_fr12_get_unknown_id_returns_none(db):
+    """get of an unknown id returns None."""
+    assert store.get(999) is None
+
+
+def test_fr14_ack_pending_returns_reminder_and_marks_delivered(db):
+    """ack of a pending reminder returns it, marks it delivered, and it leaves list_due."""
+    added = store.add_reminder("call mom", DUE_A, CREATED)
+    assert store.list_due(NOW) == [added]
+
+    assert store.ack(added["id"]) == added
+
+    assert status_of(db, added["id"]) == store.DELIVERED
+    assert store.list_due(NOW) == []
+
+
+def test_fr14_ack_twice_returns_reminder_both_times(db):
+    """Acking again returns the reminder again and the status stays delivered."""
+    added = store.add_reminder("call mom", DUE_A, CREATED)
+
+    assert store.ack(added["id"]) == added
+    assert store.ack(added["id"]) == added
+    assert status_of(db, added["id"]) == store.DELIVERED
+
+
+def test_fr14_ack_cancelled_returns_reminder_and_keeps_cancelled(db):
+    """ack of a cancelled reminder returns it but leaves it cancelled, not delivered."""
+    added = store.add_reminder("call mom", DUE_A, CREATED)
+    store.cancel(added["id"])
+
+    assert store.ack(added["id"]) == added
+    assert status_of(db, added["id"]) == store.CANCELLED
+
+
+def test_fr14_ack_unknown_id_returns_none(db):
+    """ack of an unknown id returns None."""
+    assert store.ack(999) is None
+
+
+def traced_statements(monkeypatch, call) -> list[str]:
+    statements: list[str] = []
+
+    def tracing_connect(*args, **kwargs):
+        con = REAL_CONNECT(*args, **kwargs)
+        con.set_trace_callback(lambda sql: statements.append(sql.strip()))
+        return con
+
+    monkeypatch.setattr(sqlite3, "connect", tracing_connect)
+    call()
+    return statements
+
+
+def assert_single_update_without_prior_select(statements: list[str]) -> None:
+    kinds = [s.upper() for s in statements]
+    updates = [i for i, s in enumerate(kinds) if s.startswith("UPDATE")]
+    assert len(updates) == 1, statements
+    assert not any(s.startswith("SELECT") for s in kinds[: updates[0]]), statements
+
+
+def test_fr14_cancel_and_ack_run_one_update_and_no_select_before_it(db, monkeypatch):
+    """cancel and ack each run exactly one UPDATE and no SELECT before it in the same call."""
+    to_cancel = store.add_reminder("cancel me", DUE_A, CREATED)
+    to_ack = store.add_reminder("ack me", DUE_B, CREATED)
+
+    cancel_sql = traced_statements(monkeypatch, lambda: store.cancel(to_cancel["id"]))
+    ack_sql = traced_statements(monkeypatch, lambda: store.ack(to_ack["id"]))
+
+    assert_single_update_without_prior_select(cancel_sql)
+    assert_single_update_without_prior_select(ack_sql)
