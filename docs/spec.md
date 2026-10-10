@@ -41,7 +41,7 @@ Each ID later becomes one or more build tasks and tests. Fixed values (rates, ti
 | FR-13 | Speak one reminder | `GET /reminders/{id}/audio` → WAV | Spoken text is "Reminder, 5 pm: call the lab" when due less than 60 s ago, "Missed reminder, 5 pm: call the lab" when due 60 s or more ago, with the date added when it was not today ("Missed reminder, 8 October, 5 pm: …"); unknown id gives 404 `{"error": "reminder not found"}` |
 | FR-14 | Acknowledge a reminder | `POST /reminders/{id}/ack` → JSON | 200 `{"status": "ok"}` and the reminder is marked delivered; this is the only way a reminder becomes delivered (`/reminders/due` and `/reminders/{id}/audio` never change its status); it never appears in `/reminders/due` again; acking again gives 200; unknown id gives 404 `{"error": "reminder not found"}` |
 | FR-15 | Client polls for due reminders every 10 s, never while recording or waiting for an answer; for each due reminder it prints the text, plays its audio, then acks it | Poll → printed text + sound | A reminder due while the client runs is heard within 10 s of its due time (or right after a query in progress); a reminder due while the client is closed is heard as a missed reminder within 10 s of the next start; a reminder is acked only after its audio has played |
-| FR-16 | Handle errors without crashing the server | Bad input or failed stage → JSON error | 400 `{"error": "<reason>"}` when audio is missing, empty, not a WAV, or not 16 kHz mono 16-bit; 500 `{"error": "<stage>: <reason>"}` when a stage fails; the server answers the next request normally |
+| FR-16 | Handle errors without crashing the server | Bad input or failed stage → JSON error | 400 `{"error": "<reason>"}` when audio is missing, empty, not a WAV, or not 16 kHz mono 16-bit; 400 `{"error": "no speech detected"}` when the transcript is empty, before the LLM runs; 500 `{"error": "<stage>: <reason>"}` when a stage fails; the server answers the next request normally |
 | FR-17 | Log every query on the server | Each `/query` → one JSONL line | Every query, failed ones included, writes one line with time, question, answer, per-stage timings, `searched`, tool calls (name, arguments, ok or error) and error; no API key or token ever appears in the log |
 | FR-18 | Report health and stay local | `GET /health` → JSON | 200 `{"status": "ok", "model": "<model name>"}`; the server binds to the configured host 127.0.0.1, so another device on the same Wi-Fi gets no answer on the port |
 
@@ -55,7 +55,7 @@ POST /query                          # one question, one answer
   audio : WAV file, 16 kHz mono 16-bit   # the question (FR-1), required
 
   200 OK          Content-Type: audio/wav      # answer audio (FR-11)
-  400 Bad Request {"error": "<reason>"}        # audio missing, empty or unreadable
+  400 Bad Request {"error": "<reason>"}        # audio missing, empty or unreadable, or no speech detected
   500 Server Error {"error": "<stage>: <reason>"}   # a stage failed
 
 GET /reminders/due                   # FR-12

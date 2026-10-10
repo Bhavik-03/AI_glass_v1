@@ -56,6 +56,17 @@ def _check_deadline(start: float, needed_s: float) -> None:
 
 def ask(question: str, now: datetime) -> tuple[str, bool, list[dict]]:
     """Answer one question, running Gemini's tool calls (FR-5, FR-7)."""
+    tool_calls: list[dict] = []
+    try:
+        answer, searched = _ask(question, now, tool_calls)
+    except Exception as e:
+        # The caller logs the calls made before the failure (FR-17).
+        e.tool_calls = tool_calls
+        raise
+    return answer, searched, tool_calls
+
+
+def _ask(question: str, now: datetime, tool_calls: list[dict]) -> tuple[str, bool]:
     start = _clock()
     request = types.GenerateContentConfig(
         system_instruction=system_instruction(now),
@@ -67,7 +78,6 @@ def ask(question: str, now: datetime) -> tuple[str, bool, list[dict]]:
     )
     contents = [types.Content(role="user", parts=[types.Part(text=question)])]
     searched = False
-    tool_calls: list[dict] = []
     for round_ in range(config.MAX_TOOL_ROUNDS + 1):
         _check_deadline(start, config.LLM_TIMEOUT_S)
         response = _get_client().models.generate_content(
@@ -75,7 +85,7 @@ def ask(question: str, now: datetime) -> tuple[str, bool, list[dict]]:
         )
         calls = response.function_calls
         if not calls:
-            return response.text, searched, tool_calls
+            return response.text, searched
         if round_ == config.MAX_TOOL_ROUNDS:
             raise RuntimeError("too many tool rounds")
         # Send the model's content back unchanged: Gemini rejects turns missing thought_signature.
