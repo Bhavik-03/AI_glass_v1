@@ -29,6 +29,12 @@ def log_path(tmp_path, monkeypatch):
     return path
 
 
+@pytest.fixture(autouse=True)
+def _temp_db(db):
+    """Every test here uses a temporary database: the lifespan calls store.init()."""
+    return db
+
+
 def _log_lines(path) -> list[dict]:
     if not path.exists():
         return []
@@ -486,6 +492,118 @@ def test_fr17_two_requests_write_two_lines(fake_stages, silent_wav, log_path):
     _post_query(silent_wav)
     _post_query(silent_wav)
     assert len(_log_lines(log_path)) == 2
+
+
+PAST = "2026-10-09T13:00:00+05:30"
+EQUAL = "2026-10-09T14:00:00+05:30"
+FUTURE = "2026-10-09T15:00:00+05:30"
+CREATED = "2026-10-09T12:00:00+05:30"
+
+
+def _add(text: str, due_at: str) -> int:
+    """Create a reminder through store and return its id."""
+    from server import store
+
+    result = store.add_reminder(text, due_at, CREATED)
+    return result["id"] if isinstance(result, dict) else result
+
+
+def test_fr12_lifespan_calls_store_init_once(fake_stages, monkeypatch):
+    """FR-12: the lifespan calls store.init() exactly once at startup."""
+    calls = []
+    monkeypatch.setattr("server.store.init", lambda: calls.append(1))
+    with TestClient(app) as c:
+        c.get("/health")
+        c.get("/health")
+    assert len(calls) == 1
+
+
+def test_fr12_due_returns_keys_oldest_first(fixed_now):
+    """FR-12: 200 [{id, text, due_at}] of pending reminders with due_at <= now
+    (equal counts), oldest first."""
+    later = _add("later", PAST.replace("13:00", "13:30"))
+    equal = _add("equal", EQUAL)
+    oldest = _add("oldest", PAST)
+    response = client.get("/reminders/due")
+    assert response.status_code == 200
+    body = response.json()
+    assert [r["id"] for r in body] == [oldest, later, equal]
+    assert all(set(r) == {"id", "text", "due_at"} for r in body)
+    assert [r["text"] for r in body] == ["oldest", "later", "equal"]
+    assert body[0]["due_at"] == PAST
+    assert body[2]["due_at"] == EQUAL
+
+
+def test_fr12_due_204_empty_body_when_no_reminders(fixed_now):
+    """FR-12: 204 with an empty body when nothing is due (no reminders at all)."""
+    response = client.get("/reminders/due")
+    assert response.status_code == 204
+    assert response.content == b""
+
+
+def test_fr12_due_204_empty_body_when_only_future(fixed_now):
+    """FR-12: 204 with an empty body when only future reminders exist."""
+    _add("future", FUTURE)
+    response = client.get("/reminders/due")
+    assert response.status_code == 204
+    assert response.content == b""
+
+
+def test_fr12_due_excludes_future_delivered_cancelled(fixed_now):
+    """FR-12: future, delivered and cancelled reminders are never listed."""
+    from server import store
+
+    pending = _add("pending", PAST)
+    _add("future", FUTURE)
+    delivered = _add("delivered", PAST)
+    cancelled = _add("cancelled", PAST)
+    store.ack(delivered)
+    store.cancel(cancelled)
+    response = client.get("/reminders/due")
+    assert response.status_code == 200
+    assert [r["id"] for r in response.json()] == [pending]
+
+
+def test_fr12_polling_twice_returns_same_list_and_keeps_status(fixed_now):
+    """FR-12: polling again without an ack returns the same reminders; calling
+    /reminders/due does not change any reminder's status."""
+    from server import store
+
+    first_id = _add("a", PAST)
+    second_id = _add("b", EQUAL)
+    before = store.list_pending()
+    first = client.get("/reminders/due")
+    second = client.get("/reminders/due")
+    after = store.list_pending()
+    assert [r["id"] for r in after] == [first_id, second_id]
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    assert [r["id"] for r in second.json()] == [first_id, second_id]
+    assert after == before
+
+
+def test_fr12_due_handler_is_plain_def():
+    """FR-12: GET /reminders/due is a plain def so sqlite runs in the thread pool."""
+    routes = [r for r in app.routes if getattr(r, "path", None) == "/reminders/due"]
+    assert len(routes) == 1
+    assert not inspect.iscoroutinefunction(routes[0].endpoint)
+
+
+def test_fr12_health_still_ok_with_lifespan(fake_stages):
+    """FR-12: /health still returns 200 with the model after the lifespan change."""
+    with TestClient(app) as c:
+        response = c.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "model": config.LLM_MODEL}
+
+
+def test_fr12_due_and_health_write_no_log_line(fixed_now, log_path):
+    """FR-12: /reminders/due (200 and 204) and /health write no JSONL line."""
+    client.get("/reminders/due")
+    _add("a", PAST)
+    client.get("/reminders/due")
+    client.get("/health")
+    assert _log_lines(log_path) == []
 
 
 def test_fr18_default_host_is_localhost():

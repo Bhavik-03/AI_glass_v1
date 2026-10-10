@@ -11,11 +11,12 @@ import uvicorn
 from fastapi import FastAPI, File, Response, UploadFile
 from fastapi.responses import JSONResponse
 
-from server import config, llm, logger, stt, tts
+from server import config, llm, logger, store, stt, tts
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    store.init()
     stt.load()
     tts.load()
     yield
@@ -101,6 +102,14 @@ def _answer(data: bytes | None, record: dict) -> Response:
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "model": config.LLM_MODEL}
+
+
+@app.get("/reminders/due")
+def reminders_due() -> Response:
+    due = store.list_due(now().isoformat(timespec="seconds"))
+    if not due:
+        return Response(status_code=204)
+    return JSONResponse(content=due)
 
 
 # Plain def, not async: FastAPI runs it in a thread pool, so a slow query doesn't block other endpoints.
