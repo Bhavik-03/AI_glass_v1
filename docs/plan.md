@@ -44,7 +44,7 @@ Notes: M3 builds the tool-call loop (FR-7) with `web_search` only; M5 adds the f
 
 Manual checks: before M3-T3, sign up for a free Tavily key and add `TAVILY_API_KEY` to .env. After M3-T3, run one search with the real key through a one-off command against `search` (done Oct 10: "weather in Pune today" gave 5 results in 2.38 s). After M3-T5, ask a live question with the real key (e.g. today's weather in the home city) through a one-off command against `llm`. The answer should be correct, `searched` true, under 40 words, and each Gemini call should take ≤ 10 s (FR-5). Done Oct 10: "What is the weather in Pune right now?" called `web_search("Pune weather October 10 2026")` and gave a 16-word answer, `searched` true, 5.24 s for 2 Gemini calls + 1 search (thought_signature round-trip works on the real API). Correctness of the answer is to be checked by you against a weather site. "≥ 80% of the general and live eval questions correct" and the "tomorrow at 5" → `due_at` check (FR-6) are measured in M7.
 
-## M4 (v1): TTS and full /query pipeline with server errors | in progress
+## M4 (v1): TTS and full /query pipeline with server errors | done
 Goal: Piper TTS at 16 kHz; /query runs STT → LLM → TTS with 400/500 errors and one log line per query · GitHub milestone: #4
 
 | Task | FR | Files | Done when | Test | Issue | Done |
