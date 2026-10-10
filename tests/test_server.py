@@ -1,7 +1,10 @@
 import inspect
+import io
+import wave
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import pytest
 from fastapi.testclient import TestClient
 
 import server.main
@@ -78,6 +81,106 @@ def test_fr11_now_is_aware_in_configured_timezone():
     value = server.main.now()
     assert value.tzinfo is not None
     assert value.utcoffset() == datetime.now(ZoneInfo(config.TIMEZONE)).utcoffset()
+
+
+def _wav(rate: int = 16000, channels: int = 1, width: int = 2, frames: int = 16000):
+    """Silent WAV with the given format, built in code."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(channels)
+        w.setsampwidth(width)
+        w.setframerate(rate)
+        w.writeframes(b"\x00" * width * channels * frames)
+    return buf.getvalue()
+
+
+def _assert_rejected_then_ok(response, expected_error, calls, silent_wav):
+    assert response.status_code == 400
+    assert response.json() == {"error": expected_error}
+    assert calls["order"] == []
+    again = client.post("/query", files={"audio": ("q.wav", silent_wav, "audio/wav")})
+    assert again.status_code == 200
+
+
+def test_fr16_audio_missing_returns_400(fake_stages, silent_wav):
+    """FR-16: no `audio` field -> 400 {"error": "audio missing"}, not 422; no stage runs."""
+    response = client.post("/query")
+    _assert_rejected_then_ok(response, "audio missing", fake_stages, silent_wav)
+
+
+def test_fr16_audio_missing_with_other_multipart_field(fake_stages, silent_wav):
+    """FR-16: multipart body without `audio` -> 400 {"error": "audio missing"}."""
+    response = client.post(
+        "/query", files={"other": ("o.wav", silent_wav, "audio/wav")}
+    )
+    _assert_rejected_then_ok(response, "audio missing", fake_stages, silent_wav)
+
+
+def test_fr16_audio_empty_zero_bytes(fake_stages, silent_wav):
+    """FR-16: a 0-byte audio file -> 400 {"error": "audio empty"}."""
+    response = client.post("/query", files={"audio": ("q.wav", b"", "audio/wav")})
+    _assert_rejected_then_ok(response, "audio empty", fake_stages, silent_wav)
+
+
+def test_fr16_audio_empty_zero_frames(fake_stages, silent_wav):
+    """FR-16: a valid WAV header with 0 frames -> 400 {"error": "audio empty"}."""
+    response = client.post(
+        "/query", files={"audio": ("q.wav", _wav(frames=0), "audio/wav")}
+    )
+    _assert_rejected_then_ok(response, "audio empty", fake_stages, silent_wav)
+
+
+def test_fr16_audio_not_a_readable_wav(fake_stages, silent_wav):
+    """FR-16: bytes that are not a WAV -> 400 {"error": "audio is not a readable WAV"}."""
+    response = client.post(
+        "/query", files={"audio": ("q.wav", b"not a wav", "audio/wav")}
+    )
+    _assert_rejected_then_ok(
+        response, "audio is not a readable WAV", fake_stages, silent_wav
+    )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"rate": 44100},
+        {"channels": 2},
+        {"width": 1},
+    ],
+    ids=["44.1kHz", "stereo", "8-bit"],
+)
+def test_fr16_audio_wrong_format(fake_stages, silent_wav, kwargs):
+    """FR-16: a WAV that is not 16 kHz mono 16-bit -> 400 with the format error."""
+    response = client.post(
+        "/query", files={"audio": ("q.wav", _wav(**kwargs), "audio/wav")}
+    )
+    _assert_rejected_then_ok(
+        response, "audio must be 16 kHz mono 16-bit", fake_stages, silent_wav
+    )
+
+
+@pytest.mark.parametrize("transcript", ["", "   "], ids=["empty", "whitespace"])
+def test_fr16_empty_transcript_returns_no_speech(
+    fake_stages, silent_wav, monkeypatch, transcript
+):
+    """FR-16: empty transcript -> 400 {"error": "no speech detected"} before llm.ask."""
+    answers = iter([transcript])
+
+    def transcribe(wav):
+        fake_stages["order"].append("stt")
+        return next(answers, "what time is it")
+
+    monkeypatch.setattr("server.stt.transcribe", transcribe)
+    response = client.post(
+        "/query", files={"audio": ("q.wav", silent_wav, "audio/wav")}
+    )
+    assert response.status_code == 400
+    assert response.json() == {"error": "no speech detected"}
+    assert fake_stages["order"] == ["stt"]
+    assert fake_stages["llm"] == []
+    assert fake_stages["tts"] == []
+    again = client.post("/query", files={"audio": ("q.wav", silent_wav, "audio/wav")})
+    assert again.status_code == 200
 
 
 def test_fr18_default_host_is_localhost():
