@@ -149,6 +149,26 @@ _HANDLERS = {
 }
 
 
+def _spoken_time(moment: datetime) -> str:
+    clock = f"{moment.hour % 12 or 12}"
+    if moment.minute:
+        clock += f":{moment.minute:02d}"
+    return f"{clock} {'am' if moment.hour < 12 else 'pm'}"
+
+
+def reminder_text(reminder: dict, now: datetime) -> str:
+    """Spoken form of a due reminder: 'Reminder, 5 pm: …' or 'Missed reminder, …' (FR-13)."""
+    zone = ZoneInfo(config.TIMEZONE)
+    due = datetime.fromisoformat(reminder["due_at"]).astimezone(zone)
+    today = now.astimezone(zone).date()
+    age_s = (now - due).total_seconds()
+    prefix = "Missed reminder" if age_s >= config.MISSED_AFTER_S else "Reminder"
+    when = _spoken_time(due)
+    if due.date() != today:
+        when = f"{due.day} {due.strftime('%B')}, {when}"
+    return f"{prefix}, {when}: {reminder['text']}"
+
+
 def run(name: str, args: dict, now: datetime) -> dict:
     """Run one tool call; always returns a result dict, never raises (FR-7)."""
     handler = _HANDLERS.get(name)

@@ -24,6 +24,7 @@ LOG_LEVEL = "INFO"
 LOG_PATH = ROOT / "logs" / "queries.jsonl"
 DB_PATH = ROOT / "data" / "assistant.db"
 DB_TIMEOUT_S = 5
+MISSED_AFTER_S = 60
 STT_MODEL = "small.en"
 STT_DEVICE = "cuda"
 STT_COMPUTE_TYPE = "float16"

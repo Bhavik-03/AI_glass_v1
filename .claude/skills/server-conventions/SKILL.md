@@ -23,7 +23,7 @@ paths:
 - `tools.DECLARATIONS`: the function declarations for the tools listed in spec.md "Tool functions".
   In M3 only web_search is implemented; the notes and reminder tools arrive in M5.
 - `tools.run(name: str, args: dict, now: datetime) -> dict` runs one call against `store` and never raises: unknown names, bad arguments and rule failures (a `due_at` in the past, an unknown or non-pending id) return `{"error": "<reason>"}`.
-- `tools.reminder_speech(reminder: dict, now: datetime) -> str` builds "Reminder, 5 pm: …" / "Missed reminder, …" (FR-13), using `config.MISSED_AFTER_S`.
+- `tools.reminder_text(reminder: dict, now: datetime) -> str` builds "Reminder, 5 pm: …" / "Missed reminder, …" (FR-13), using `config.MISSED_AFTER_S`.
 - `store.init() -> None` creates the tables in `config.DB_PATH`; called once from the lifespan. Store functions take and return plain dicts with ISO 8601 times; they hold no business rules.
 - Use stdlib `sqlite3` with parameterised queries only; open a connection per call (FastAPI runs `def` handlers in a thread pool).
 

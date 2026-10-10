@@ -1,7 +1,7 @@
 """Tool declarations and dispatch tests (FR-5, FR-7). search.search is faked: no network."""
 
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -562,3 +562,173 @@ def test_fr10_cancel_by_description_flow_returns_stored_values(db, fixed_now):
         "due_at": DUE_B,
         "status": store.CANCELLED,
     }
+
+
+IST = ZoneInfo("Asia/Kolkata")
+DUE_5PM = datetime(2026, 10, 9, 17, 0, tzinfo=IST)
+
+
+def reminder(due_at, text="call the lab"):
+    return {"id": 1, "text": text, "due_at": due_at}
+
+
+def spoken_at_age(age_s, due=DUE_5PM, text="call the lab"):
+    return tools.reminder_text(
+        reminder(due.isoformat(), text), due + timedelta(seconds=age_s)
+    )
+
+
+def test_fr13_missed_after_is_60_seconds():
+    """config.MISSED_AFTER_S is 60."""
+    assert config.MISSED_AFTER_S == 60
+
+
+@pytest.mark.parametrize(
+    ("age_s", "prefix"),
+    [
+        (0, "Reminder"),
+        (59, "Reminder"),
+        (60, "Missed reminder"),
+        (61, "Missed reminder"),
+        (3 * 3600, "Missed reminder"),
+    ],
+    ids=["0s", "59s", "60s", "61s", "3h"],
+)
+def test_fr13_prefix_depends_on_age_against_missed_after(age_s, prefix):
+    """Due less than 60 s ago reads 'Reminder'; 60 s or more ago reads 'Missed reminder'."""
+    assert spoken_at_age(age_s) == f"{prefix}, 5 pm: call the lab"
+
+
+def test_fr13_spec_example_reminder():
+    """A reminder due now reads exactly 'Reminder, 5 pm: call the lab'."""
+    assert spoken_at_age(5) == "Reminder, 5 pm: call the lab"
+
+
+def test_fr13_spec_example_missed_with_date():
+    """A reminder missed on an earlier date reads 'Missed reminder, 8 October, 5 pm: call the lab'."""
+    due = datetime(2026, 10, 8, 17, 0, tzinfo=IST)
+    now = datetime(2026, 10, 9, 9, 0, tzinfo=IST)
+
+    out = tools.reminder_text(reminder(due.isoformat()), now)
+
+    assert out == "Missed reminder, 8 October, 5 pm: call the lab"
+
+
+def test_fr13_future_reminder_reads_as_plain_reminder():
+    """A reminder due after now (negative age) is spoken as a plain 'Reminder'."""
+    now = datetime(2026, 10, 9, 16, 0, tzinfo=IST)
+
+    out = tools.reminder_text(reminder(DUE_5PM.isoformat()), now)
+
+    assert out == "Reminder, 5 pm: call the lab"
+
+
+@pytest.mark.parametrize(
+    ("hour", "minute", "spoken"),
+    [
+        (0, 0, "12 am"),
+        (12, 0, "12 pm"),
+        (0, 30, "12:30 am"),
+        (12, 30, "12:30 pm"),
+        (0, 5, "12:05 am"),
+        (1, 0, "1 am"),
+        (11, 59, "11:59 am"),
+        (23, 59, "11:59 pm"),
+        (17, 0, "5 pm"),
+        (17, 30, "5:30 pm"),
+        (9, 5, "9:05 am"),
+    ],
+)
+def test_fr13_time_uses_12_hour_clock_with_minutes_only_when_nonzero(
+    hour, minute, spoken
+):
+    """12-hour clock, lowercase am/pm, no leading zero on the hour, ':MM' only when non-zero."""
+    due = datetime(2026, 10, 9, hour, minute, tzinfo=IST)
+
+    out = spoken_at_age(0, due=due)
+
+    assert out == f"Reminder, {spoken}: call the lab"
+
+
+def test_fr13_five_pm_has_no_colon_zero_zero():
+    """5 pm reads '5 pm' and never '5:00 pm'."""
+    assert ":00" not in spoken_at_age(0)
+
+
+def test_fr13_same_day_has_no_date():
+    """A due date equal to today's date (in the configured zone) adds no date."""
+    out = spoken_at_age(3 * 3600)
+
+    assert out == "Missed reminder, 5 pm: call the lab"
+
+
+def test_fr13_yesterday_adds_date_without_leading_zero():
+    """A due date that is not today adds 'D Month' (no leading zero) before the time."""
+    due = datetime(2026, 10, 8, 17, 0, tzinfo=IST)
+    now = datetime(2026, 10, 9, 9, 0, tzinfo=IST)
+
+    assert (
+        tools.reminder_text(reminder(due.isoformat()), now)
+        == "Missed reminder, 8 October, 5 pm: call the lab"
+    )
+
+
+def test_fr13_date_uses_day_number_and_full_month_name():
+    """The date is the day number without a leading zero and the full month name."""
+    due = datetime(2026, 3, 5, 9, 30, tzinfo=IST)
+    now = datetime(2026, 3, 6, 9, 0, tzinfo=IST)
+
+    out = tools.reminder_text(reminder(due.isoformat()), now)
+
+    assert out == "Missed reminder, 5 March, 9:30 am: call the lab"
+
+
+def test_fr13_tomorrow_dated_future_reminder_adds_date():
+    """A future reminder on another date reads 'Reminder, 10 October, 5 pm: ...'."""
+    due = datetime(2026, 10, 10, 17, 0, tzinfo=IST)
+    now = datetime(2026, 10, 9, 20, 0, tzinfo=IST)
+
+    out = tools.reminder_text(reminder(due.isoformat()), now)
+
+    assert out == "Reminder, 10 October, 5 pm: call the lab"
+
+
+def test_fr13_due_at_in_utc_is_converted_to_configured_zone():
+    """due_at '2026-10-08T20:00:00Z' is 9 Oct 01:30 IST: today in IST, so no date and '1:30 am'."""
+    now = datetime(2026, 10, 9, 1, 30, tzinfo=IST)
+
+    out = tools.reminder_text(reminder("2026-10-08T20:00:00Z"), now)
+
+    assert out == "Reminder, 1:30 am: call the lab"
+
+
+def test_fr13_now_in_utc_is_converted_to_configured_zone():
+    """now 2026-10-09T20:00 UTC is 10 Oct 01:30 IST, so a 10 Oct 02:00 IST reminder is today: no date."""
+    now = datetime(2026, 10, 9, 20, 0, tzinfo=UTC)
+
+    out = tools.reminder_text(reminder("2026-10-10T02:00:00+05:30"), now)
+
+    assert out == "Reminder, 2 am: call the lab"
+
+
+def test_fr13_age_is_computed_across_different_offsets():
+    """Age compares instants: due 17:00 IST vs now 11:31 UTC (17:01 IST) is 60 s, so missed."""
+    now = datetime(2026, 10, 9, 11, 31, tzinfo=UTC)
+
+    out = tools.reminder_text(reminder(DUE_5PM.isoformat()), now)
+
+    assert out == "Missed reminder, 5 pm: call the lab"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "call the lab",
+        "Call Dr. Rao, then email: report!",
+        "  spaced  ",
+        "pay 5:30 bill?",
+    ],
+)
+def test_fr13_reminder_text_is_spoken_unchanged(text):
+    """The reminder's text follows the colon unchanged, punctuation and spacing included."""
+    assert spoken_at_age(0, text=text) == f"Reminder, 5 pm: {text}"
