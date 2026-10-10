@@ -20,7 +20,8 @@ paths:
 - Settings come from `from server import config`. config.py loads `.env` with python-dotenv and reads `os.getenv("GEMINI_API_KEY", "")`; llm raises if it's empty. Never print or log the key or any token.
 
 ## tools.py and store.py (serve the llm stage and the reminder endpoints)
-- `tools.DECLARATIONS`: the five function declarations from spec.md "Tool functions", nothing more.
+- `tools.DECLARATIONS`: the function declarations for the tools listed in spec.md "Tool functions".
+  In M3 only web_search is implemented; the notes and reminder tools arrive in M5.
 - `tools.run(name: str, args: dict, now: datetime) -> dict` runs one call against `store` and never raises: unknown names, bad arguments and rule failures (a `due_at` in the past, an unknown or non-pending id) return `{"error": "<reason>"}`.
 - `tools.reminder_speech(reminder: dict, now: datetime) -> str` builds "Reminder, 5 pm: …" / "Missed reminder, …" (FR-13), using `config.MISSED_AFTER_S`.
 - `store.init() -> None` creates the tables in `config.DB_PATH`; called once from the lifespan. Store functions take and return plain dicts with ISO 8601 times; they hold no business rules.
@@ -28,9 +29,13 @@ paths:
 
 ## llm.py
 - The system instruction is a constant in llm.py, filled per request with the current date, weekday and time (`now`) and `config.HOME_CITY`; design.md lists its rules.
-- Google Search and `tools.DECLARATIONS` in every request, combined as design.md describes (`include_server_side_tool_invocations`, `VALIDATED` mode). Send every response part back unchanged with the tool results; stop after `config.MAX_TOOL_ROUNDS` and raise.
-- `searched` is True when the response's grounding metadata shows a search.
-- google-genai details (tool combination, grounding metadata, timeout units, thinking setting) change between versions: check the current SDK docs before writing llm.py.
+- Every request carries `tools.DECLARATIONS` as plain function declarations, with no built-in tools. Web search is a normal tool, `web_search(query)`: declared in tools.py, run through search.py (Tavily). Only the search query goes to Tavily, never notes, reminders or memory.
+- Settings: `ThinkingConfig(thinking_level="MINIMAL")`; `config.LLM_TIMEOUT_S = 10`, passed in ms through `HttpOptions(timeout=...)` (the API rejects less than 10 s); function calling in `VALIDATED` mode.
+- Tool loop: run each function call through tools.py, send the results back, repeat until Gemini returns text; stop after `config.MAX_TOOL_ROUNDS` (3) and raise `too many tool rounds`.
+- Deadline: the LLM stage has an overall deadline (`config.LLM_DEADLINE_S`) so STT + LLM + TTS stays inside the client's 20 s timeout. A Gemini or search call starts only if its full timeout fits in the time left, else raise `deadline exceeded`.
+- thought_signature: when the model returns a function call, send its previous content back unchanged, including each part's `id` and `thought_signature`, together with the function response.
+- `searched` is True when `web_search` ran and returned results.
+- google-genai details (timeout units, thinking setting, function-call parts) change between versions: check the current SDK docs before writing llm.py.
 
 ## main.py (the only file that knows the stage order)
 - `def now() -> datetime` returns the current time in `config.TIMEZONE` (`zoneinfo`); handlers call it once per request and pass it on, tests monkeypatch it.
