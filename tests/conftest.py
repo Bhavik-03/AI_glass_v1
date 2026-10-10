@@ -28,6 +28,17 @@ def silent_wav() -> bytes:
 
 
 @pytest.fixture
+def db(monkeypatch, tmp_path):
+    """Temporary SQLite file with the tables created."""
+    from server import store
+
+    path = tmp_path / "test.db"
+    monkeypatch.setattr("server.config.DB_PATH", path)
+    store.init()
+    return path
+
+
+@pytest.fixture
 def fixed_now(monkeypatch) -> datetime:
     monkeypatch.setattr("server.main.now", lambda: FIXED_NOW)
     return FIXED_NOW
