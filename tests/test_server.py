@@ -29,6 +29,12 @@ def log_path(tmp_path, monkeypatch):
     return path
 
 
+@pytest.fixture(autouse=True)
+def _temp_db(db):
+    """Every test here uses a temporary database: the lifespan calls store.init()."""
+    return db
+
+
 def _log_lines(path) -> list[dict]:
     if not path.exists():
         return []
@@ -488,6 +494,357 @@ def test_fr17_two_requests_write_two_lines(fake_stages, silent_wav, log_path):
     assert len(_log_lines(log_path)) == 2
 
 
+PAST = "2026-10-09T13:00:00+05:30"
+EQUAL = "2026-10-09T14:00:00+05:30"
+FUTURE = "2026-10-09T15:00:00+05:30"
+CREATED = "2026-10-09T12:00:00+05:30"
+
+
+def _add(text: str, due_at: str) -> int:
+    """Create a reminder through store and return its id."""
+    from server import store
+
+    result = store.add_reminder(text, due_at, CREATED)
+    return result["id"] if isinstance(result, dict) else result
+
+
+def test_fr12_lifespan_calls_store_init_once(fake_stages, monkeypatch):
+    """FR-12: the lifespan calls store.init() exactly once at startup."""
+    calls = []
+    monkeypatch.setattr("server.store.init", lambda: calls.append(1))
+    with TestClient(app) as c:
+        c.get("/health")
+        c.get("/health")
+    assert len(calls) == 1
+
+
+def test_fr12_due_returns_keys_oldest_first(fixed_now):
+    """FR-12: 200 [{id, text, due_at}] of pending reminders with due_at <= now
+    (equal counts), oldest first."""
+    later = _add("later", PAST.replace("13:00", "13:30"))
+    equal = _add("equal", EQUAL)
+    oldest = _add("oldest", PAST)
+    response = client.get("/reminders/due")
+    assert response.status_code == 200
+    body = response.json()
+    assert [r["id"] for r in body] == [oldest, later, equal]
+    assert all(set(r) == {"id", "text", "due_at"} for r in body)
+    assert [r["text"] for r in body] == ["oldest", "later", "equal"]
+    assert body[0]["due_at"] == PAST
+    assert body[2]["due_at"] == EQUAL
+
+
+def test_fr12_due_204_empty_body_when_no_reminders(fixed_now):
+    """FR-12: 204 with an empty body when nothing is due (no reminders at all)."""
+    response = client.get("/reminders/due")
+    assert response.status_code == 204
+    assert response.content == b""
+
+
+def test_fr12_due_204_empty_body_when_only_future(fixed_now):
+    """FR-12: 204 with an empty body when only future reminders exist."""
+    _add("future", FUTURE)
+    response = client.get("/reminders/due")
+    assert response.status_code == 204
+    assert response.content == b""
+
+
+def test_fr12_due_excludes_future_delivered_cancelled(fixed_now):
+    """FR-12: future, delivered and cancelled reminders are never listed."""
+    from server import store
+
+    pending = _add("pending", PAST)
+    _add("future", FUTURE)
+    delivered = _add("delivered", PAST)
+    cancelled = _add("cancelled", PAST)
+    store.ack(delivered)
+    store.cancel(cancelled)
+    response = client.get("/reminders/due")
+    assert response.status_code == 200
+    assert [r["id"] for r in response.json()] == [pending]
+
+
+def test_fr12_polling_twice_returns_same_list_and_keeps_status(fixed_now):
+    """FR-12: polling again without an ack returns the same reminders; calling
+    /reminders/due does not change any reminder's status."""
+    from server import store
+
+    first_id = _add("a", PAST)
+    second_id = _add("b", EQUAL)
+    before = store.list_pending()
+    first = client.get("/reminders/due")
+    second = client.get("/reminders/due")
+    after = store.list_pending()
+    assert [r["id"] for r in after] == [first_id, second_id]
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    assert [r["id"] for r in second.json()] == [first_id, second_id]
+    assert after == before
+
+
+def test_fr12_due_handler_is_plain_def():
+    """FR-12: GET /reminders/due is a plain def so sqlite runs in the thread pool."""
+    routes = [r for r in app.routes if getattr(r, "path", None) == "/reminders/due"]
+    assert len(routes) == 1
+    assert not inspect.iscoroutinefunction(routes[0].endpoint)
+
+
+def test_fr12_health_still_ok_with_lifespan(fake_stages):
+    """FR-12: /health still returns 200 with the model after the lifespan change."""
+    with TestClient(app) as c:
+        response = c.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "model": config.LLM_MODEL}
+
+
+def test_fr12_due_and_health_write_no_log_line(fixed_now, log_path):
+    """FR-12: /reminders/due (200 and 204) and /health write no JSONL line."""
+    client.get("/reminders/due")
+    _add("a", PAST)
+    client.get("/reminders/due")
+    client.get("/health")
+    assert _log_lines(log_path) == []
+
+
+NOT_FOUND = {"error": "reminder not found"}
+
+
+def _pending_ids() -> list[int]:
+    from server import store
+
+    return [r["id"] for r in store.list_pending()]
+
+
+def test_fr14_ack_due_reminder_returns_ok_and_leaves_due(fixed_now):
+    """FR-14: ack of a due reminder gives 200 {"status": "ok"}; it is then absent
+    from /reminders/due and from the pending list."""
+    rid = _add("call the lab", PAST)
+    assert [r["id"] for r in client.get("/reminders/due").json()] == [rid]
+    response = client.post(f"/reminders/{rid}/ack")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert client.get("/reminders/due").status_code == 204
+    assert rid not in _pending_ids()
+
+
+def test_fr14_ack_twice_returns_200_both_times(fixed_now):
+    """FR-14: acking again gives 200 {"status": "ok"}; it stays out of /reminders/due."""
+    rid = _add("call the lab", PAST)
+    first = client.post(f"/reminders/{rid}/ack")
+    second = client.post(f"/reminders/{rid}/ack")
+    assert first.status_code == 200
+    assert first.json() == {"status": "ok"}
+    assert second.status_code == 200
+    assert second.json() == {"status": "ok"}
+    assert client.get("/reminders/due").status_code == 204
+
+
+def test_fr14_ack_unknown_id_returns_404(fixed_now):
+    """FR-14: unknown id gives 404 {"error": "reminder not found"}."""
+    response = client.post("/reminders/999/ack")
+    assert response.status_code == 404
+    assert response.json() == NOT_FOUND
+
+
+def test_fr14_ack_future_reminder_marks_it_delivered(fixed_now):
+    """FR-14: ack is the only way to deliver; a future pending reminder can be
+    acked (200) and is then no longer pending."""
+    rid = _add("later", FUTURE)
+    assert rid in _pending_ids()
+    response = client.post(f"/reminders/{rid}/ack")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert rid not in _pending_ids()
+
+
+def test_fr14_ack_cancelled_reminder_returns_200(fixed_now):
+    """FR-14: any existing reminder can be acked; a cancelled one gives 200
+    {"status": "ok"} and is neither due nor pending."""
+    from server import store
+
+    rid = _add("cancelled", PAST)
+    store.cancel(rid)
+    response = client.post(f"/reminders/{rid}/ack")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert client.get("/reminders/due").status_code == 204
+    assert rid not in _pending_ids()
+
+
+def test_fr14_ack_leaves_other_due_reminder_untouched(fixed_now):
+    """FR-14: acking one reminder does not change another due reminder."""
+    acked = _add("acked", PAST)
+    other = _add("other", EQUAL)
+    response = client.post(f"/reminders/{acked}/ack")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    due = client.get("/reminders/due")
+    assert due.status_code == 200
+    assert [r["id"] for r in due.json()] == [other]
+    assert _pending_ids() == [other]
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    ["abc", "1.5", "-1", "1_0", "%20", "%D9%A3", "1" + "0" * 30, "9" * 5000],
+    ids=[
+        "letters",
+        "decimal",
+        "negative",
+        "underscore",
+        "space",
+        "arabic-digit",
+        "huge",
+        "over-4300-digits",
+    ],
+)
+def test_fr14_ack_non_integer_id_returns_404(fixed_now, bad_id):
+    """FR-14: a non-integer or out-of-range id (not ASCII digits, or too large
+    for SQLite) gives 404 {"error": "reminder not found"}, never 422 or 500, and
+    acks nothing: the existing reminder 1 stays pending."""
+    rid = _add("keep me", PAST)
+    assert rid == 1  # fresh temporary database
+    response = client.post(f"/reminders/{bad_id}/ack")
+    assert response.status_code == 404
+    assert response.json() == NOT_FOUND
+    assert _pending_ids() == [rid]
+    assert [r["id"] for r in client.get("/reminders/due").json()] == [rid]
+
+
+def test_fr14_ack_writes_no_log_line(fixed_now, log_path):
+    """FR-14: the ack endpoint (200 and 404) writes no JSONL line."""
+    rid = _add("a", PAST)
+    assert client.post(f"/reminders/{rid}/ack").status_code == 200
+    assert client.post("/reminders/999/ack").status_code == 404
+    assert _log_lines(log_path) == []
+
+
+def test_fr14_ack_handler_is_plain_def():
+    """FR-14: POST /reminders/{reminder_id}/ack is a plain def so sqlite runs in
+    the thread pool."""
+    routes = [
+        r
+        for r in app.routes
+        if getattr(r, "path", None) == "/reminders/{reminder_id}/ack"
+        and "POST" in getattr(r, "methods", set())
+    ]
+    assert len(routes) == 1
+    assert not inspect.iscoroutinefunction(routes[0].endpoint)
+
+
 def test_fr18_default_host_is_localhost():
     """FR-18: the server binds to the configured host, which is 127.0.0.1."""
     assert config.HOST == "127.0.0.1"
+
+
+def _audio_ok(fake_stages, due_at: str, expected_text: str):
+    rid = _add("call the lab", due_at)
+    response = client.get(f"/reminders/{rid}/audio")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.content == FAKE_TTS_WAV
+    assert fake_stages["tts"] == [expected_text]
+
+
+def test_fr13_audio_fresh_reminder_age_zero(fake_stages):
+    """FR-13: a reminder due exactly now is spoken as "Reminder, 2 pm: ..." and
+    returned as audio/wav made by tts.synthesize."""
+    _audio_ok(fake_stages, EQUAL, "Reminder, 2 pm: call the lab")
+
+
+def test_fr13_audio_fresh_reminder_59_seconds_old(fake_stages):
+    """FR-13: a reminder 59 s old is still fresh: "Reminder, 1:59 pm: ..."."""
+    _audio_ok(
+        fake_stages, "2026-10-09T13:59:01+05:30", "Reminder, 1:59 pm: call the lab"
+    )
+
+
+def test_fr13_audio_reminder_exactly_60_seconds_old_is_missed(fake_stages):
+    """FR-13: a reminder exactly 60 s old is "Missed reminder, 1:59 pm: ..."."""
+    _audio_ok(
+        fake_stages,
+        "2026-10-09T13:59:00+05:30",
+        "Missed reminder, 1:59 pm: call the lab",
+    )
+
+
+def test_fr13_audio_missed_reminder_an_hour_old(fake_stages):
+    """FR-13: a missed reminder from an hour ago is "Missed reminder, 1 pm: ..."."""
+    _audio_ok(fake_stages, PAST, "Missed reminder, 1 pm: call the lab")
+
+
+def test_fr13_audio_missed_reminder_from_another_day(fake_stages):
+    """FR-13: a missed reminder from another day includes the date:
+    "Missed reminder, 8 October, 5 pm: ..."."""
+    _audio_ok(
+        fake_stages,
+        "2026-10-08T17:00:00+05:30",
+        "Missed reminder, 8 October, 5 pm: call the lab",
+    )
+
+
+def test_fr13_audio_fetch_keeps_status_pending(fake_stages):
+    """FR-13: fetching the audio never changes status; only ack marks delivered.
+    The reminder stays pending and due after one and after two fetches."""
+    rid = _add("call the lab", PAST)
+    for _ in range(2):
+        assert client.get(f"/reminders/{rid}/audio").status_code == 200
+        assert rid in _pending_ids()
+        due = client.get("/reminders/due")
+        assert due.status_code == 200
+        assert [r["id"] for r in due.json()] == [rid]
+
+
+def test_fr13_audio_unknown_id_returns_404(fake_stages):
+    """FR-13: an unknown id gives 404 {"error": "reminder not found"} and TTS
+    is not called."""
+    response = client.get("/reminders/999/audio")
+    assert response.status_code == 404
+    assert response.json() == NOT_FOUND
+    assert fake_stages["tts"] == []
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    ["abc", "1.5", "-1", "1_0", "%20", "%D9%A3", "1" + "0" * 30, "9" * 5000],
+    ids=[
+        "letters",
+        "decimal",
+        "negative",
+        "underscore",
+        "space",
+        "arabic-digit",
+        "huge",
+        "over-4300-digits",
+    ],
+)
+def test_fr13_audio_non_integer_id_returns_404(fake_stages, bad_id):
+    """FR-13: a non-integer or out-of-range id gives 404
+    {"error": "reminder not found"}, never 422 or 500, and TTS is not called."""
+    rid = _add("keep me", PAST)
+    response = client.get(f"/reminders/{bad_id}/audio")
+    assert response.status_code == 404
+    assert response.json() == NOT_FOUND
+    assert fake_stages["tts"] == []
+    assert _pending_ids() == [rid]
+
+
+def test_fr13_audio_writes_no_log_line(fake_stages, log_path):
+    """FR-13: the audio endpoint (200 and 404) writes no JSONL line."""
+    rid = _add("a", PAST)
+    assert client.get(f"/reminders/{rid}/audio").status_code == 200
+    assert client.get("/reminders/999/audio").status_code == 404
+    assert _log_lines(log_path) == []
+
+
+def test_fr13_audio_handler_is_plain_def():
+    """FR-13: GET /reminders/{reminder_id}/audio is a plain def so sqlite and
+    Piper run in the thread pool."""
+    routes = [
+        r
+        for r in app.routes
+        if getattr(r, "path", None) == "/reminders/{reminder_id}/audio"
+        and "GET" in getattr(r, "methods", set())
+    ]
+    assert len(routes) == 1
+    assert not inspect.iscoroutinefunction(routes[0].endpoint)
