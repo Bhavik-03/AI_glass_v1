@@ -4,7 +4,7 @@ Version 1. See roadmap.md.
 
 Updated Oct 9, 2026 · Bhavik Fulfagar
 
-v1 answers one spoken question or command with a spoken answer within 15 s, using one push-to-talk key on the laptop. It answers with live information (Google Search), keeps notes and reminders in SQLite through Gemini function calling, and speaks reminders when they are due. Scope and out-of-scope items are in brief.md.
+v1 answers one spoken question or command with a spoken answer within 15 s, using one push-to-talk key on the laptop. It answers with live information (a `web_search` tool backed by a web search API), keeps notes and reminders in SQLite through Gemini function calling, and speaks reminders when they are due. Scope and out-of-scope items are in brief.md.
 
 ## How it works
 
@@ -14,7 +14,7 @@ User flow, push-to-talk:
 
 1. The user holds the key. The client plays the start sound and records.
 2. The user releases the key. The client plays the thinking sound and sends the audio to `POST /query`.
-3. The server transcribes the question and sends it to Gemini with Google Search and the tool functions. Gemini may search, call tools, or both; the server runs the tool calls against SQLite and returns the results to Gemini until it gives a final answer.
+3. The server transcribes the question and sends it to Gemini with the tool functions. Gemini may call `web_search`, the notes and reminder tools, or both; the server runs each call (web search API or SQLite) and returns the results to Gemini until it gives a final answer.
 4. The server turns the answer into speech and returns the WAV.
 5. The client plays the answer, or the error sound on failure.
 
@@ -30,7 +30,7 @@ Each ID later becomes one or more build tasks and tests. Fixed values (rates, ti
 | FR-2 | Play status sounds: start sound on key press, thinking sound after release, error sound on any failure | Client events → sounds | The user can tell the state without a screen; the error sound plays on a 400, a 500, a timeout and a refused connection |
 | FR-3 | Send the question to the server with a 20 s client timeout | WAV → `POST /query` with one `audio` field | After a 20 s timeout the client plays the error sound and accepts the next key press |
 | FR-4 | Transcribe the question locally with faster-whisper `small.en` | WAV → question text | ≥ 90% of the 30 eval questions keep their meaning; ≤ 1 s each |
-| FR-5 | Answer with a Gemini 3 Flash model through `google-genai`: minimal thinking, 8 s timeout per call, API key from an environment variable, Google Search grounding and the tool functions in every request; answers ≤ 2 short sentences (under 40 words) except list answers (FR-8, FR-9) | Question text → answer text, `searched` flag | ≥ 80% of the 10 general and live eval questions correct; each Gemini call ≤ 8 s; `searched` is true in the log when the response's grounding metadata shows a search |
+| FR-5 | Answer with the Gemini model from config (`gemini-3.5-flash-lite`) through `google-genai`: minimal thinking, 10 s timeout per call (the API minimum), API key from an environment variable, the tool functions (including `web_search`) in every request; `web_search(query)` runs on the server against the web search API (key from an environment variable, timeout from config) and its results go back to Gemini; answers ≤ 2 short sentences (under 40 words) except list answers (FR-8, FR-9) | Question text → answer text, `searched` flag | ≥ 80% of the 10 general and live eval questions correct; each Gemini call ≤ 10 s; `searched` is true in the log when `web_search` ran and returned results; a search API failure goes back to Gemini as an error result, not a crash; the LLM stage ends within its deadline (15 s, config): a Gemini or search call starts only if its full timeout fits in the time left, else 500 `{"error": "llm: deadline exceeded"}`; `web_search` sends only the search query to the search API, never note, reminder or memory content |
 | FR-6 | Put the current date, weekday and time in the configured time zone (Asia/Kolkata) in the system instruction, so relative times become exact times | Clock → system instruction | With the clock fixed at Fri 9 Oct 2026 14:00 IST, the instruction contains that date, weekday and time; in the eval, "remind me tomorrow at 5 to call the lab" asked on 9 Oct gives `due_at` 2026-10-10T17:00+05:30 |
 | FR-7 | Run Gemini's tool calls: execute each call, send the results back, repeat until Gemini returns text, at most 3 rounds | Function calls → tool results → final answer | A call followed by text runs the tool once and returns the answer; an unknown tool name or bad arguments goes back to Gemini as an error result, not a crash; more than 3 rounds gives 500 `{"error": "llm: too many tool rounds"}` |
 | FR-8 | Notes tools: `add_note(text)` stores a note; `list_notes()` returns every note, newest first | Tool call → SQLite row / list | After `add_note`, the notes table has one new row with that text and its creation time; `list_notes` returns all notes newest first, or an empty list |
@@ -82,6 +82,7 @@ Gemini sees these declarations. Times are ISO 8601 with the configured offset (+
 
 | Tool | Arguments | Result sent back to Gemini |
 | --- | --- | --- |
+| `web_search` | `query` | `{results: [{title, url, content}]}` or `{error}` |
 | `add_note` | `text` | `{id, text, created_at}` |
 | `list_notes` | none | `{notes: [{id, text, created_at}]}` |
 | `add_reminder` | `text`, `due_at` | `{id, text, due_at}` or `{error}` |
@@ -103,7 +104,9 @@ v1 is done, and tagged v0.1.0, when every target below is met.
 | Due reminders | Heard within 10 s of due time; a missed one heard within 10 s of the next client start | FR-15 manual checks |
 | Secrets | API key, `.env` and the database never in git; no key in any log | `.gitignore` check and a search of `logs/` |
 
-Latency budget: STT 1 s + Gemini (one call for a plain answer, usually two for a tool command; 8 s timeout each, typically 2–4 s) + TTS 1 s + playback start 1 s. The log shows which stage broke the budget.
+Latency budget: STT 1 s + Gemini (one call for a plain answer, usually two for a live question or a tool command; 10 s timeout each, typically 2–4 s) + one web search call for a live question (5 s timeout) + TTS 1 s + playback start 1 s. The log shows which stage broke the budget.
+
+Worst case: the LLM stage stops at its 15 s deadline (one Gemini call 10 s + search 5 s fits; a second Gemini call starts only if 10 s are left), so STT 1 s + LLM 15 s + TTS 1 s = 17 s, under the client's 20 s timeout. The server then returns a clean 500 before the client gives up.
 
 ## Test plan
 
@@ -127,7 +130,7 @@ The home city for weather questions comes from the server config.
 
 ## Decisions settled in Design
 
-- [x] Answers: a Gemini 3 Flash model, Google Search grounding and function calling combined in one request
+- [x] Answers: `gemini-3.5-flash-lite` with function calling; live information through a `web_search` tool backed by a web search API (Google Search grounding has no API quota on our free tier)
 - [x] Speech-to-text: faster-whisper `small.en`, local
 - [x] Text-to-speech: Piper, local, 16 kHz output
 - [x] Storage: one SQLite file on the laptop, gitignored
