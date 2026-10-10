@@ -112,6 +112,21 @@ def reminders_due() -> Response:
     return JSONResponse(content=due)
 
 
+@app.post("/reminders/{reminder_id}/ack")
+def reminder_ack(reminder_id: str) -> Response:
+    # Taken as a string so a non-numeric id is a 404, not FastAPI's 422.
+    reminder = None
+    if reminder_id.isascii() and reminder_id.isdigit():
+        try:
+            reminder = store.ack(int(reminder_id))
+        # Too large for int() (over 4300 digits) or for an SQLite integer: no such reminder.
+        except (ValueError, OverflowError):
+            pass
+    if reminder is None:
+        return JSONResponse(status_code=404, content={"error": "reminder not found"})
+    return JSONResponse(content={"status": "ok"})
+
+
 # Plain def, not async: FastAPI runs it in a thread pool, so a slow query doesn't block other endpoints.
 @app.post("/query")
 def query(audio: Annotated[UploadFile | None, File()] = None) -> Response:

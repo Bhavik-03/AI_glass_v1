@@ -606,6 +606,132 @@ def test_fr12_due_and_health_write_no_log_line(fixed_now, log_path):
     assert _log_lines(log_path) == []
 
 
+NOT_FOUND = {"error": "reminder not found"}
+
+
+def _pending_ids() -> list[int]:
+    from server import store
+
+    return [r["id"] for r in store.list_pending()]
+
+
+def test_fr14_ack_due_reminder_returns_ok_and_leaves_due(fixed_now):
+    """FR-14: ack of a due reminder gives 200 {"status": "ok"}; it is then absent
+    from /reminders/due and from the pending list."""
+    rid = _add("call the lab", PAST)
+    assert [r["id"] for r in client.get("/reminders/due").json()] == [rid]
+    response = client.post(f"/reminders/{rid}/ack")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert client.get("/reminders/due").status_code == 204
+    assert rid not in _pending_ids()
+
+
+def test_fr14_ack_twice_returns_200_both_times(fixed_now):
+    """FR-14: acking again gives 200 {"status": "ok"}; it stays out of /reminders/due."""
+    rid = _add("call the lab", PAST)
+    first = client.post(f"/reminders/{rid}/ack")
+    second = client.post(f"/reminders/{rid}/ack")
+    assert first.status_code == 200
+    assert first.json() == {"status": "ok"}
+    assert second.status_code == 200
+    assert second.json() == {"status": "ok"}
+    assert client.get("/reminders/due").status_code == 204
+
+
+def test_fr14_ack_unknown_id_returns_404(fixed_now):
+    """FR-14: unknown id gives 404 {"error": "reminder not found"}."""
+    response = client.post("/reminders/999/ack")
+    assert response.status_code == 404
+    assert response.json() == NOT_FOUND
+
+
+def test_fr14_ack_future_reminder_marks_it_delivered(fixed_now):
+    """FR-14: ack is the only way to deliver; a future pending reminder can be
+    acked (200) and is then no longer pending."""
+    rid = _add("later", FUTURE)
+    assert rid in _pending_ids()
+    response = client.post(f"/reminders/{rid}/ack")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert rid not in _pending_ids()
+
+
+def test_fr14_ack_cancelled_reminder_returns_200(fixed_now):
+    """FR-14: any existing reminder can be acked; a cancelled one gives 200
+    {"status": "ok"} and is neither due nor pending."""
+    from server import store
+
+    rid = _add("cancelled", PAST)
+    store.cancel(rid)
+    response = client.post(f"/reminders/{rid}/ack")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert client.get("/reminders/due").status_code == 204
+    assert rid not in _pending_ids()
+
+
+def test_fr14_ack_leaves_other_due_reminder_untouched(fixed_now):
+    """FR-14: acking one reminder does not change another due reminder."""
+    acked = _add("acked", PAST)
+    other = _add("other", EQUAL)
+    response = client.post(f"/reminders/{acked}/ack")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    due = client.get("/reminders/due")
+    assert due.status_code == 200
+    assert [r["id"] for r in due.json()] == [other]
+    assert _pending_ids() == [other]
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    ["abc", "1.5", "-1", "1_0", "%20", "%D9%A3", "1" + "0" * 30, "9" * 5000],
+    ids=[
+        "letters",
+        "decimal",
+        "negative",
+        "underscore",
+        "space",
+        "arabic-digit",
+        "huge",
+        "over-4300-digits",
+    ],
+)
+def test_fr14_ack_non_integer_id_returns_404(fixed_now, bad_id):
+    """FR-14: a non-integer or out-of-range id (not ASCII digits, or too large
+    for SQLite) gives 404 {"error": "reminder not found"}, never 422 or 500, and
+    acks nothing: the existing reminder 1 stays pending."""
+    rid = _add("keep me", PAST)
+    assert rid == 1  # fresh temporary database
+    response = client.post(f"/reminders/{bad_id}/ack")
+    assert response.status_code == 404
+    assert response.json() == NOT_FOUND
+    assert _pending_ids() == [rid]
+    assert [r["id"] for r in client.get("/reminders/due").json()] == [rid]
+
+
+def test_fr14_ack_writes_no_log_line(fixed_now, log_path):
+    """FR-14: the ack endpoint (200 and 404) writes no JSONL line."""
+    rid = _add("a", PAST)
+    assert client.post(f"/reminders/{rid}/ack").status_code == 200
+    assert client.post("/reminders/999/ack").status_code == 404
+    assert _log_lines(log_path) == []
+
+
+def test_fr14_ack_handler_is_plain_def():
+    """FR-14: POST /reminders/{reminder_id}/ack is a plain def so sqlite runs in
+    the thread pool."""
+    routes = [
+        r
+        for r in app.routes
+        if getattr(r, "path", None) == "/reminders/{reminder_id}/ack"
+        and "POST" in getattr(r, "methods", set())
+    ]
+    assert len(routes) == 1
+    assert not inspect.iscoroutinefunction(routes[0].endpoint)
+
+
 def test_fr18_default_host_is_localhost():
     """FR-18: the server binds to the configured host, which is 127.0.0.1."""
     assert config.HOST == "127.0.0.1"
