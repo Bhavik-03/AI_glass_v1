@@ -20,7 +20,7 @@ Goal: Turn question audio into text with faster-whisper `small.en`, loaded once 
 
 Manual checks: with the CUDA 12 toolkit and cuDNN 9 installed, transcribe one short spoken 16 kHz mono WAV with a one-off command against `stt`; the text matches what was said and the command prints how long one transcription takes (target ≤ 1 s, FR-4). The first run downloads the small.en model. "≥ 90% keep their meaning" is measured in M7. After M2-T2: start the server, see the `stt warm-up` line on stderr, then the first transcription after startup takes ≤ 1 s.
 
-## M3 (v1): Gemini answers with web search | in progress
+## M3 (v1): Gemini answers with web search | done
 Goal: Spike Gemini with our key, then `llm.ask` with the system instruction, current time, a `web_search` tool backed by Tavily and the `searched` flag · GitHub milestone: #3
 
 | Task | FR | Files | Done when | Test | Issue | Done |
