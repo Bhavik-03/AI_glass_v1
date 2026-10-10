@@ -3,7 +3,11 @@ from contextlib import closing, contextmanager
 
 from server import config
 
-SCHEMA = """
+PENDING = "pending"
+DELIVERED = "delivered"
+CANCELLED = "cancelled"
+
+SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     text TEXT NOT NULL,
@@ -14,7 +18,7 @@ CREATE TABLE IF NOT EXISTS reminders (
     text TEXT NOT NULL,
     due_at TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending'
+    status TEXT NOT NULL DEFAULT '{PENDING}'
 );
 """
 
@@ -48,3 +52,36 @@ def list_notes() -> list[dict]:
             "SELECT id, text, created_at FROM notes ORDER BY created_at DESC, id DESC"
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def add_reminder(text: str, due_at: str, created_at: str) -> dict:
+    with _connect() as con:
+        cur = con.execute(
+            "INSERT INTO reminders (text, due_at, created_at, status) VALUES (?, ?, ?, ?)",
+            (text, due_at, created_at, PENDING),
+        )
+    return {"id": cur.lastrowid, "text": text, "due_at": due_at}
+
+
+def list_pending() -> list[dict]:
+    with _connect() as con:
+        rows = con.execute(
+            "SELECT id, text, due_at FROM reminders WHERE status = ? ORDER BY due_at, id",
+            (PENDING,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def cancel(reminder_id: int) -> dict | None:
+    """Cancel a pending reminder; None if the id is unknown or not pending."""
+    with _connect() as con:
+        row = con.execute(
+            "SELECT id, text, due_at FROM reminders WHERE id = ? AND status = ?",
+            (reminder_id, PENDING),
+        ).fetchone()
+        if row is None:
+            return None
+        con.execute(
+            "UPDATE reminders SET status = ? WHERE id = ?", (CANCELLED, reminder_id)
+        )
+    return dict(row)
