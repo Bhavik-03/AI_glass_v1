@@ -20,8 +20,20 @@ Goal: Turn question audio into text with faster-whisper `small.en`, loaded once 
 
 Manual checks: with the CUDA 12 toolkit and cuDNN 9 installed, transcribe one short spoken 16 kHz mono WAV with a one-off command against `stt`; the text matches what was said and the command prints how long one transcription takes (target ≤ 1 s, FR-4). The first run downloads the small.en model. "≥ 90% keep their meaning" is measured in M7. After M2-T2: start the server, see the `stt warm-up` line on stderr, then the first transcription after startup takes ≤ 1 s.
 
-## M3 (v1): Gemini answers with Search | planned
-Goal: Spike Search + function calling with our key, then `llm.ask` with the system instruction, current time and the `searched` flag · FRs: FR-5, FR-6 · Tasks: not planned yet
+## M3 (v1): Gemini answers with Search | in progress
+Goal: Spike Search + function calling with our key, then `llm.ask` with the system instruction, current time and the `searched` flag · GitHub milestone: #3
+
+| Task | FR | Files | Done when | Test | Issue | Done |
+| --- | --- | --- | --- | --- | --- | --- |
+| M3-T1 | FR-5 | docs/plan.md (spike script runs from the scratchpad, never committed) | Following the current official docs ([tool combination](https://ai.google.dev/gemini-api/docs/generate-content/tool-combination), [Interactions API](https://ai.google.dev/gemini-api/docs/interactions-overview)), one request with our key combines `google_search` and one test function declaration in the documented way: first `generate_content` with `include_server_side_tool_invocations`, and if that fails, the Interactions API. It uses `LLM_MODEL` from config (gemini-3.8-flash); if search grounding isn't allowed for it on our free tier, it tries one other current Flash model listed in AI Studio before declaring the fallback. A live question returns grounded text, and the grounding metadata shows a search. A note-style command returns a function call. The key is read from .env and never printed or logged. Recorded below: the API and model that worked, the SDK version, the confirmed parameter names (timeout unit, thinking level, grounding metadata field), the time of the searched answer (budget 8 s), and pass or "use the web_search fallback". If the result changes how llm.py must call Gemini, propose a design.md update and adjust M3-T3 before building it | manual | #11 | [ ] |
+| M3-T2 | FR-6 | requirements.txt (tzdata), server/config.py (`TIME_ZONE`, `HOME_CITY`), server/llm.py (+ tests/test_llm.py) | With the clock fixed at Fri 9 Oct 2026 14:00 IST, the system instruction contains that date, weekday and time in Asia/Kolkata, plus the home city from config. It also contains the design's rules: at most 2 short sentences under 40 words except lists, use Search for live info, turn relative times into exact ISO 8601 with offset, repeat actions back | pytest | #12 | [ ] |
+| M3-T3 | FR-5 | requirements.txt (google-genai, python-dotenv), server/config.py (`GEMINI_API_KEY` from .env, `LLM_TIMEOUT_S` = 8, thinking level), server/llm.py (+ tests/test_llm.py) | `ask(question)` calls the Gemini 3 Flash model from config through `google-genai` with minimal thinking, an 8 s timeout per call, the API key from an environment variable, the `google_search` tool and the system instruction. It returns the answer text and `searched`, which is true when the response's grounding metadata shows a search. A timeout or API failure raises an error that names the `llm` stage. Tests use a fake client, so they need no network | pytest | #13 | [ ] |
+
+Spike result (M3-T1): not run yet.
+
+Notes: the five tool declarations, `VALIDATED` mode and the tool-call loop come in M5; `llm.ask` is wired into `/query` in M4. If the spike falls back to `web_search`, M3 is replanned.
+
+Manual checks: after M3-T3, ask a live question with the real key (e.g. today's weather in the home city) using a one-off command against `llm`. The answer should be correct, `searched` true, under 40 words, and the call should take ≤ 8 s (FR-5). "≥ 80% of the general and live eval questions correct" and the "tomorrow at 5" → `due_at` check (FR-6) are measured in M7.
 
 ## M4 (v1): TTS and full /query pipeline with server errors | planned
 Goal: Piper TTS at 16 kHz; /query runs STT → LLM → TTS with 400/500 errors and one log line per query · FRs: FR-11, FR-16, FR-17 (one line per query) · Tasks: not planned yet
