@@ -68,7 +68,7 @@ Spike result (M4-T1), Oct 10, 2026, piper-tts 1.8.0 (latest), Python 3.11.9, CPU
 
 Manual checks: after M4-T7, start the server with the real models and POST a spoken 16 kHz WAV to `/query`. The returned WAV should play with every word understandable, and the logged `tts` time should be ≤ 1 s for a ~40-word answer (FR-11). `logs/queries.jsonl` has one line per call, a bad upload returns 400, and the server keeps serving afterwards (FR-16, FR-17). The `stt warm-up` line appears in the console at startup (M4-T3).
 
-## M5 (v1): Tools: notes and reminders | in progress
+## M5 (v1): Tools: notes and reminders | done
 Goal: SQLite store, the five notes and reminder tools in `tools.py` (the tool-call loop exists from M3), repeat-back answers and the reminder endpoints · GitHub milestone: #5
 
 | Task | FR | Files | Done when | Test | Issue | Done |
