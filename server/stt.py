@@ -1,5 +1,5 @@
 import io
-import sys
+import logging
 import time
 import wave
 
@@ -7,6 +7,7 @@ from faster_whisper import WhisperModel
 
 from server import config
 
+logger = logging.getLogger(__name__)
 _model: WhisperModel | None = None
 
 
@@ -19,9 +20,7 @@ def load() -> None:
     # The first CUDA transcription is slow (~2 s), so pay it at startup, not on the first question.
     t0 = time.perf_counter()
     transcribe(_silent_wav())
-    print(
-        f"stt warm-up: {round((time.perf_counter() - t0) * 1000)} ms", file=sys.stderr
-    )
+    logger.info("stt warm-up: %d ms", round((time.perf_counter() - t0) * 1000))
 
 
 def transcribe(wav: bytes) -> str:

@@ -1,6 +1,7 @@
 """STT module tests (FR-4). A fake model is used: no download, GPU or CUDA."""
 
 import io
+import logging
 import re
 import wave
 from types import SimpleNamespace
@@ -82,8 +83,8 @@ def test_fr4_load_warms_up_with_silent_clip(monkeypatch):
     assert frames == b"\x00" * len(frames)
 
 
-def test_fr4_load_prints_warmup_time_to_stderr(monkeypatch, capsys):
-    """load() prints 'stt warm-up: <ms> ms' to stderr and nothing to stdout."""
+def test_fr4_load_logs_warmup_time(monkeypatch, caplog, capsys):
+    """load() logs one INFO 'stt warm-up: <ms> ms' on logger server.stt; nothing goes to stdout or stderr."""
 
     class FakeWhisperModel:
         def __init__(self, *args, **kwargs):
@@ -95,11 +96,20 @@ def test_fr4_load_prints_warmup_time_to_stderr(monkeypatch, capsys):
     monkeypatch.setattr(stt, "WhisperModel", FakeWhisperModel)
     monkeypatch.setattr(stt, "_model", None)
 
+    caplog.set_level(logging.INFO, logger="server.stt")
+
     stt.load()
 
+    records = [
+        r
+        for r in caplog.records
+        if r.name == "server.stt" and r.levelno == logging.INFO
+    ]
+    assert len(records) == 1
+    assert re.search(r"stt warm-up: \d+ ms", records[0].getMessage())
     captured = capsys.readouterr()
-    assert re.search(r"stt warm-up: \d+ ms", captured.err)
     assert captured.out == ""
+    assert captured.err == ""
 
 
 def test_fr4_transcribe_passes_wav_bytes_to_model(monkeypatch):
