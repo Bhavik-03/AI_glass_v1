@@ -25,7 +25,9 @@ def load() -> None:
 
 def transcribe(wav: bytes) -> str:
     """Turn question WAV bytes into text."""
-    segments, _ = _model.transcribe(io.BytesIO(wav))
+    segments, _ = _model.transcribe(
+        io.BytesIO(wav), initial_prompt=config.STT_INITIAL_PROMPT
+    )
     return "".join(segment.text for segment in segments).strip()
 
 

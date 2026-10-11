@@ -30,5 +30,9 @@ STT_DEVICE = "cuda"
 STT_COMPUTE_TYPE = "float16"
 SAMPLE_RATE = 16000
 STT_WARMUP_S = 1
+# Vocabulary hint for whisper: the assistant's own command words and the home city only.
+STT_INITIAL_PROMPT = (
+    f"Note, notes, remind me, reminder, reminders, cancel. {HOME_CITY}."
+)
 TTS_VOICE_PATH = ROOT / "models" / "en_US-lessac-medium.onnx"
 TTS_WARMUP_TEXT = "Ready."

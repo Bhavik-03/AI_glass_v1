@@ -127,7 +127,7 @@ Goal: Frozen eval set, recorder, runner and report; measure, then fix only what 
 | M7-T6 | FR-4, FR-17 | eval/run_eval.py (+ tests/test_run_eval.py) | Compares transcript and expected after lowercasing and removing punctuation, and treats spoken numbers and digits as equal on both texts (five = 5, ten = 10, etc.; a test covers it), per question and overall; writes `eval/results/<date>.md` and `.json`; verdict on: ≥ 80% per group, median total ≤ 15 s, no 500 in the 30, transcription ≥ 90%; secrets check: no configured key value in `logs/`, and `.env`, `data/` and `*.db` untracked | pytest | #54 | [x] |
 | M7-T7 | FR-2, FR-15 | eval/live_questions.md, eval/live_log.py (+ tests/test_live_log.py) | 10 fixed questions to speak with F9 (4 general, 3 notes, 3 reminders), none equal to the 30 recorded ones (a test compares the texts); `python -m eval.live_log` prints question, answer and latency of the last 10 log lines as a table | pytest | #55 | [x] |
 | M7-T8 | FR-4, FR-5, FR-8, FR-9 | docs/plan.md | You record the 30 clips and run the first eval; numbers and a cause per failure (STT, tool choice, deadline, other) are recorded below; `eval/questions.json` is frozen from now on | manual | #56 | [x] |
-| M7-T9 | FR-4 | server/stt.py, server/config.py (+ tests/test_stt.py) | Only if T8 shows failures caused by #38: `transcribe` passes an `initial_prompt` vocabulary hint (remind, reminder, notes, cancel; text in config); only the failing questions are re-run | pytest | #38 | [ ] |
+| M7-T9 | FR-4 | server/stt.py, server/config.py (+ tests/test_stt.py) | Only if T8 shows failures caused by #38: `transcribe` passes an `initial_prompt` vocabulary hint (remind, reminder, notes, cancel; text in config); only the failing questions are re-run | pytest | #38 | [x] |
 | M7-T10 | FR-5, FR-7 | server/llm.py (+ tests/test_llm.py) | Only if T8 shows failures caused by #25, and after a spec decision on the "deadline exceeded" criterion: when the time left is too short for another tool round, the last Gemini call answers without tools instead of raising | pytest | #25 | [ ] |
 | M7-T11 | all quality targets | docs/plan.md | Full re-run on the final code; every target met; the final report in `eval/results/` is committed with `git add -f` (the folder is gitignored for exploratory runs); numbers recorded below | manual | #57 | [ ] |
 | M7-T12 | — | README.md | What it does, the pipeline, setup, how to run server, client and eval, the final numbers; docs only, after T11 | manual | #58 | [ ] |
@@ -166,5 +166,9 @@ frozen from now on; it was not changed.
 Rule for T9: the `initial_prompt` hint may contain only the assistant's own command
 words (remind, reminder, notes, cancel and similar), never words taken from the eval
 questions (no "Wings of Fire", "ISRO", "rupee" and so on).
+
+T9 result (speech only, 30 clips, same matching as the runner): transcript mismatches 8
+without the hint, 4 with it. Left: g09 (Israel), g10 (rent), n01 (by), n02 (drivers need).
+They are not command words, so the hint cannot fix them; accepted for now.
 
 Manual checks: record the 30 clips in a quiet room and play a few back (T3); speak the 10 live questions with F9 and read the table (T7); after T11, check the targets in the report.

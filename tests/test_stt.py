@@ -1,9 +1,11 @@
 """STT module tests (FR-4). A fake model is used: no download, GPU or CUDA."""
 
 import io
+import json
 import logging
 import re
 import wave
+from pathlib import Path
 from types import SimpleNamespace
 
 from server import config, stt
@@ -23,9 +25,11 @@ class FakeModel:
     def __init__(self, texts: list[str]) -> None:
         self.texts = texts
         self.received: bytes | None = None
+        self.initial_prompt: str | None = None
 
-    def transcribe(self, audio):
+    def transcribe(self, audio, initial_prompt=None):
         self.received = audio.read()
+        self.initial_prompt = initial_prompt
         segments = iter([SimpleNamespace(text=t) for t in self.texts])
         return segments, SimpleNamespace()
 
@@ -38,7 +42,7 @@ def test_fr4_load_builds_model_from_config(monkeypatch):
         def __init__(self, *args, **kwargs):
             calls.append((args, kwargs))
 
-        def transcribe(self, audio):
+        def transcribe(self, audio, initial_prompt=None):
             return iter([]), SimpleNamespace()
 
     monkeypatch.setattr(stt, "WhisperModel", FakeWhisperModel)
@@ -64,7 +68,7 @@ def test_fr4_load_warms_up_with_silent_clip(monkeypatch):
         def __init__(self, *args, **kwargs):
             pass
 
-        def transcribe(self, audio):
+        def transcribe(self, audio, initial_prompt=None):
             received.append(audio.read())
             return iter([]), SimpleNamespace()
 
@@ -90,7 +94,7 @@ def test_fr4_load_logs_warmup_time(monkeypatch, caplog, capsys):
         def __init__(self, *args, **kwargs):
             pass
 
-        def transcribe(self, audio):
+        def transcribe(self, audio, initial_prompt=None):
             return iter([]), SimpleNamespace()
 
     monkeypatch.setattr(stt, "WhisperModel", FakeWhisperModel)
@@ -121,6 +125,60 @@ def test_fr4_transcribe_passes_wav_bytes_to_model(monkeypatch):
     stt.transcribe(wav)
 
     assert fake.received == wav
+
+
+def test_fr4_transcribe_passes_initial_prompt_from_config(monkeypatch):
+    """transcribe passes initial_prompt=config.STT_INITIAL_PROMPT to the model."""
+    fake = FakeModel([" hello"])
+    monkeypatch.setattr(stt, "_model", fake)
+    monkeypatch.setattr(config, "STT_INITIAL_PROMPT", "sentinel prompt", raising=False)
+
+    stt.transcribe(make_wav())
+
+    assert fake.initial_prompt == "sentinel prompt"
+
+
+def test_fr4_initial_prompt_has_command_words_and_home_city():
+    """STT_INITIAL_PROMPT is a non-empty str with the command words and the home city."""
+    prompt = config.STT_INITIAL_PROMPT
+    assert isinstance(prompt, str)
+    assert prompt.strip()
+    lowered = prompt.lower()
+    for word in ("note", "notes", "remind me", "reminder", "reminders", "cancel"):
+        assert word in lowered
+    assert config.HOME_CITY.lower() in lowered
+
+
+def test_fr4_initial_prompt_has_no_eval_question_words():
+    """The prompt holds only command words and the city: no content words from the eval questions."""
+    path = Path(__file__).resolve().parent.parent / "eval" / "questions.json"
+    questions = json.loads(path.read_text(encoding="utf-8"))
+    spoken = " ".join(q["spoken"].lower() for q in questions)
+    forbidden = [
+        "wings",
+        "fire",
+        "isro",
+        "rupee",
+        "dollar",
+        "soldering",
+        "wire",
+        "fuse",
+        "motor",
+        "jumper",
+        "battery",
+        "sensor",
+        "calibrate",
+        "lab",
+        "laptop",
+        "mountain",
+        "moon",
+        "football",
+    ]
+    prompt_words = set(re.findall(r"[a-z]+", config.STT_INITIAL_PROMPT.lower()))
+    spoken_words = set(re.findall(r"[a-z]+", spoken))
+    for word in forbidden:
+        if word in spoken_words:
+            assert word not in prompt_words, word
 
 
 def test_fr4_transcribe_joins_segment_texts(monkeypatch):
