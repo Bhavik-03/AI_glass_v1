@@ -130,7 +130,7 @@ Goal: Frozen eval set, recorder, runner and report; measure, then fix only what 
 | M7-T9 | FR-4 | server/stt.py, server/config.py (+ tests/test_stt.py) | Only if T8 shows failures caused by #38: `transcribe` passes an `initial_prompt` vocabulary hint (remind, reminder, notes, cancel; text in config); only the failing questions are re-run | pytest | #38 | [x] |
 | M7-T10b | FR-3 | client_pc/client.py, client_pc/config.py, eval/config.py (+ tests/test_client.py, tests/test_run_eval.py) | Do first. `QUERY_TIMEOUT_S` = 25 s for `/query`; new `POLL_TIMEOUT_S` = 20 s used by the reminder poll, audio fetch and ack; the eval sets its own request timeout of 30 s in `eval/config.py` (no longer taken from the client config, which is 25 s); tests check each timeout reaches its request | pytest | #25 (client part) | [x] |
 | M7-T10a | FR-5, FR-7 | server/llm.py, server/config.py (+ tests/test_llm.py) | After T10b; the spec decision is committed (ecb08f2). `LLM_FINAL_DEADLINE_S` = 18 and `LLM_FINAL_START_MAX_S` = 8 in config. The first search always runs; a later tool round runs only if elapsed + tool timeout (0 s local tools, 5 s `web_search`) + 10 <= 18, else its calls get an error result; when the deadline stops the model and elapsed <= 8 s, one last Gemini call with function calling mode NONE answers; otherwise the 500 `llm: deadline exceeded`; tests include list-then-cancel running both rounds and a refused second search | pytest | #25 | [x] |
-| M7-T11 | all quality targets | docs/plan.md | Full re-run on the final code; every target met; the final report in `eval/results/` is committed with `git add -f` (the folder is gitignored for exploratory runs); numbers recorded below | manual | #57 | [ ] |
+| M7-T11 | all quality targets | docs/plan.md | Full re-run on the final code; every target met; the final report in `eval/results/` is committed with `git add -f` (the folder is gitignored for exploratory runs); numbers recorded below | manual | #57 | [x] |
 | M7-T12 | — | README.md | What it does, the pipeline, setup, how to run server, client and eval, the final numbers; docs only, after T11 | manual | #58 | [ ] |
 
 Notes: no new dependency. Pacing counts Gemini calls from the log line (tool calls + 1), 4 s each. The runner never deletes the DB file: the backup uses `sqlite3.Connection.backup` and the marker makes a crash recoverable. After T8, `eval/questions.json` changes only for an obvious error in a question, logged here with the reason. T9 and T10 are skipped if T8 does not show their failures. Reliability: the 30 clips in a row cover the 20-in-a-row target.
@@ -172,4 +172,37 @@ T9 result (speech only, 30 clips, same matching as the runner): transcript misma
 without the hint, 4 with it. Left: g09 (Israel), g10 (rent), n01 (by), n02 (drivers need).
 They are not command words, so the hint cannot fix them; accepted for now.
 
-Manual checks: record the 30 clips in a quiet room and play a few back (T3); speak the 10 live questions with F9 and read the table (T7); after T11, check the targets in the report.
+### M7-T11: final measurement (2026-10-11, `eval/results/2026-10-11_1555.json`)
+
+Run on the final code (T9 hint, T10a last call, T10b timeouts); the report files
+`eval/results/2026-10-11_1555.md` and `.json` are committed with `git add -f`.
+
+| Target | Result | Met |
+| --- | --- | --- |
+| General >= 80% | 8/10 | yes |
+| Notes >= 80% | 10/10 | yes |
+| Reminders >= 80% | 10/10 | yes |
+| Median total <= 15 s | 3.1 s (worst 6.7 s) | yes |
+| No 500 in the 30 | 0 errors | yes |
+| Secrets check | ok | yes |
+| Transcription >= 90% | 26/30 (87%) | no |
+
+Transcription missed the target by one clip and is accepted as a known gap. Failures:
+
+| Id | Cause |
+| --- | --- |
+| g09 | STT: "Israel" for "ISRO", so the answer was about Israel |
+| g10 | STT: "rent" for "rate"; then an honest "could not fetch" answer |
+
+For g10 the second search failed or was refused; the log cannot tell which.
+
+The other two transcript misses still passed: n01 ("by" for "buy"; its pass rule needs
+only "soldering" and "wire" in the note), n02 ("drivers need").
+
+Decision: `small.en` stays. `medium.en` with the same hint was tested (speech only, throwaway
+script over the 30 clips, 2026-10-11, not committed) and rejected: 27/30 transcripts, but +1.1 s per query (1.91 s against 0.79 s per clip) and
+about 2.6 GB of GPU memory in use, which blocks v3 (a local text model must fit 4 GB VRAM).
+Remaining misses (ISRO, rate/rent, buy/by) are noted on #38, which stays open (Refs, not
+Closes). Follow-up after v0.1.0: log whether the last call ran or a tool was refused.
+
+Manual checks: record the 30 clips in a quiet room and play a few back (T3); speak the 10 live questions with F9 and read the table (T7); after T11, check the targets in the report (done, see T11 above).
