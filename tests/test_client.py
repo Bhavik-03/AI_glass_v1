@@ -20,6 +20,9 @@ from client_pc.client import (
     QueryTimeout,
     Recorder,
     ServerUnreachable,
+    ack_reminder,
+    fetch_audio,
+    fetch_due,
     make_tone,
     send_query,
 )
@@ -818,7 +821,7 @@ class Threaded:
 
 
 class Rig:
-    def __init__(self, spawn=None) -> None:
+    def __init__(self, spawn=None, transport=None) -> None:
         self.log: list = []
         self.clock = FakeClock()
         self.recorder = FakeRecorder(self.log)
@@ -832,6 +835,7 @@ class Rig:
             clock=self.clock,
             spawn=spawn or (lambda fn: fn()),
             timer=self.make_timer,
+            transport=transport,
         )
 
     def make_timer(self, interval: float, fn) -> FakeTimer:
@@ -1231,3 +1235,388 @@ def test_fr1_each_press_gets_its_own_timer(rig):
     rig.cycle()
     assert len(rig.timers) == 2
     assert all(t.started == 1 for t in rig.timers)
+
+
+# ---- FR-15: deliver_due (M6-T6). httpx.MockTransport routes on (method, path). ----
+
+DUE = ("GET", "/reminders/due")
+R3 = {"id": 3, "text": "call the lab", "due_at": "2026-10-11T17:00:00+05:30"}
+R4 = {"id": 4, "text": "buy milk", "due_at": "2026-10-11T17:05:00+05:30"}
+AUDIO3 = wav_of([3, -3] * 200)
+AUDIO4 = wav_of([4, -4] * 200)
+AUDIO_OF = {3: AUDIO3, 4: AUDIO4}
+
+
+def audio_response(data: bytes):
+    return lambda: httpx.Response(
+        200, content=data, headers={"content-type": "audio/wav"}
+    )
+
+
+def audio_path(rid: int) -> tuple[str, str]:
+    return ("GET", f"/reminders/{rid}/audio")
+
+
+def ack_path(rid: int) -> tuple[str, str]:
+    return ("POST", f"/reminders/{rid}/ack")
+
+
+class ReminderApi:
+    """One MockTransport handler: routes on (method, path), records every request."""
+
+    def __init__(self, log: list, reminders: list[dict]) -> None:
+        self.log = log
+        self.requests: list[tuple[str, str]] = []
+        self.routes: dict = {DUE: lambda: httpx.Response(200, json=reminders)}
+        for r in reminders:
+            self.routes[audio_path(r["id"])] = audio_response(AUDIO_OF[r["id"]])
+            self.routes[ack_path(r["id"])] = lambda: httpx.Response(
+                200, json={"status": "ok"}
+            )
+
+    def set(self, route: tuple[str, str], outcome) -> None:
+        self.routes[route] = outcome
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        key = (request.method, request.url.path)
+        self.requests.append(key)
+        self.log.append(("http", *key))
+        outcome = self.routes[key]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome()
+
+
+def reminder_rig(reminders: list[dict], spawn=None) -> tuple[Rig, ReminderApi]:
+    rig = Rig(spawn)
+    api = ReminderApi(rig.log, reminders)
+    rig.client = Client(
+        rig.recorder,
+        rig.player,
+        send=rig.send,
+        clock=rig.clock,
+        spawn=spawn or (lambda fn: fn()),
+        timer=rig.make_timer,
+        transport=httpx.MockTransport(api),
+    )
+    return rig, api
+
+
+def warnings_of(caplog) -> list[str]:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno >= logging.WARNING and r.name == "client_pc.client"
+    ]
+
+
+def test_fr15_no_content_plays_nothing_and_sends_no_further_requests(capsys):
+    """A 204 from /reminders/due means nothing is due: no audio request, no sound, no output."""
+    rig, api = reminder_rig([])
+    api.set(DUE, lambda: httpx.Response(204))
+    rig.client.deliver_due()
+    assert api.requests == [DUE]
+    assert not any(isinstance(x, tuple) and x[0] == "wav" for x in rig.log)
+    assert "error" not in rig.log
+    assert capsys.readouterr().out == ""
+    assert rig.client.state == "idle"
+
+
+def test_fr15_empty_list_plays_nothing():
+    """A 200 with an empty list is treated like nothing due."""
+    rig, api = reminder_rig([])
+    rig.client.deliver_due()
+    assert api.requests == [DUE]
+    assert rig.client.state == "idle"
+
+
+def test_fr15_one_reminder_requests_go_due_audio_ack_in_order():
+    """One due reminder: GET due, GET its audio, then POST its ack, in that order."""
+    rig, api = reminder_rig([R3])
+    rig.client.deliver_due()
+    assert api.requests == [DUE, audio_path(3), ack_path(3)]
+
+
+def test_fr15_play_wav_gets_exact_audio_bytes():
+    """The audio fetched from the server is passed to play_wav unchanged."""
+    rig, _ = reminder_rig([R3])
+    rig.client.deliver_due()
+    assert ("wav", AUDIO3) in rig.log
+    assert sum(1 for x in rig.log if isinstance(x, tuple) and x[0] == "wav") == 1
+
+
+def test_fr15_ack_is_sent_only_after_play_wav_returned():
+    """A reminder is acked only after its audio has finished playing."""
+    rig, _ = reminder_rig([R3])
+    original = rig.player.play_wav
+
+    def play_wav(data: bytes) -> None:
+        original(data)
+        rig.log.append("play_returned")
+
+    rig.player.play_wav = play_wav
+    rig.client.deliver_due()
+    events = [
+        "audio_fetched" if x == ("http", *audio_path(3)) else x
+        for x in rig.log
+        if x in (("http", *audio_path(3)), ("http", *ack_path(3)), "play_returned")
+    ]
+    assert events == ["audio_fetched", "play_returned", ("http", *ack_path(3))]
+    assert rig.log.index(("wav", AUDIO3)) < rig.log.index("play_returned")
+
+
+def test_fr15_reminder_text_is_printed_once(capsys):
+    """The reminder text is printed once."""
+    rig, _ = reminder_rig([R3])
+    rig.client.deliver_due()
+    out = capsys.readouterr().out
+    assert out.count("call the lab") == 1
+    assert "Reminder: call the lab" in out
+
+
+def test_fr15_two_reminders_are_delivered_in_list_order_each_acked_after_own_audio():
+    """Two due reminders are handled in list order; each is acked after its own playback."""
+    rig, api = reminder_rig([R3, R4])
+    rig.client.deliver_due()
+    assert api.requests == [
+        DUE,
+        audio_path(3),
+        ack_path(3),
+        audio_path(4),
+        ack_path(4),
+    ]
+    wavs = [x for x in rig.log if isinstance(x, tuple) and x[0] == "wav"]
+    assert wavs == [("wav", AUDIO3), ("wav", AUDIO4)]
+    assert rig.log.index(("wav", AUDIO3)) < rig.log.index(("http", *ack_path(3)))
+    assert rig.log.index(("wav", AUDIO4)) < rig.log.index(("http", *ack_path(4)))
+    assert rig.log.index(("http", *ack_path(3))) < rig.log.index(("wav", AUDIO4))
+
+
+def test_fr15_two_reminders_print_both_texts_in_order(capsys):
+    """Both reminder texts are printed, in list order."""
+    rig, _ = reminder_rig([R3, R4])
+    rig.client.deliver_due()
+    out = capsys.readouterr().out
+    assert out.index("call the lab") < out.index("buy milk")
+
+
+AUDIO_FAILURES = [
+    lambda: httpx.Response(404, json={"error": "reminder not found"}),
+    lambda: httpx.Response(500, json={"error": "tts: boom"}),
+    httpx.ReadTimeout("slow"),
+    httpx.ConnectError("refused"),
+    lambda: httpx.Response(200, json={"not": "audio"}),
+]
+AUDIO_FAILURE_IDS = ["404", "500", "timeout", "connect_error", "json_content_type"]
+
+
+@pytest.mark.parametrize("outcome", AUDIO_FAILURES, ids=AUDIO_FAILURE_IDS)
+def test_fr15_audio_fetch_failure_plays_nothing_acks_nothing_warns_once(
+    outcome, caplog
+):
+    """If the audio fetch fails: no playback, no ack, one warning naming the reminder, state idle."""
+    rig, api = reminder_rig([R3])
+    api.set(audio_path(3), outcome)
+    with caplog.at_level(logging.INFO, logger="client_pc.client"):
+        rig.client.deliver_due()
+    assert not any(isinstance(x, tuple) and x[0] == "wav" for x in rig.log)
+    assert ack_path(3) not in api.requests
+    assert "error" not in rig.log
+    warnings = warnings_of(caplog)
+    assert len(warnings) == 1
+    assert "3" in warnings[0]
+    assert rig.client.state == "idle"
+
+
+@pytest.mark.parametrize("outcome", AUDIO_FAILURES, ids=AUDIO_FAILURE_IDS)
+def test_fr15_audio_fetch_failure_does_not_block_next_reminder(outcome):
+    """One reminder whose audio fails does not stop the next one being played and acked."""
+    rig, api = reminder_rig([R3, R4])
+    api.set(audio_path(3), outcome)
+    rig.client.deliver_due()
+    assert ack_path(3) not in api.requests
+    assert ("wav", AUDIO3) not in rig.log
+    assert ("wav", AUDIO4) in rig.log
+    assert api.requests[-1] == ack_path(4)
+    assert rig.client.state == "idle"
+
+
+def test_fr15_play_wav_failure_sends_no_ack_warns_and_state_is_idle(caplog):
+    """If play_wav raises: no ack for that reminder, a cut warning, state idle, no error tone."""
+    rig, api = reminder_rig([R3])
+    rig.player.wav_exc = ValueError("x" * 500)
+    with caplog.at_level(logging.INFO, logger="client_pc.client"):
+        rig.client.deliver_due()
+    assert ack_path(3) not in api.requests
+    warnings = warnings_of(caplog)
+    assert len(warnings) == 1
+    assert "3" in warnings[0]
+    assert "x" * config.ERROR_MAX_CHARS in warnings[0]
+    assert "x" * (config.ERROR_MAX_CHARS + 1) not in warnings[0]
+    assert "error" not in rig.log
+    assert rig.client.state == "idle"
+
+
+def test_fr15_play_wav_failure_does_not_block_next_reminder():
+    """After play_wav fails for one reminder the next is still delivered and acked."""
+    rig, api = reminder_rig([R3, R4])
+    original = rig.player.play_wav
+
+    def flaky(data: bytes) -> None:
+        if data == AUDIO3:
+            rig.log.append(("wav", data))
+            raise ValueError("bad device")
+        original(data)
+
+    rig.player.play_wav = flaky
+    rig.client.deliver_due()
+    assert ack_path(3) not in api.requests
+    assert ("wav", AUDIO4) in rig.log
+    assert api.requests[-1] == ack_path(4)
+    assert rig.client.state == "idle"
+
+
+def test_fr15_ack_failure_warns_without_raising_and_next_reminder_is_delivered(caplog):
+    """If the ack request fails: a warning with the reminder id, no exception, next reminder delivered."""
+    rig, api = reminder_rig([R3, R4])
+    api.set(ack_path(3), lambda: httpx.Response(500, json={"error": "db locked"}))
+    with caplog.at_level(logging.INFO, logger="client_pc.client"):
+        rig.client.deliver_due()
+    warnings = warnings_of(caplog)
+    assert len(warnings) == 1
+    assert "3" in warnings[0]
+    assert ("wav", AUDIO4) in rig.log
+    assert api.requests[-1] == ack_path(4)
+    assert "error" not in rig.log
+    assert rig.client.state == "idle"
+
+
+POLL_FAILURES = [
+    lambda: httpx.Response(500, json={"error": "boom"}),
+    httpx.ReadTimeout("slow"),
+    httpx.ConnectError("refused"),
+    lambda: httpx.Response(200, text="not json"),
+    lambda: httpx.Response(200, json={"id": 3}),
+]
+POLL_FAILURE_IDS = ["500", "timeout", "connect_error", "invalid_json", "json_object"]
+
+
+@pytest.mark.parametrize("outcome", POLL_FAILURES, ids=POLL_FAILURE_IDS)
+def test_fr15_poll_failure_is_silent(outcome, caplog, capsys):
+    """A failed poll prints nothing, makes no sound, logs no warning, raises nothing, asks for no audio."""
+    rig, api = reminder_rig([R3])
+    api.set(DUE, outcome)
+    with caplog.at_level(logging.DEBUG, logger="client_pc.client"):
+        rig.client.deliver_due()
+    assert capsys.readouterr().out == ""
+    assert not any(x in rig.log for x in ("start", "thinking", "error"))
+    assert not any(isinstance(x, tuple) and x[0] == "wav" for x in rig.log)
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+    assert api.requests == [DUE]
+    assert rig.client.state == "idle"
+
+
+def test_fr15_deliver_due_works_after_a_failed_poll():
+    """A failed poll leaves the client usable: the next poll delivers normally."""
+    rig, api = reminder_rig([R3])
+    good = api.routes[DUE]
+    api.set(DUE, httpx.ConnectError("refused"))
+    rig.client.deliver_due()
+    api.set(DUE, good)
+    rig.client.deliver_due()
+    assert ("wav", AUDIO3) in rig.log
+    assert api.requests[-1] == ack_path(3)
+
+
+def test_fr15_state_is_playing_during_playback_and_keys_are_ignored():
+    """While the reminder plays the state is playing and key events return at once and change nothing."""
+    spawn = Threaded()
+    rig, api = reminder_rig([R3])
+    rig.player.wav_gate = threading.Event()
+    spawn(rig.client.deliver_due)
+    try:
+        assert rig.player.wav_entered.wait(WAIT_S)
+        assert rig.client.state == "playing"
+        before = list(rig.log)
+        returns_promptly(rig.press)
+        returns_promptly(rig.release)
+        assert rig.client.state == "playing"
+        assert rig.log == before
+        assert rig.timers == []
+    finally:
+        rig.player.wav_gate.set()
+        spawn.join()
+    assert rig.client.state == "idle"
+    assert api.requests[-1] == ack_path(3)
+
+
+def test_fr15_state_is_idle_after_failed_playback():
+    """The state returns to idle even when play_wav raised."""
+    rig, _ = reminder_rig([R3])
+    rig.player.wav_exc = ValueError("bad")
+    rig.client.deliver_due()
+    assert rig.client.state == "idle"
+
+
+@pytest.mark.parametrize("state", ["waiting", "recording"])
+def test_fr15_busy_client_does_not_play_or_ack_and_state_is_unchanged(state, caplog):
+    """If the client is not idle when it claims the reminder it neither plays nor acks it."""
+    rig, api = reminder_rig([R3])
+    rig.client.state = state
+    with caplog.at_level(logging.INFO, logger="client_pc.client"):
+        rig.client.deliver_due()
+    assert not any(isinstance(x, tuple) and x[0] == "wav" for x in rig.log)
+    assert ack_path(3) not in api.requests
+    assert "error" not in rig.log
+    assert warnings_of(caplog) == []
+    assert rig.client.state == state
+
+
+def test_fr15_key_press_works_after_a_delivered_reminder():
+    """After a reminder was delivered the client is idle and the next key press starts a recording."""
+    rig, _ = reminder_rig([R3])
+    rig.client.deliver_due()
+    rig.log.clear()
+    rig.press()
+    assert rig.client.state == "recording"
+    assert rig.count("start_recording") == 1
+
+
+def test_fr15_fetch_due_returns_empty_list_on_204():
+    """fetch_due returns an empty list when the server answers 204."""
+    transport = httpx.MockTransport(fixed_response(204))
+    assert fetch_due(transport=transport) == []
+
+
+def test_fr15_fetch_due_returns_the_reminder_list():
+    """fetch_due returns the JSON list from a 200 response."""
+    transport = httpx.MockTransport(fixed_response(200, json=[R3, R4]))
+    assert fetch_due(transport=transport) == [R3, R4]
+
+
+def test_fr15_fetch_audio_404_raises_query_error_with_server_text():
+    """fetch_audio raises QueryError carrying the server's 'reminder not found' text on a 404."""
+    handler = fixed_response(404, json={"error": "reminder not found"})
+    with pytest.raises(QueryError) as info:
+        fetch_audio(3, transport=httpx.MockTransport(handler))
+    assert "reminder not found" in str(info.value)
+
+
+def test_fr15_fetch_audio_returns_wav_bytes():
+    """fetch_audio returns the exact bytes of a 200 audio/wav response."""
+    handler = fixed_response(200, content=AUDIO3, headers={"content-type": "audio/wav"})
+    assert fetch_audio(3, transport=httpx.MockTransport(handler)) == AUDIO3
+
+
+def test_fr15_ack_reminder_404_raises_query_error():
+    """ack_reminder raises QueryError carrying the server's text on a 404."""
+    handler = fixed_response(404, json={"error": "reminder not found"})
+    with pytest.raises(QueryError) as info:
+        ack_reminder(3, transport=httpx.MockTransport(handler))
+    assert "reminder not found" in str(info.value)
+
+
+def test_fr15_ack_reminder_ok_returns_none():
+    """ack_reminder returns None on a 200 {"status": "ok"}."""
+    handler = fixed_response(200, json={"status": "ok"})
+    assert ack_reminder(3, transport=httpx.MockTransport(handler)) is None

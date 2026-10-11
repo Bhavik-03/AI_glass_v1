@@ -184,17 +184,21 @@ class ServerUnreachable(QueryError):
     pass
 
 
-def send_query(wav: bytes, transport: httpx.BaseTransport | None = None) -> bytes:
-    """POST the question to /query and return the answer WAV."""
+def _request(
+    method: str,
+    path: str,
+    transport: httpx.BaseTransport | None,
+    ok: tuple[int, ...] = (200,),
+    **kwargs,
+) -> httpx.Response:
+    """One call to the server; every failure becomes a QueryError."""
     try:
         with httpx.Client(
             base_url=config.SERVER_URL,
             timeout=config.QUERY_TIMEOUT_S,
             transport=transport,
         ) as http:
-            response = http.post(
-                "/query", files={"audio": ("question.wav", wav, "audio/wav")}
-            )
+            response = http.request(method, path, **kwargs)
     except httpx.TimeoutException as e:
         raise QueryTimeout(f"no answer within {config.QUERY_TIMEOUT_S} s") from e
     except httpx.ConnectError as e:
@@ -203,16 +207,51 @@ def send_query(wav: bytes, transport: httpx.BaseTransport | None = None) -> byte
         ) from e
     except httpx.HTTPError as e:
         raise QueryError(f"request failed: {e}") from e
-    if response.status_code != 200:
+    if response.status_code not in ok:
         raise QueryError(
             f"server returned {response.status_code}: {_error_text(response)}"
         )
+    return response
+
+
+def _wav_body(response: httpx.Response) -> bytes:
     content_type = (
         response.headers.get("content-type", "").split(";")[0].strip().lower()
     )
     if content_type != "audio/wav":
         raise QueryError(f"expected audio/wav, got {content_type or 'no content type'}")
     return response.content
+
+
+def send_query(wav: bytes, transport: httpx.BaseTransport | None = None) -> bytes:
+    """POST the question to /query and return the answer WAV."""
+    files = {"audio": ("question.wav", wav, "audio/wav")}
+    return _wav_body(_request("POST", "/query", transport, files=files))
+
+
+def fetch_due(transport: httpx.BaseTransport | None = None) -> list[dict]:
+    response = _request("GET", "/reminders/due", transport, ok=(200, 204))
+    if response.status_code == 204:
+        return []
+    try:
+        due = response.json()
+    except ValueError as e:
+        raise QueryError("reminder list is not valid JSON") from e
+    if not isinstance(due, list):
+        raise QueryError("reminder list expected")
+    return due
+
+
+def fetch_audio(
+    reminder_id: int, transport: httpx.BaseTransport | None = None
+) -> bytes:
+    return _wav_body(_request("GET", f"/reminders/{reminder_id}/audio", transport))
+
+
+def ack_reminder(
+    reminder_id: int, transport: httpx.BaseTransport | None = None
+) -> None:
+    _request("POST", f"/reminders/{reminder_id}/ack", transport)
 
 
 def _error_text(response: httpx.Response) -> str:
@@ -246,7 +285,9 @@ class Client:
         clock: Callable[[], float] = time.monotonic,
         spawn: Callable[[Callable[[], None]], None] = _spawn_thread,
         timer: Callable = threading.Timer,
+        transport: httpx.BaseTransport | None = None,
     ) -> None:
+        self._transport = transport
         self._recorder = recorder
         self._player = player
         self._send = send
@@ -295,6 +336,36 @@ class Client:
             self._spawn(self._discard)
         else:
             self._spawn(lambda: self._query(wav, t_release))
+
+    def deliver_due(self) -> None:
+        """Speak every due reminder and ack each one only after its audio played."""
+        try:
+            due = fetch_due(self._transport)
+        except QueryError as e:
+            log.debug("reminder poll skipped: %s", e)
+            return
+        for reminder in due:
+            try:
+                self._deliver(reminder)
+            except Exception as e:  # noqa: BLE001  the reminder stays due for the next poll
+                log.warning(
+                    "reminder %s not delivered: %s",
+                    reminder.get("id"),
+                    str(e)[: config.ERROR_MAX_CHARS],
+                )
+
+    def _deliver(self, reminder: dict) -> None:
+        audio = fetch_audio(reminder["id"], self._transport)
+        with self._lock:
+            if self.state != IDLE:
+                return  # a query started meanwhile; the reminder stays due
+            self.state = PLAYING
+            try:
+                print(f"Reminder: {reminder['text']}")
+                self._player.play_wav(audio)
+            finally:
+                self.state = IDLE
+        ack_reminder(reminder["id"], self._transport)
 
     def _start_sound(self) -> None:
         with self._lock:
