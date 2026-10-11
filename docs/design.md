@@ -132,10 +132,16 @@ ai-glasses/
 ├── tests/
 │   ├── conftest.py       # fakes and a temporary database
 │   ├── test_server.py    # endpoint tests
-│   ├── test_<module>.py  # one module's own logic
-│   ├── questions.csv     # frozen 30-question eval set
-│   └── run_eval.py       # accuracy + latency
-├── data/                 # assistant.db, gitignored
+│   └── test_<module>.py  # one module's own logic
+├── eval/
+│   ├── questions.json    # frozen 30-question eval set
+│   ├── config.py         # eval paths, pacing
+│   ├── record.py         # records the 30 clips into data/eval/
+│   ├── run_eval.py       # accuracy + latency
+│   ├── live_questions.md # 10 questions to speak with the key
+│   ├── live_log.py       # prints the last 10 logged queries
+│   └── results/          # <date>.md and .json per run
+├── data/                 # assistant.db; eval/ clips; gitignored
 ├── models/               # Piper voice files, gitignored
 └── logs/                 # queries.jsonl, gitignored
 ```

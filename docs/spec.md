@@ -112,12 +112,12 @@ Worst case: the LLM stage stops at its 15 s deadline (one Gemini call 10 s + sea
 
 pytest covers the server with Gemini, whisper and Piper faked and a temporary SQLite database. The evaluation below uses the real models.
 
-1. Write all 30 rows in `tests/questions.csv` before the first run, then freeze it. Columns: id, group (general, notes, reminders), setup, question, expected.
-   - setup: the notes and reminders that must exist before the question (for list and cancel commands), or "none".
-   - expected: the answer for general questions; the tool name and arguments for tool questions, with times written relative to the run ("tomorrow 17:00") and resolved by `run_eval.py` at run time.
-2. Run against a fresh evaluation database, never the real one.
-3. Grading:
-   - General and live: correct, partial or wrong, judged by me; live answers checked against a trusted website at test time. Only "correct" counts.
+1. Write all 30 rows in `eval/questions.json` before the first run, then freeze it (only an obvious error in a question may be fixed, logged in plan.md). Fields: id, group (general, notes, reminders), spoken text, expected transcript, pass rule.
+   - The questions are spoken once and recorded as WAV files in `data/eval/` (not in git) by `eval/record.py`; `eval/run_eval.py` replays them through `POST /query`.
+   - pass rule: expected keywords for general questions; the tool name and arguments for tool questions, with times written relative to the run ("tomorrow 17:00") and resolved by `run_eval.py` at run time.
+2. Run against a clean evaluation state: `run_eval.py` backs up and clears the notes and reminders, and restores them afterwards.
+3. Grading, done by `run_eval.py`:
+   - General and live: pass on the expected keywords; a live question also needs the sought kind of fact and `searched` true.
    - Notes and reminders: pass when the right tool is called with the right arguments, the database holds the expected result afterwards, and the answer repeats the action back (FR-10).
 4. Report accuracy per group, median and worst latency, and transcription accuracy.
 5. Re-run the whole set whenever the model, prompt or tool declarations change.
@@ -126,7 +126,7 @@ The home city for weather questions comes from the server config.
 
 ## Open decisions
 
-- How the eval questions are spoken: live into the mic during `run_eval.py`, or recorded once as WAV files. Decide when planning M7.
+None.
 
 ## Decisions settled in Design
 
