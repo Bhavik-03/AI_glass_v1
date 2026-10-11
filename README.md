@@ -75,12 +75,12 @@ server up and the client stopped; it backs up your notes and reminders and resto
 
 From the final run of the 30-question evaluation (`eval/results/2026-10-11_1555.md`):
 
-| Check | Result | Target |
+| Check | Result | Pass mark |
 | --- | --- | --- |
-| General and live questions | 8/10 | 80% |
-| Notes | 10/10 | 80% |
-| Reminders | 10/10 | 80% |
-| Transcription | 87% (26/30) | 90%, missed by one clip |
+| General and live questions | 8/10 (80%) | 80% |
+| Notes | 10/10 (100%) | 80% |
+| Reminders | 10/10 (100%) | 80% |
+| Transcription | 26/30 (87%) | 90%, missed by one clip |
 | Median time, key release to answer | 3.1 s | 15 s |
 | Errors | 0 | none |
 
