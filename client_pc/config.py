@@ -13,3 +13,6 @@ PLAYBACK_TAIL_S = 0.2
 START_TONE = ((660, 0.08), (880, 0.08))
 THINKING_TONE = ((440, 0.15),)
 ERROR_TONE = ((300, 0.2), (200, 0.3))
+PTT_KEY = "f9"  # name of a pynput.keyboard.Key member
+MIN_RECORDING_S = 0.3
+ERROR_MAX_CHARS = 200

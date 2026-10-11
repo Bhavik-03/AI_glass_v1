@@ -2,15 +2,19 @@
 
 import array
 import io
+import logging
 import math
+import threading
 import wave
 from itertools import pairwise
 
 import httpx
 import pytest
+from pynput import keyboard
 
 from client_pc import config
 from client_pc.client import (
+    Client,
     Player,
     QueryError,
     QueryTimeout,
@@ -680,3 +684,550 @@ def test_fr3_error_classes_inherit_from_query_error():
     assert issubclass(ServerUnreachable, QueryError)
     assert not issubclass(QueryTimeout, ServerUnreachable)
     assert not issubclass(ServerUnreachable, QueryTimeout)
+
+
+# ---- FR-1/FR-2/FR-3: Client state machine (M6-T5). All collaborators are fakes. ----
+
+PTT = keyboard.Key.f9
+OTHER = keyboard.Key.space
+REC_WAV = b"RECORDED-WAV"
+REPLY_WAV = b"ANSWER-WAV"
+WAIT_S = 2.0
+
+
+class FakeRecorder:
+    def __init__(self, log: list) -> None:
+        self.log = log
+        self.on_stop = None
+
+    def start_recording(self) -> bool:
+        self.log.append("start_recording")
+        return True
+
+    def stop_recording(self) -> bytes:
+        self.log.append("stop_recording")
+        if self.on_stop:
+            self.on_stop()
+        return REC_WAV
+
+
+class FakePlayer:
+    def __init__(self, log: list) -> None:
+        self.log = log
+        self.on_start = None
+        self.wav_exc: Exception | None = None
+        self.wav_entered = threading.Event()
+        self.wav_gate: threading.Event | None = None
+
+    def play_start(self) -> None:
+        self.log.append("start")
+        if self.on_start:
+            self.on_start()
+
+    def play_thinking(self) -> None:
+        self.log.append("thinking")
+
+    def play_error(self) -> None:
+        self.log.append("error")
+
+    def play_wav(self, data: bytes) -> None:
+        self.log.append(("wav", data))
+        self.wav_entered.set()
+        if self.wav_gate is not None:
+            assert self.wav_gate.wait(WAIT_S)
+        if self.wav_exc:
+            raise self.wav_exc
+
+
+class FakeSend:
+    def __init__(self, log: list, clock) -> None:
+        self.log = log
+        self.clock = clock
+        self.exc: Exception | None = None
+        self.answer_at: float | None = None
+        self.entered = threading.Event()
+        self.gate: threading.Event | None = None
+
+    def __call__(self, wav: bytes) -> bytes:
+        self.log.append(("send", wav))
+        self.entered.set()
+        if self.gate is not None:
+            assert self.gate.wait(WAIT_S)
+        if self.exc:
+            raise self.exc
+        if self.answer_at is not None:
+            self.clock.t = self.answer_at
+        return REPLY_WAV
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.t = 0.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+class FakeTimer:
+    def __init__(self, interval: float, fn) -> None:
+        self.interval = interval
+        self.fn = fn
+        self.daemon = False
+        self.started = 0
+        self.cancelled = 0
+
+    def start(self) -> None:
+        self.started += 1
+
+    def cancel(self) -> None:
+        self.cancelled += 1
+
+    def fire(self) -> None:
+        self.fn()
+
+
+class Deferred:
+    """spawn that stores functions so a test can look at the state before they run."""
+
+    def __init__(self) -> None:
+        self.pending: list = []
+
+    def __call__(self, fn) -> None:
+        self.pending.append(fn)
+
+    def run_all(self) -> None:
+        while self.pending:
+            self.pending.pop(0)()
+
+
+class Threaded:
+    """spawn that runs fn on a real thread, so a test can block it on an Event."""
+
+    def __init__(self) -> None:
+        self.threads: list[threading.Thread] = []
+
+    def __call__(self, fn) -> None:
+        t = threading.Thread(target=fn, daemon=True)
+        t.start()
+        self.threads.append(t)
+
+    def join(self) -> None:
+        for t in self.threads:
+            t.join(WAIT_S)
+            assert not t.is_alive()
+
+
+class Rig:
+    def __init__(self, spawn=None) -> None:
+        self.log: list = []
+        self.clock = FakeClock()
+        self.recorder = FakeRecorder(self.log)
+        self.player = FakePlayer(self.log)
+        self.send = FakeSend(self.log, self.clock)
+        self.timers: list[FakeTimer] = []
+        self.client = Client(
+            self.recorder,
+            self.player,
+            send=self.send,
+            clock=self.clock,
+            spawn=spawn or (lambda fn: fn()),
+            timer=self.make_timer,
+        )
+
+    def make_timer(self, interval: float, fn) -> FakeTimer:
+        t = FakeTimer(interval, fn)
+        self.timers.append(t)
+        return t
+
+    def press(self, key=PTT) -> None:
+        self.client.on_key_press(key)
+
+    def release(self, key=PTT) -> None:
+        self.client.on_key_release(key)
+
+    def cycle(self, held: float = 1.0) -> None:
+        self.press()
+        self.clock.t += held
+        self.release()
+
+    def count(self, item) -> int:
+        return self.log.count(item)
+
+
+def returns_promptly(fn) -> None:
+    t = threading.Thread(target=fn, daemon=True)
+    t.start()
+    t.join(WAIT_S)
+    assert not t.is_alive(), "key handler blocked"
+
+
+@pytest.fixture
+def rig():
+    return Rig()
+
+
+def test_fr1_client_starts_idle(rig):
+    """The client has one state and starts idle."""
+    assert rig.client.state == "idle"
+
+
+def test_fr1_non_ptt_keys_are_ignored(rig):
+    """Only the push-to-talk key is handled: other keys do nothing on press or release."""
+    rig.press(OTHER)
+    rig.release(OTHER)
+    assert rig.log == []
+    assert rig.client.state == "idle"
+    assert rig.timers == []
+    rig.press()
+    rig.release(OTHER)
+    assert rig.client.state == "recording"
+    assert rig.count("stop_recording") == 0
+
+
+def test_fr1_ptt_key_comes_from_config(monkeypatch, rig):
+    """The PTT key is read from config.PTT_KEY at call time."""
+    assert config.PTT_KEY == "f9"
+    monkeypatch.setattr(config, "PTT_KEY", "f8")
+    rig.press(PTT)
+    assert rig.log == []
+    rig.press(keyboard.Key.f8)
+    assert rig.client.state == "recording"
+
+
+def test_fr1_press_starts_recording_and_plays_start_sound_once(rig):
+    """A key press plays the start sound once and starts recording."""
+    rig.press()
+    assert rig.client.state == "recording"
+    assert rig.count("start_recording") == 1
+    assert rig.count("start") == 1
+    assert rig.log.index("start_recording") < rig.log.index("start")
+
+
+def test_fr1_key_repeat_presses_while_recording_are_ignored(rig):
+    """Key-repeat presses while the key is held do not restart or replay anything."""
+    rig.press()
+    rig.press()
+    rig.press()
+    assert rig.count("start_recording") == 1
+    assert rig.count("start") == 1
+    assert len(rig.timers) == 1
+    assert rig.client.state == "recording"
+
+
+def test_fr1_release_without_press_is_ignored(rig):
+    """A release with no earlier press does nothing."""
+    rig.release()
+    assert rig.log == []
+    assert rig.client.state == "idle"
+
+
+def test_fr1_press_ignored_while_waiting():
+    """A key press is ignored unless idle: nothing happens in the waiting state."""
+    spawn = Deferred()
+    rig = Rig(spawn)
+    rig.press()
+    spawn.run_all()
+    rig.release()
+    assert rig.client.state == "waiting"
+    rig.press()
+    assert rig.client.state == "waiting"
+    assert rig.count("start_recording") == 1
+    assert len(rig.timers) == 1
+    assert len(spawn.pending) == 1  # only the query from the release
+
+
+def test_fr1_press_ignored_while_waiting_for_server():
+    """While send() waits for the server the state is waiting and key events return at once."""
+    spawn = Threaded()
+    rig = Rig(spawn)
+    rig.send.gate = threading.Event()
+    rig.press()
+    spawn.join()
+    rig.clock.t = 1.0
+    rig.release()
+    try:
+        assert rig.send.entered.wait(WAIT_S)
+        assert rig.client.state == "waiting"
+        returns_promptly(rig.press)
+        returns_promptly(rig.release)
+        assert rig.client.state == "waiting"
+        assert rig.count("start_recording") == 1
+        assert rig.count("start") == 1
+    finally:
+        rig.send.gate.set()
+        spawn.join()
+    assert rig.client.state == "idle"
+
+
+def test_fr1_press_ignored_while_playing_and_lock_covers_playback():
+    """While play_wav runs the state is playing; press and release return promptly and change nothing."""
+    spawn = Threaded()
+    rig = Rig(spawn)
+    rig.player.wav_gate = threading.Event()
+    rig.press()
+    spawn.join()
+    rig.clock.t = 1.0
+    rig.release()
+    try:
+        assert rig.player.wav_entered.wait(WAIT_S)
+        assert rig.client.state == "playing"
+        before = list(rig.log)
+        returns_promptly(rig.press)
+        returns_promptly(rig.release)
+        assert rig.client.state == "playing"
+        assert rig.log == before
+        assert len(rig.timers) == 1
+    finally:
+        rig.player.wav_gate.set()
+        spawn.join()
+    assert rig.client.state == "idle"
+    assert rig.count("start_recording") == 1
+
+
+def test_fr1_second_press_during_start_sound_is_ignored(rig):
+    """A press that arrives while the start sound transition is running has no effect."""
+    rig.player.on_start = rig.press
+    rig.press()
+    assert rig.count("start_recording") == 1
+    assert rig.count("start") == 1
+    assert len(rig.timers) == 1
+    assert rig.client.state == "recording"
+
+
+def test_fr1_second_press_during_release_transition_is_ignored(rig):
+    """A press that arrives while the release is stopping the recording has no effect."""
+    rig.press()
+    rig.recorder.on_stop = rig.press
+    rig.clock.t = 1.0
+    rig.release()
+    assert rig.count("start_recording") == 1
+    assert rig.count("start") == 1
+    assert rig.client.state == "idle"
+    assert rig.count(("wav", REPLY_WAV)) == 1
+
+
+def test_fr1_normal_cycle_runs_in_order_and_ends_idle(rig):
+    """Press plays the start sound and records; release plays thinking, sends the audio, plays the answer."""
+    rig.cycle(held=1.0)
+    assert rig.log == [
+        "start_recording",
+        "start",
+        "stop_recording",
+        "thinking",
+        ("send", REC_WAV),
+        ("wav", REPLY_WAV),
+    ]
+    assert rig.client.state == "idle"
+
+
+def test_fr1_state_goes_through_waiting_and_playing_in_a_cycle():
+    """The state is recording after press, waiting after release, then playing, then idle."""
+    spawn = Deferred()
+    rig = Rig(spawn)
+    states = []
+    rig.player.on_start = lambda: states.append(rig.client.state)
+    rig.press()
+    states.append(rig.client.state)
+    spawn.run_all()
+    rig.clock.t = 1.0
+    rig.release()
+    states.append(rig.client.state)
+    spawn.run_all()
+    assert states == ["recording", "recording", "waiting"]
+    assert rig.client.state == "idle"
+
+
+def test_fr1_two_cycles_in_a_row_both_work(rig):
+    """After a finished query the next key press works."""
+    rig.cycle()
+    rig.cycle()
+    assert rig.count("start_recording") == 2
+    assert rig.count(("wav", REPLY_WAV)) == 2
+    assert rig.client.state == "idle"
+
+
+def test_fr1_short_recording_sends_nothing_and_plays_error_only(rig):
+    """A recording shorter than 0.3 s is discarded: error tone, no thinking sound, no request."""
+    assert config.MIN_RECORDING_S == 0.3
+    rig.cycle(held=0.2)
+    assert not any(isinstance(x, tuple) for x in rig.log)
+    assert "thinking" not in rig.log
+    assert rig.count("error") == 1
+    assert rig.client.state == "idle"
+
+
+def test_fr1_short_recording_state_is_waiting_then_error_then_idle():
+    """After a too-short release the state is waiting, and idle again once the error tone ends."""
+    spawn = Deferred()
+    rig = Rig(spawn)
+    rig.press()
+    spawn.run_all()
+    rig.clock.t = 0.1
+    rig.release()
+    assert rig.client.state == "waiting"
+    spawn.run_all()
+    assert rig.client.state == "idle"
+    assert rig.log[-1] == "error"
+
+
+def test_fr1_recording_of_exactly_min_length_is_sent(rig):
+    """A recording held for exactly MIN_RECORDING_S is not discarded."""
+    rig.cycle(held=config.MIN_RECORDING_S)
+    assert ("send", REC_WAV) in rig.log
+    assert "error" not in rig.log
+
+
+def test_fr1_next_press_works_after_short_recording(rig):
+    """After a discarded short recording the next press works."""
+    rig.cycle(held=0.1)
+    rig.cycle(held=1.0)
+    assert ("send", REC_WAV) in rig.log
+    assert rig.client.state == "idle"
+
+
+def test_fr3_latency_line_is_logged_for_a_query(rig, caplog):
+    """The time from key release to the start of the answer is logged as 'latency 2.9 s'."""
+    rig.press()
+    rig.clock.t = 10.0
+    rig.send.answer_at = 12.9
+    with caplog.at_level(logging.INFO, logger="client_pc.client"):
+        rig.release()
+    lines = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "client_pc.client" and r.levelno == logging.INFO
+    ]
+    assert lines.count("latency 2.9 s") == 1
+
+
+def test_fr3_latency_is_logged_before_the_answer_plays(rig, caplog):
+    """The latency is measured when the answer starts: it is logged before play_wav is called."""
+    seen = []
+    original = rig.player.play_wav
+
+    def checking(data):
+        seen.append(any("latency" in r.getMessage() for r in caplog.records))
+        original(data)
+
+    rig.player.play_wav = checking
+    rig.press()
+    rig.clock.t = 5.0
+    with caplog.at_level(logging.INFO, logger="client_pc.client"):
+        rig.release()
+    assert seen == [True]
+
+
+def test_fr3_latency_is_not_logged_for_a_failed_query(rig, caplog):
+    """A failed query logs no latency line."""
+    rig.send.exc = QueryError("500 stt: boom")
+    with caplog.at_level(logging.INFO, logger="client_pc.client"):
+        rig.cycle()
+    assert not [r for r in caplog.records if "latency" in r.getMessage()]
+
+
+def test_fr1_short_recording_logs_no_latency(rig, caplog):
+    """A discarded short recording logs no latency line."""
+    with caplog.at_level(logging.INFO, logger="client_pc.client"):
+        rig.cycle(held=0.1)
+    assert not [r for r in caplog.records if "latency" in r.getMessage()]
+
+
+LONG = "x" * 500
+FAILURES = [
+    ("send", QueryError(LONG)),
+    ("send", QueryTimeout(LONG)),
+    ("send", ServerUnreachable(LONG)),
+    ("play_wav", ValueError(LONG)),
+]
+
+
+@pytest.mark.parametrize(
+    ("where", "exc"),
+    FAILURES,
+    ids=["query_error", "timeout", "unreachable", "play_wav_value_error"],
+)
+def test_fr3_failure_plays_error_logs_warning_and_next_press_works(
+    rig, caplog, where, exc
+):
+    """Any failure plays the error sound, logs a cut warning, and the next key press works."""
+    if where == "send":
+        rig.send.exc = exc
+    else:
+        rig.player.wav_exc = exc
+    with caplog.at_level(logging.INFO, logger="client_pc.client"):
+        rig.cycle()
+    assert rig.count("error") == 1
+    assert rig.log[-1] == "error"
+    if where == "send":
+        assert ("wav", REPLY_WAV) not in rig.log
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "x" * config.ERROR_MAX_CHARS in warnings[0]
+    assert "x" * (config.ERROR_MAX_CHARS + 1) not in warnings[0]
+    assert rig.client.state == "idle"
+
+    rig.send.exc = None
+    rig.player.wav_exc = None
+    rig.log.clear()
+    rig.cycle()
+    assert rig.log[-1] == ("wav", REPLY_WAV)
+    assert rig.count("error") == 0
+    assert rig.client.state == "idle"
+
+
+def test_fr3_timeout_failure_is_not_a_crash_in_handler(rig):
+    """A QueryTimeout inside the query never propagates out of the key handler."""
+    rig.send.exc = QueryTimeout("no answer within 20 s")
+    rig.cycle()
+    assert rig.client.state == "idle"
+
+
+def test_fr3_error_max_chars_default():
+    """The logged error text is cut to 200 characters by default."""
+    assert config.ERROR_MAX_CHARS == 200
+
+
+def test_fr1_max_record_timer_is_created_started_and_daemon(rig):
+    """A press creates one started daemon timer set to MAX_RECORD_S."""
+    rig.press()
+    assert len(rig.timers) == 1
+    timer = rig.timers[0]
+    assert timer.interval == config.MAX_RECORD_S == 10
+    assert timer.started == 1
+    assert timer.daemon is True
+
+
+def test_fr1_timer_firing_stops_recording_and_sends_query(rig):
+    """At the max recording time the recording stops and the query is sent without a key release."""
+    rig.press()
+    rig.clock.t = 10.0
+    rig.timers[0].fire()
+    assert rig.count("stop_recording") == 1
+    assert ("send", REC_WAV) in rig.log
+    assert rig.log[-1] == ("wav", REPLY_WAV)
+    assert rig.client.state == "idle"
+
+
+def test_fr1_release_after_timer_fired_is_ignored(rig):
+    """A real key release after the timer already stopped the recording does nothing."""
+    rig.press()
+    rig.clock.t = 10.0
+    rig.timers[0].fire()
+    before = list(rig.log)
+    rig.release()
+    assert rig.log == before
+    assert rig.client.state == "idle"
+
+
+def test_fr1_normal_release_cancels_the_timer(rig):
+    """A normal release cancels the max-recording timer."""
+    rig.cycle()
+    assert rig.timers[0].cancelled >= 1
+
+
+def test_fr1_each_press_gets_its_own_timer(rig):
+    """A second recording gets a fresh timer."""
+    rig.cycle()
+    rig.cycle()
+    assert len(rig.timers) == 2
+    assert all(t.started == 1 for t in rig.timers)
