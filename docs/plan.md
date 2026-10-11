@@ -90,7 +90,7 @@ Notes: no new package (sqlite3 and zoneinfo are stdlib, tzdata is already pinned
 
 Manual checks: start the server with the real models, ask for a note and a reminder through `/query`, and check the replies repeat back the stored text and time (FR-10). After the reminder is due, `GET /reminders/due` lists it, `/reminders/{id}/audio` plays the right spoken text, and `/reminders/{id}/ack` clears it (FR-12, FR-13, FR-14). Gemini's choice of tool and the "≥ 80% correct" scores are measured in M7. Done Oct 11, 2026 (all 8 checks passed, real models). After M5-T12, repeat the `reminder_add` clip: `due_at` lands within a few seconds of 120 s after the call, and the answer says a spoken time ("12:47 am"), not an ISO timestamp or an id.
 
-## M6 (v1): PC client | in progress
+## M6 (v1): PC client | done
 Goal: Push-to-talk recording, status sounds, 20 s timeout and due-reminder polling · GitHub milestone: #6
 
 | Task | FR | Files | Done when | Test | Issue | Done |
