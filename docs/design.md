@@ -49,7 +49,7 @@ The M3 spike (Oct 10, 2026, results in plan.md) showed that Google Search ground
 - When Gemini calls `web_search`, `tools` passes the query to `search.py`, which calls the Tavily Search API (basic depth, a few top results, timeout from config). The results go back to Gemini as `{results: [{title, url, content}]}`; a failure goes back as `{error}`. Gemini then answers from them.
 - `searched` is true when `web_search` ran and returned results.
 - When Gemini returns function calls, the server runs them and sends back all response parts unchanged (including `id` and `thought_signature`) plus the results, up to 3 rounds. A live question costs two Gemini calls and one search call.
-- Deadline: the LLM stage has a 15 s deadline (`LLM_DEADLINE_S`). Before each Gemini or search call, `llm` checks that the call's full timeout fits in the time left; if not, it raises `llm: deadline exceeded`. The worst case (Gemini 10 s + search 5 s + Gemini 10 s = 25 s) would otherwise pass the client's 20 s timeout.
+- Deadline: the LLM stage has a 15 s deadline (`LLM_DEADLINE_S`). Before each Gemini call, `llm` checks that the call's full timeout fits in the time left. The first search always runs; a later tool round runs only if elapsed + its tool timeout (0 s local tools, 5 s search) + 10 s <= `LLM_FINAL_DEADLINE_S` (18 s), else its calls get an error result. When the deadline stops the model, `llm` makes one last Gemini call with function calling mode NONE if elapsed <= `LLM_FINAL_START_MAX_S` (8 s); only if that is not possible or fails does it raise `llm: deadline exceeded`. The worst case is STT 1 s + LLM 18 s + TTS 1 s = 20 s, under the client's 25 s.
 - Privacy rule: `web_search` sends only the search query to Tavily. Never send notes, reminders or (from v3) memory content as a query. Tavily's terms let it use queries and results to improve its models.
 - Backup provider: Exa (`exa-py`, $10 free credit a month, no card). Switching changes only `search.py` and its config.
 - SDK details (parameter names, timeout units, thinking setting) change between versions: check the current `google-genai` and `tavily-python` docs before writing `llm.py` and `search.py`.
@@ -96,13 +96,13 @@ Each timeout is shorter than the one above it, so the layer that knows what went
 
 | Layer | Timeout | On failure |
 | --- | --- | --- |
-| LLM stage | 15 s deadline (`LLM_DEADLINE_S`): a Gemini or search call starts only if its full timeout fits in the time left | Raises `llm: deadline exceeded`; keeps STT 1 s + LLM 15 s + TTS 1 s = 17 s under the client's 20 s |
+| LLM stage | 15 s deadline (`LLM_DEADLINE_S`) for tool rounds; last call without tools starts by 8 s and ends by 18 s (`LLM_FINAL_DEADLINE_S`) | Last call answers; if impossible, raises `llm: deadline exceeded`; keeps STT 1 s + LLM 18 s + TTS 1 s = 20 s under the client's 25 s |
 | Gemini call | 10 s per call (API minimum), at most 3 tool rounds | Raises an error naming the `llm` stage |
 | Tool call: `web_search` | 5 s | Returns `{"error": ...}` to Gemini; never raises |
 | Tool call: notes and reminders | none (local SQLite) | Returns `{"error": ...}` to Gemini; never raises |
 | Server `/query` | none of its own; stages are bounded | 400 for bad audio, 500 `"<stage>: <reason>"` for a failed stage; the server keeps running |
-| Client query | 20 s | Error sound; ready for the next key press |
-| Client reminder poll | same 20 s | Skipped silently; retried at the next poll, the reminder stays due |
+| Client query | 25 s (`QUERY_TIMEOUT_S`) | Error sound; ready for the next key press |
+| Client reminder poll | 20 s (`POLL_TIMEOUT_S`, separate setting) | Skipped silently; retried at the next poll, the reminder stays due |
 
 ## Repo structure
 
