@@ -6,6 +6,7 @@ import threading
 import time
 import wave
 from collections.abc import Callable, Sequence
+from contextlib import ExitStack
 
 import httpx
 import sounddevice as sd
@@ -428,19 +429,20 @@ def run(
     listener = make_listener(
         on_press=client.on_key_press, on_release=client.on_key_release
     )
-    try:
-        recorder.open()
-        player.open()
-        listener.start()
-        while True:
-            client.poll()
-            sleep(config.POLL_INTERVAL_S)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        listener.stop()
-        recorder.close()
-        player.close()
+    # Callbacks run last-in first-out and all run even if one raises.
+    with ExitStack() as cleanup:
+        cleanup.callback(player.close)
+        cleanup.callback(recorder.close)
+        cleanup.callback(listener.stop)
+        try:
+            recorder.open()
+            player.open()
+            listener.start()
+            while True:
+                client.poll()
+                sleep(config.POLL_INTERVAL_S)
+        except KeyboardInterrupt:
+            pass
 
 
 def main() -> None:

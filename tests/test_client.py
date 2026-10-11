@@ -1505,7 +1505,7 @@ POLL_FAILURE_IDS = ["500", "timeout", "connect_error", "invalid_json", "json_obj
 
 
 @pytest.mark.parametrize("outcome", POLL_FAILURES, ids=POLL_FAILURE_IDS)
-def test_fr15_poll_failure_is_silent(outcome, caplog, capsys):
+def test_fr15_poll_failure_warns_once_and_plays_nothing(outcome, caplog, capsys):
     """A failed poll prints nothing, makes no sound, logs exactly one warning, raises nothing, asks for no audio."""
     rig, api = reminder_rig([R3])
     api.set(DUE, outcome)
@@ -1803,8 +1803,11 @@ def test_fr15_per_reminder_failure_is_not_a_poll_failure(caplog):
 
 
 class FakeListener:
-    def __init__(self, log: list, **kwargs) -> None:
+    def __init__(
+        self, log: list, stop_exc: BaseException | None = None, **kwargs
+    ) -> None:
         self.log = log
+        self.stop_exc = stop_exc
         self.kwargs = kwargs
         log.append("listener_created")
 
@@ -1813,6 +1816,8 @@ class FakeListener:
 
     def stop(self) -> None:
         self.log.append("listener.stop")
+        if self.stop_exc:
+            raise self.stop_exc
 
 
 class FakeClient:
@@ -1839,6 +1844,7 @@ class FakeStreamOwner:
         self.log = log
         self.name = name
         self.open_exc: BaseException | None = None
+        self.close_exc: BaseException | None = None
 
     def open(self) -> None:
         self.log.append(f"{self.name}.open")
@@ -1847,6 +1853,8 @@ class FakeStreamOwner:
 
     def close(self) -> None:
         self.log.append(f"{self.name}.close")
+        if self.close_exc:
+            raise self.close_exc
 
 
 class RunRig:
@@ -1858,9 +1866,10 @@ class RunRig:
         self.listeners: list[FakeListener] = []
         self.sleeps: list[float] = []
         self.stop_on_sleep = stop_on_sleep
+        self.listener_stop_exc: BaseException | None = None
 
     def make_listener(self, **kwargs) -> FakeListener:
-        listener = FakeListener(self.log, **kwargs)
+        listener = FakeListener(self.log, stop_exc=self.listener_stop_exc, **kwargs)
         self.listeners.append(listener)
         return listener
 
@@ -1952,6 +1961,22 @@ def test_fr15_run_recorder_open_failure_propagates_after_cleanup():
     assert "player.open" not in r.log
     assert "listener.start" not in r.log
     assert "poll" not in r.log
+    assert r.log.count("listener.stop") == 1
+    assert r.log.count("recorder.close") == 1
+    assert r.log.count("player.close") == 1
+
+
+@pytest.mark.parametrize("failing", ["listener", "recorder", "player"])
+def test_fr15_run_closes_everything_even_if_one_close_fails(failing):
+    """A failing Listener.stop, Recorder.close or Player.close cannot skip the other two."""
+    r = RunRig(stop_on_sleep=1)
+    error = RuntimeError(f"{failing} failed")
+    if failing == "listener":
+        r.listener_stop_exc = error
+    else:
+        getattr(r, failing).close_exc = error
+    with pytest.raises(RuntimeError, match=f"{failing} failed"):
+        r.run()
     assert r.log.count("listener.stop") == 1
     assert r.log.count("recorder.close") == 1
     assert r.log.count("player.close") == 1
