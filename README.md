@@ -8,6 +8,11 @@ Pipeline: microphone -> faster-whisper -> Gemini with tools -> Piper -> speakers
 
 The long-term goal is a pair of glasses that act as a second brain; this is version 1.
 
+## Demo
+
+[Watch the demo video](https://youtu.be/wGKn86mIK80): a live question, a note, and a
+reminder that is spoken when it is due.
+
 ## Architecture
 
 ```mermaid
