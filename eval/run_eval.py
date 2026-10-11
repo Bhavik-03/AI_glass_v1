@@ -1,10 +1,12 @@
 import json
+import re
 import sqlite3
 import subprocess
 import time
 from collections.abc import Callable
 from contextlib import closing
-from datetime import datetime
+from datetime import datetime, timedelta
+from datetime import time as time_of_day
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -108,6 +110,143 @@ def read_log_since(offset: int) -> list[dict]:
     return [json.loads(line) for line in data.splitlines() if line.strip()]
 
 
+DAYS_AHEAD = {"tomorrow": 1, "day_after_tomorrow": 2}
+
+
+def now() -> datetime:
+    return datetime.now(ZoneInfo(server_config.TIMEZONE))
+
+
+def snapshot_db() -> dict:
+    """The notes and reminders as the server stored them."""
+    with closing(sqlite3.connect(config.DB_PATH)) as con:
+        con.row_factory = sqlite3.Row
+        notes = con.execute("SELECT id, text FROM notes ORDER BY id").fetchall()
+        reminders = con.execute(
+            "SELECT id, text, due_at, status FROM reminders ORDER BY id"
+        ).fetchall()
+    return {
+        "notes": [dict(r) for r in notes],
+        "reminders": [dict(r) for r in reminders],
+    }
+
+
+def expected_due(spec: dict, asked_at: datetime) -> tuple[datetime, int]:
+    """The time a reminder should be due, resolved from when the question was asked."""
+    if "in_minutes" in spec:
+        return asked_at + timedelta(
+            minutes=spec["in_minutes"]
+        ), config.DUE_IN_TOLERANCE_S
+    day, clock = spec["at"].split()
+    date = asked_at.date() + timedelta(days=DAYS_AHEAD[day])
+    due = datetime.combine(
+        date, time_of_day.fromisoformat(clock), tzinfo=asked_at.tzinfo
+    )
+    return due, config.DUE_AT_TOLERANCE_S
+
+
+def _has_word(text: str, word: str) -> bool:
+    return (
+        re.search(rf"(?<!\w){re.escape(word)}(?!\w)", text, re.IGNORECASE) is not None
+    )
+
+
+def _contains_all(text: str, words: list[str]) -> bool:
+    return all(w.lower() in text.lower() for w in words)
+
+
+def _tool_failures(rule: dict, log: dict) -> list[str]:
+    failures = []
+    calls = log["tool_calls"]
+    for tool in rule.get("tools", []):
+        made = [c for c in calls if c["name"] == tool]
+        if not made:
+            failures.append(f"tool {tool} not called")
+        elif not any(c["ok"] for c in made):
+            failures.append(f"tool {tool} returned an error")
+    if rule.get("searched") and not log["searched"]:
+        failures.append("searched was false")
+    return failures
+
+
+def _answer_failures(rule: dict, answer: str) -> list[str]:
+    failures = []
+    for alternatives in rule.get("answer_all", []):
+        if not any(_has_word(answer, a) for a in alternatives):
+            failures.append(f"answer lacks one of {alternatives}")
+    some = rule.get("answer_some")
+    if some:
+        found = [w for w in some["words"] if _has_word(answer, w)]
+        if len(found) < some["min"]:
+            failures.append(f"answer_some: {len(found)} of {some['min']} words {found}")
+    fact = rule.get("answer_fact")
+    if fact and not re.search(fact, answer, re.IGNORECASE):
+        failures.append(f"answer_fact: no match for {fact}")
+    return failures
+
+
+def _reminder_added_failure(
+    spec: dict, reminders: list[dict], asked_at: datetime
+) -> str | None:
+    found = [r for r in reminders if _contains_all(r["text"], spec["words"])]
+    if not found:
+        return f"reminder_added: no reminder with {spec['words']}"
+    due, tolerance = expected_due(spec["due"], asked_at)
+    for r in found:
+        if (
+            abs((datetime.fromisoformat(r["due_at"]) - due).total_seconds())
+            <= tolerance
+        ):
+            return None
+    return f"reminder_added: due_at {found[0]['due_at']} is not near {due.isoformat()}"
+
+
+def _db_failures(rule: dict, db: dict, asked_at: datetime) -> list[str]:
+    failures = []
+    notes, reminders = db["notes"], db["reminders"]
+    words = rule.get("note_added")
+    if words and not any(_contains_all(n["text"], words) for n in notes):
+        failures.append(f"note_added: no note with {words}")
+    if "notes_total" in rule and len(notes) != rule["notes_total"]:
+        failures.append(
+            f"notes_total: {len(notes)} stored, expected {rule['notes_total']}"
+        )
+    if "reminder_added" in rule:
+        failure = _reminder_added_failure(rule["reminder_added"], reminders, asked_at)
+        if failure:
+            failures.append(failure)
+    words = rule.get("reminder_cancelled")
+    if words and not any(
+        r["status"] == "cancelled" and _contains_all(r["text"], words)
+        for r in reminders
+    ):
+        failures.append(f"reminder_cancelled: no cancelled reminder with {words}")
+    if "reminders_pending" in rule:
+        pending = sum(r["status"] == "pending" for r in reminders)
+        if pending != rule["reminders_pending"]:
+            failures.append(
+                f"reminders_pending: {pending} pending, expected {rule['reminders_pending']}"
+            )
+    return failures
+
+
+def grade(question: dict, result: dict) -> tuple[bool, str]:
+    """Check one result against the question's pass rule; the reason lists every failed check."""
+    if result["status"] != 200:
+        return False, f"http {result['status']}: {result['error']}"
+    log = result["log"]
+    if log is None:
+        return False, "no log line"
+    rule = question.get("pass", {})
+    asked_at = datetime.fromisoformat(result["asked_at"])
+    failures = (
+        _tool_failures(rule, log)
+        + _answer_failures(rule, log["answer"])
+        + _db_failures(rule, result["db"], asked_at)
+    )
+    return (not failures, "; ".join(failures) or "ok")
+
+
 def run_one(
     client: httpx.Client, question: dict, clock: Callable[[], float] = time.perf_counter
 ) -> dict:
@@ -119,6 +258,7 @@ def run_one(
         "error": None,
         "wall_s": 0.0,
         "log": None,
+        "asked_at": now().isoformat(),
     }
     offset = log_offset()
     start = clock()
@@ -133,6 +273,8 @@ def run_one(
     result["wall_s"] = clock() - start
     lines = read_log_since(offset)
     result["log"] = lines[-1] if lines else None
+    result["db"] = snapshot_db()
+    result["passed"], result["reason"] = grade(question, result)
     return result
 
 
@@ -153,8 +295,10 @@ def replay(
     for n, question in enumerate(questions, 1):
         result = run_one(client, question, clock)
         results.append(result)
+        verdict = "PASS" if result["passed"] else f"FAIL {result['reason']}"
         print(
-            f"{n:2}/{len(questions)} {result['id']} {result['status']} {result['wall_s']:.1f} s"
+            f"{n:2}/{len(questions)} {result['id']} {result['status']} "
+            f"{result['wall_s']:.1f} s {verdict}"
         )
         pace(result["wall_s"], gemini_calls(result["log"]), sleep)
     return results

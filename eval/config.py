@@ -15,3 +15,7 @@ QUERY_TIMEOUT_S = client_config.QUERY_TIMEOUT_S
 SECONDS_PER_CALL = 4
 CLIENT_MODULE = "client_pc.client"
 PROCESS_LIST_TIMEOUT_S = 10
+# "in N minutes" is worked out from the time in the system instruction, a few seconds
+# before the reminder is stored; fixed clock times must land on the minute.
+DUE_AT_TOLERANCE_S = 60
+DUE_IN_TOLERANCE_S = 120
