@@ -114,7 +114,7 @@ Notes: dependencies are added with the code that uses them (sounddevice in T2, p
 
 Manual checks, with the real server and models: 20 spoken clips are clear on playback (FR-1); the start, thinking and error sounds tell the state without a screen, and the error sound plays with the server stopped (refused), on a silent recording (real 400 "no speech detected"), on a short tap (discarded locally), and on a real timeout made by temporarily setting QUERY_TIMEOUT_S = 1, restored afterwards (FR-2); after a timeout the next key press works (FR-3); a reminder due while the client runs is heard within 10 s, and one set while the client was closed is heard as "Missed reminder" within 10 s of the next start; the reminder is acked only after its audio has played (FR-15); Ctrl+C stops the key listener and the audio stream with no hanging process.
 
-## M7 (v1): Evaluation and reliability | in progress
+## M7 (v1): Evaluation and reliability | done
 Goal: Frozen eval set, recorder, runner and report; measure, then fix only what the numbers justify · GitHub milestone: #7
 
 | Task | FR | Files | Done when | Test | Issue | Done |
