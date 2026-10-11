@@ -1,8 +1,10 @@
+import array
 import io
 import logging
+import math
 import threading
 import wave
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 import sounddevice as sd
 
@@ -97,3 +99,71 @@ class Recorder:
             w.setframerate(config.SAMPLE_RATE)
             w.writeframes(pcm)
         return buf.getvalue()
+
+
+def make_tone(segments: Sequence[tuple[float, float]]) -> bytes:
+    """16-bit mono PCM of sine segments (Hz, s); each fades in and out to avoid clicks."""
+    peak = config.TONE_VOLUME * 32767
+    fade = int(config.TONE_FADE_S * config.SAMPLE_RATE)
+    samples = array.array("h")
+    for freq, seconds in segments:
+        n = round(seconds * config.SAMPLE_RATE)
+        for i in range(n):
+            envelope = min(1.0, i / fade, (n - 1 - i) / fade)
+            angle = 2 * math.pi * freq * i / config.SAMPLE_RATE
+            samples.append(round(peak * envelope * math.sin(angle)))
+    return samples.tobytes()
+
+
+class Player:
+    """Plays tones and WAVs through one output stream kept open since client start.
+
+    Opening an output stream takes about 0.4 s (M6-T1 spike), so it opens once.
+    """
+
+    def __init__(self, stream_factory: Callable | None = None) -> None:
+        self._factory = stream_factory or sd.RawOutputStream
+        self._stream = None
+
+    def open(self) -> None:
+        if self._stream is not None:
+            return
+        self._stream = self._factory(
+            samplerate=config.SAMPLE_RATE,
+            channels=config.CHANNELS,
+            dtype=config.DTYPE,
+        )
+        self._stream.start()
+
+    def close(self) -> None:
+        stream, self._stream = self._stream, None
+        if stream is not None:
+            stream.stop()
+            stream.close()
+
+    def play_start(self) -> None:
+        self._play(make_tone(config.START_TONE))
+
+    def play_thinking(self) -> None:
+        self._play(make_tone(config.THINKING_TONE))
+
+    def play_error(self) -> None:
+        self._play(make_tone(config.ERROR_TONE))
+
+    def play_wav(self, wav: bytes) -> None:
+        with wave.open(io.BytesIO(wav), "rb") as w:
+            if (w.getnchannels(), w.getframerate(), w.getsampwidth()) != (
+                config.CHANNELS,
+                config.SAMPLE_RATE,
+                config.SAMPLE_BYTES,
+            ):
+                raise ValueError("audio must be 16 kHz mono 16-bit")
+            self._play(w.readframes(w.getnframes()))
+
+    def _play(self, pcm: bytes) -> None:
+        # The silence keeps the last real audio from sitting unplayed in the stream
+        # buffer when this returns; FR-15 acks a reminder only after it was heard.
+        tail = bytes(
+            int(config.PLAYBACK_TAIL_S * config.SAMPLE_RATE) * config.SAMPLE_BYTES
+        )
+        self._stream.write(pcm + tail)
