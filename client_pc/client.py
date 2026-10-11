@@ -288,6 +288,7 @@ class Client:
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self._transport = transport
+        self._poll_failing = False
         self._recorder = recorder
         self._player = player
         self._send = send
@@ -337,13 +338,27 @@ class Client:
         else:
             self._spawn(lambda: self._query(wav, t_release))
 
+    def poll(self) -> None:
+        """Deliver due reminders, but only while the client is idle."""
+        if self.state == IDLE:
+            self.deliver_due()
+
     def deliver_due(self) -> None:
         """Speak every due reminder and ack each one only after its audio played."""
         try:
             due = fetch_due(self._transport)
         except QueryError as e:
-            log.debug("reminder poll skipped: %s", e)
+            # Warn once per outage, not once per poll: polls repeat every few seconds.
+            if not self._poll_failing:
+                log.warning(
+                    "reminder poll failing, will keep retrying: %s",
+                    str(e)[: config.ERROR_MAX_CHARS],
+                )
+            self._poll_failing = True
             return
+        if self._poll_failing:
+            log.info("reminder poll recovered")
+            self._poll_failing = False
         for reminder in due:
             try:
                 self._deliver(reminder)
@@ -400,3 +415,41 @@ class Client:
     @staticmethod
     def _is_ptt(key) -> bool:
         return key == getattr(keyboard.Key, config.PTT_KEY)
+
+
+def run(
+    client: Client,
+    recorder: Recorder,
+    player: Player,
+    make_listener: Callable = keyboard.Listener,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Open the audio streams, listen for the key and poll for reminders until Ctrl+C."""
+    listener = make_listener(
+        on_press=client.on_key_press, on_release=client.on_key_release
+    )
+    try:
+        recorder.open()
+        player.open()
+        listener.start()
+        while True:
+            client.poll()
+            sleep(config.POLL_INTERVAL_S)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        listener.stop()
+        recorder.close()
+        player.close()
+
+
+def main() -> None:
+    logging.basicConfig(
+        level=config.LOG_LEVEL, format="%(asctime)s %(levelname)s %(message)s"
+    )
+    recorder, player = Recorder(), Player()
+    run(Client(recorder, player), recorder, player)
+
+
+if __name__ == "__main__":
+    main()

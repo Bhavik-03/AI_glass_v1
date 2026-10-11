@@ -16,3 +16,5 @@ ERROR_TONE = ((300, 0.2), (200, 0.3))
 PTT_KEY = "f9"  # name of a pynput.keyboard.Key member
 MIN_RECORDING_S = 0.3
 ERROR_MAX_CHARS = 200
+POLL_INTERVAL_S = 10
+LOG_LEVEL = "INFO"

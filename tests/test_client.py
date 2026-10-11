@@ -12,6 +12,7 @@ import httpx
 import pytest
 from pynput import keyboard
 
+from client_pc import client as client_mod
 from client_pc import config
 from client_pc.client import (
     Client,
@@ -23,7 +24,9 @@ from client_pc.client import (
     ack_reminder,
     fetch_audio,
     fetch_due,
+    main,
     make_tone,
+    run,
     send_query,
 )
 
@@ -1503,7 +1506,7 @@ POLL_FAILURE_IDS = ["500", "timeout", "connect_error", "invalid_json", "json_obj
 
 @pytest.mark.parametrize("outcome", POLL_FAILURES, ids=POLL_FAILURE_IDS)
 def test_fr15_poll_failure_is_silent(outcome, caplog, capsys):
-    """A failed poll prints nothing, makes no sound, logs no warning, raises nothing, asks for no audio."""
+    """A failed poll prints nothing, makes no sound, logs exactly one warning, raises nothing, asks for no audio."""
     rig, api = reminder_rig([R3])
     api.set(DUE, outcome)
     with caplog.at_level(logging.DEBUG, logger="client_pc.client"):
@@ -1511,7 +1514,7 @@ def test_fr15_poll_failure_is_silent(outcome, caplog, capsys):
     assert capsys.readouterr().out == ""
     assert not any(x in rig.log for x in ("start", "thinking", "error"))
     assert not any(isinstance(x, tuple) and x[0] == "wav" for x in rig.log)
-    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+    assert len([r for r in caplog.records if r.levelno >= logging.WARNING]) == 1
     assert api.requests == [DUE]
     assert rig.client.state == "idle"
 
@@ -1620,3 +1623,360 @@ def test_fr15_ack_reminder_ok_returns_none():
     """ack_reminder returns None on a 200 {"status": "ok"}."""
     handler = fixed_response(200, json={"status": "ok"})
     assert ack_reminder(3, transport=httpx.MockTransport(handler)) is None
+
+
+# ---- FR-15: poll, poll-failure logging, run() and main() (M6-T7). All fakes. ----
+
+
+def test_fr15_poll_interval_and_log_level_defaults():
+    """The poll interval is 10 s and the default log level is INFO, both from config."""
+    assert config.POLL_INTERVAL_S == 10
+    assert config.LOG_LEVEL == "INFO"
+
+
+def test_fr15_poll_when_idle_asks_for_due_reminders():
+    """An idle client's poll makes the GET /reminders/due request and delivers the reminder."""
+    rig, api = reminder_rig([R3])
+    rig.client.poll()
+    assert api.requests == [DUE, audio_path(3), ack_path(3)]
+
+
+@pytest.mark.parametrize("state", ["recording", "waiting", "playing"])
+def test_fr15_poll_when_busy_sends_no_request(state):
+    """The poll runs only when the client is idle: recording, waiting or playing send no request."""
+    rig, api = reminder_rig([R3])
+    rig.client.state = state
+    rig.client.poll()
+    assert api.requests == []
+    assert rig.client.state == state
+
+
+def test_fr15_poll_asks_again_after_returning_to_idle():
+    """After a busy period ends and the client is idle again, the next poll makes a request."""
+    rig, api = reminder_rig([])
+    rig.client.state = "recording"
+    rig.client.poll()
+    assert api.requests == []
+    rig.client.state = "idle"
+    rig.client.poll()
+    assert api.requests == [DUE]
+
+
+def due_failure():
+    return httpx.Response(500, json={"error": "boom"})
+
+
+def due_no_content():
+    return httpx.Response(204)
+
+
+def logged(caplog, level: int) -> list[str]:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == level and r.name == "client_pc.client"
+    ]
+
+
+def recovered(caplog) -> list[str]:
+    return [m for m in logged(caplog, logging.INFO) if "recovered" in m]
+
+
+def test_fr15_three_failing_polls_log_exactly_one_warning(caplog):
+    """Polls that keep failing log one warning at the first failure, never one per poll."""
+    rig, api = reminder_rig([R3])
+    api.set(DUE, due_failure)
+    with caplog.at_level(logging.DEBUG, logger="client_pc.client"):
+        for _ in range(3):
+            rig.client.deliver_due()
+    assert api.requests == [DUE, DUE, DUE]
+    assert len(warnings_of(caplog)) == 1
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+
+
+def test_fr15_poll_failure_warning_text_is_cut_to_error_max_chars(caplog):
+    """The poll-failure warning carries the error text, cut to ERROR_MAX_CHARS."""
+    rig, api = reminder_rig([R3])
+    api.set(DUE, lambda: httpx.Response(500, json={"error": LONG}))
+    with caplog.at_level(logging.INFO, logger="client_pc.client"):
+        rig.client.deliver_due()
+    warnings = warnings_of(caplog)
+    assert len(warnings) == 1
+    # The cut applies to the whole error message ("server returned 500: " + body).
+    assert "x" * (config.ERROR_MAX_CHARS - 40) in warnings[0]
+    assert "x" * config.ERROR_MAX_CHARS not in warnings[0]
+
+
+@pytest.mark.parametrize("outcome", POLL_FAILURES, ids=POLL_FAILURE_IDS)
+def test_fr15_each_kind_of_poll_failure_warns_once_then_stays_quiet(outcome, caplog):
+    """Every kind of poll failure warns on the first one only."""
+    rig, api = reminder_rig([R3])
+    api.set(DUE, outcome)
+    with caplog.at_level(logging.DEBUG, logger="client_pc.client"):
+        rig.client.deliver_due()
+        rig.client.deliver_due()
+    assert len(warnings_of(caplog)) == 1
+
+
+def test_fr15_failing_polls_in_a_row_stay_silent_for_sound_and_print(capsys):
+    """Repeated failing polls play no sound, print nothing and never raise."""
+    rig, api = reminder_rig([R3])
+    api.set(DUE, httpx.ConnectError("refused"))
+    for _ in range(3):
+        rig.client.poll()
+    assert capsys.readouterr().out == ""
+    assert rig.log == [("http", *DUE)] * 3
+    assert rig.client.state == "idle"
+
+
+@pytest.mark.parametrize(
+    "good",
+    [due_no_content, lambda: httpx.Response(200, json=[])],
+    ids=["204", "empty_list"],
+)
+def test_fr15_recovery_after_failures_logs_one_info_recovered(good, caplog):
+    """The first good poll after failures logs one INFO 'recovered'; later good polls log none."""
+    rig, api = reminder_rig([R3])
+    api.set(DUE, due_failure)
+    with caplog.at_level(logging.DEBUG, logger="client_pc.client"):
+        rig.client.deliver_due()
+        rig.client.deliver_due()
+        api.set(DUE, good)
+        rig.client.deliver_due()
+        rig.client.deliver_due()
+        rig.client.deliver_due()
+    assert len(recovered(caplog)) == 1
+    assert len(warnings_of(caplog)) == 1
+
+
+def test_fr15_recovery_with_a_due_reminder_logs_recovered(caplog):
+    """A good poll that returns reminders also counts as recovery, and the reminder is delivered."""
+    rig, api = reminder_rig([R3])
+    good = api.routes[DUE]
+    api.set(DUE, due_failure)
+    with caplog.at_level(logging.DEBUG, logger="client_pc.client"):
+        rig.client.deliver_due()
+        api.set(DUE, good)
+        rig.client.deliver_due()
+    assert len(recovered(caplog)) == 1
+    assert ("wav", AUDIO3) in rig.log
+    assert len(warnings_of(caplog)) == 1
+
+
+def test_fr15_healthy_polls_log_no_warning_and_no_recovered(caplog):
+    """Polls that never failed log no warning and no 'recovered' note."""
+    rig, api = reminder_rig([])
+    api.set(DUE, due_no_content)
+    with caplog.at_level(logging.DEBUG, logger="client_pc.client"):
+        for _ in range(3):
+            rig.client.deliver_due()
+    assert warnings_of(caplog) == []
+    assert recovered(caplog) == []
+
+
+def test_fr15_new_failure_after_recovery_warns_again(caplog):
+    """After a recovery, the next failure logs a new warning, and the next recovery a new note."""
+    rig, api = reminder_rig([])
+    with caplog.at_level(logging.DEBUG, logger="client_pc.client"):
+        api.set(DUE, due_failure)
+        rig.client.deliver_due()
+        api.set(DUE, due_no_content)
+        rig.client.deliver_due()
+        api.set(DUE, due_failure)
+        rig.client.deliver_due()
+        rig.client.deliver_due()
+        api.set(DUE, due_no_content)
+        rig.client.deliver_due()
+    assert len(warnings_of(caplog)) == 2
+    assert len(recovered(caplog)) == 2
+
+
+def test_fr15_per_reminder_failure_is_not_a_poll_failure(caplog):
+    """An audio fetch failure keeps its own warning and does not make the next poll log 'recovered'."""
+    rig, api = reminder_rig([R3])
+    api.set(audio_path(3), httpx.ReadTimeout("slow"))
+    with caplog.at_level(logging.DEBUG, logger="client_pc.client"):
+        rig.client.deliver_due()
+        rig.client.deliver_due()
+    assert len(warnings_of(caplog)) == 2
+    assert recovered(caplog) == []
+
+
+class FakeListener:
+    def __init__(self, log: list, **kwargs) -> None:
+        self.log = log
+        self.kwargs = kwargs
+        log.append("listener_created")
+
+    def start(self) -> None:
+        self.log.append("listener.start")
+
+    def stop(self) -> None:
+        self.log.append("listener.stop")
+
+
+class FakeClient:
+    def __init__(self, log: list) -> None:
+        self.log = log
+        self.poll_exc: BaseException | None = None
+
+    def poll(self) -> None:
+        self.log.append("poll")
+        if self.poll_exc:
+            raise self.poll_exc
+
+    def on_key_press(self, key) -> None:
+        pass
+
+    def on_key_release(self, key) -> None:
+        pass
+
+
+class FakeStreamOwner:
+    """Stands in for Recorder or Player: records open and close in the shared log."""
+
+    def __init__(self, log: list, name: str) -> None:
+        self.log = log
+        self.name = name
+        self.open_exc: BaseException | None = None
+
+    def open(self) -> None:
+        self.log.append(f"{self.name}.open")
+        if self.open_exc:
+            raise self.open_exc
+
+    def close(self) -> None:
+        self.log.append(f"{self.name}.close")
+
+
+class RunRig:
+    def __init__(self, stop_on_sleep: int = 1) -> None:
+        self.log: list = []
+        self.client = FakeClient(self.log)
+        self.recorder = FakeStreamOwner(self.log, "recorder")
+        self.player = FakeStreamOwner(self.log, "player")
+        self.listeners: list[FakeListener] = []
+        self.sleeps: list[float] = []
+        self.stop_on_sleep = stop_on_sleep
+
+    def make_listener(self, **kwargs) -> FakeListener:
+        listener = FakeListener(self.log, **kwargs)
+        self.listeners.append(listener)
+        return listener
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.log.append("sleep")
+        if len(self.sleeps) >= self.stop_on_sleep:
+            raise KeyboardInterrupt
+
+    def run(self) -> None:
+        run(
+            self.client,
+            self.recorder,
+            self.player,
+            make_listener=self.make_listener,
+            sleep=self.sleep,
+        )
+
+
+def test_fr15_run_start_up_order_and_first_poll_before_first_sleep():
+    """Start-up: create listener, open recorder, open player, start listener, poll once, then sleep."""
+    r = RunRig(stop_on_sleep=1)
+    r.run()
+    assert r.log[:6] == [
+        "listener_created",
+        "recorder.open",
+        "player.open",
+        "listener.start",
+        "poll",
+        "sleep",
+    ]
+
+
+def test_fr15_run_listener_gets_the_clients_key_handlers():
+    """The listener is created with the client's on_key_press and on_key_release."""
+    r = RunRig()
+    r.run()
+    assert len(r.listeners) == 1
+    assert r.listeners[0].kwargs == {
+        "on_press": r.client.on_key_press,
+        "on_release": r.client.on_key_release,
+    }
+
+
+def test_fr15_run_polls_and_sleeps_alternately_with_poll_interval():
+    """Each poll is followed by a sleep of POLL_INTERVAL_S: 3 polls and 3 sleeps."""
+    r = RunRig(stop_on_sleep=3)
+    r.run()
+    assert r.log.count("poll") == 3
+    assert r.sleeps == [config.POLL_INTERVAL_S] * 3
+    loop = r.log[r.log.index("listener.start") + 1 : r.log.index("listener.stop")]
+    assert loop == ["poll", "sleep"] * 3
+
+
+def test_fr15_run_ctrl_c_in_sleep_returns_normally_and_cleans_up():
+    """Ctrl+C during the sleep ends run() without an exception and stops everything once."""
+    r = RunRig(stop_on_sleep=2)
+    r.run()
+    assert r.log.count("listener.stop") == 1
+    assert r.log.count("recorder.close") == 1
+    assert r.log.count("player.close") == 1
+
+
+def test_fr15_run_ctrl_c_in_poll_returns_normally_and_cleans_up():
+    """Ctrl+C raised inside the poll ends run() without an exception and stops everything once."""
+    r = RunRig(stop_on_sleep=99)
+    r.client.poll_exc = KeyboardInterrupt()
+    r.run()
+    assert r.sleeps == []
+    assert r.log.count("listener.stop") == 1
+    assert r.log.count("recorder.close") == 1
+    assert r.log.count("player.close") == 1
+
+
+def test_fr15_run_cleanup_happens_after_the_loop_ended():
+    """The listener and both streams are stopped only after the last sleep."""
+    r = RunRig(stop_on_sleep=1)
+    r.run()
+    after = r.log[r.log.index("sleep") + 1 :]
+    assert sorted(after) == ["listener.stop", "player.close", "recorder.close"]
+
+
+def test_fr15_run_recorder_open_failure_propagates_after_cleanup():
+    """If the microphone cannot be opened the error propagates, cleanup ran, and nothing else started."""
+    r = RunRig()
+    r.recorder.open_exc = OSError("no microphone")
+    with pytest.raises(OSError, match="no microphone"):
+        r.run()
+    assert "player.open" not in r.log
+    assert "listener.start" not in r.log
+    assert "poll" not in r.log
+    assert r.log.count("listener.stop") == 1
+    assert r.log.count("recorder.close") == 1
+    assert r.log.count("player.close") == 1
+
+
+def test_fr15_main_wires_recorder_player_client_and_logging(monkeypatch):
+    """main() sets the log level from config and runs one Client built with the same Recorder and Player."""
+    built: list[tuple] = []
+    runs: list[tuple] = []
+    basic: list[dict] = []
+
+    class SpyClient(Client):
+        def __init__(self, *args, **kwargs) -> None:
+            built.append(args)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(client_mod, "Client", SpyClient)
+    monkeypatch.setattr(client_mod, "run", lambda *a, **k: runs.append((a, k)))
+    monkeypatch.setattr(logging, "basicConfig", lambda **kw: basic.append(kw))
+    main()
+    assert len(basic) == 1
+    assert basic[0]["level"] == config.LOG_LEVEL == "INFO"
+    assert len(runs) == 1
+    (client, recorder, player), _ = runs[0]
+    assert isinstance(client, Client)
+    assert isinstance(recorder, Recorder)
+    assert isinstance(player, Player)
+    assert built == [(recorder, player)]

@@ -95,12 +95,15 @@ ai-glasses/
 py -3.11 -m venv .venv                                    # create the venv once
 .venv\Scripts\python -m pip install -r requirements.txt   # after any dependency change
 .venv\Scripts\python -m server.main                       # run server (host and port from server/config.py)
+.venv\Scripts\python -m client_pc.client                  # run PC client (start the server first)
 .venv\Scripts\python -m pytest -q                          # all tests; must pass before any commit
 .venv\Scripts\python -m ruff check .                       # lint
 .venv\Scripts\python -m ruff format --check .              # format check
 .venv\Scripts\python tests\run_eval.py                     # 30-question eval; real Gemini, slow
 ```
 Use PowerShell syntax: run commands on separate lines, not `&&` (Windows PowerShell 5.1 lacks it).
+Client microphone: it stays open while the client runs, frames are discarded unless the key is held,
+and nothing is stored.
 
 ## Testing
 - Tests come from the task's acceptance criteria, written before the code. Name: `test_fr<N>_<what>`.
