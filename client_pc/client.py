@@ -6,6 +6,7 @@ import threading
 import wave
 from collections.abc import Callable, Sequence
 
+import httpx
 import sounddevice as sd
 
 from client_pc import config
@@ -167,3 +168,53 @@ class Player:
             int(config.PLAYBACK_TAIL_S * config.SAMPLE_RATE) * config.SAMPLE_BYTES
         )
         self._stream.write(pcm + tail)
+
+
+class QueryError(Exception):
+    """The server could not answer a question."""
+
+
+class QueryTimeout(QueryError):
+    pass
+
+
+class ServerUnreachable(QueryError):
+    pass
+
+
+def send_query(wav: bytes, transport: httpx.BaseTransport | None = None) -> bytes:
+    """POST the question to /query and return the answer WAV."""
+    try:
+        with httpx.Client(
+            base_url=config.SERVER_URL,
+            timeout=config.QUERY_TIMEOUT_S,
+            transport=transport,
+        ) as http:
+            response = http.post(
+                "/query", files={"audio": ("question.wav", wav, "audio/wav")}
+            )
+    except httpx.TimeoutException as e:
+        raise QueryTimeout(f"no answer within {config.QUERY_TIMEOUT_S} s") from e
+    except httpx.ConnectError as e:
+        raise ServerUnreachable(
+            f"cannot reach the server at {config.SERVER_URL}"
+        ) from e
+    except httpx.HTTPError as e:
+        raise QueryError(f"request failed: {e}") from e
+    if response.status_code != 200:
+        raise QueryError(
+            f"server returned {response.status_code}: {_error_text(response)}"
+        )
+    content_type = (
+        response.headers.get("content-type", "").split(";")[0].strip().lower()
+    )
+    if content_type != "audio/wav":
+        raise QueryError(f"expected audio/wav, got {content_type or 'no content type'}")
+    return response.content
+
+
+def _error_text(response: httpx.Response) -> str:
+    try:
+        return str(response.json()["error"])
+    except (ValueError, KeyError, TypeError):
+        return response.text

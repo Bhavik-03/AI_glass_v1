@@ -6,10 +6,19 @@ import math
 import wave
 from itertools import pairwise
 
+import httpx
 import pytest
 
 from client_pc import config
-from client_pc.client import Player, Recorder, make_tone
+from client_pc.client import (
+    Player,
+    QueryError,
+    QueryTimeout,
+    Recorder,
+    ServerUnreachable,
+    make_tone,
+    send_query,
+)
 
 CHUNK = 1600  # samples per fed chunk (0.1 s)
 
@@ -474,3 +483,200 @@ def test_fr2_play_wav_rejects_wrong_format_and_writes_nothing(player, out_factor
     with pytest.raises(ValueError):
         player.play_wav(bad)
     assert out_factory.streams[0].writes == []
+
+
+# ---- FR-3: send_query. httpx.MockTransport: no network, no real server. ----
+
+ANSWER_WAV = wav_of([3, -3] * 400)
+QUESTION_WAV = wav_of([11, -11, 5] * 300)
+
+
+def answer_handler(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200, content=ANSWER_WAV, headers={"content-type": "audio/wav"}
+    )
+
+
+def capture(seen: list[httpx.Request], respond=answer_handler):
+    def handler(request: httpx.Request) -> httpx.Response:
+        request.read()
+        seen.append(request)
+        return respond(request)
+
+    return handler
+
+
+def fixed_response(status: int, **kwargs):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, **kwargs)
+
+    return handler
+
+
+def raising(exc: Exception):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise exc
+
+    return handler
+
+
+def query_with(handler, wav: bytes = QUESTION_WAV) -> bytes:
+    return send_query(wav, transport=httpx.MockTransport(handler))
+
+
+def test_fr3_posts_to_query_path():
+    """send_query makes one POST to /query."""
+    seen: list[httpx.Request] = []
+    query_with(capture(seen))
+    assert len(seen) == 1
+    assert seen[0].method == "POST"
+    assert seen[0].url.path == "/query"
+
+
+def test_fr3_request_goes_to_configured_server():
+    """The request goes to the configured server URL."""
+    seen: list[httpx.Request] = []
+    query_with(capture(seen))
+    assert str(seen[0].url) == config.SERVER_URL.rstrip("/") + "/query"
+
+
+def test_fr3_body_is_multipart_with_audio_part_of_type_wav():
+    """The body is multipart/form-data with a field named audio of content type audio/wav."""
+    seen: list[httpx.Request] = []
+    query_with(capture(seen))
+    assert seen[0].headers["content-type"].startswith("multipart/form-data")
+    body = seen[0].content
+    assert b'name="audio"' in body
+    assert b"audio/wav" in body
+
+
+def test_fr3_audio_part_bytes_equal_the_wav():
+    """The audio part carries exactly the WAV bytes that were passed in."""
+    seen: list[httpx.Request] = []
+    query_with(capture(seen))
+    assert QUESTION_WAV in seen[0].content
+
+
+def test_fr3_only_one_part_is_sent():
+    """Exactly one multipart part (audio) is sent."""
+    seen: list[httpx.Request] = []
+    query_with(capture(seen))
+    assert seen[0].content.count(b"Content-Disposition") == 1
+
+
+def test_fr3_timeout_is_20_seconds_on_all_phases():
+    """The request uses the 20 s client timeout for connect, read, write and pool."""
+    seen: list[httpx.Request] = []
+    query_with(capture(seen))
+    assert seen[0].extensions["timeout"] == {
+        "connect": 20,
+        "read": 20,
+        "write": 20,
+        "pool": 20,
+    }
+
+
+def test_fr3_timeout_follows_config_at_call_time(monkeypatch):
+    """The timeout comes from config.QUERY_TIMEOUT_S, read when the query is sent."""
+    monkeypatch.setattr(config, "QUERY_TIMEOUT_S", 7)
+    seen: list[httpx.Request] = []
+    query_with(capture(seen))
+    assert set(seen[0].extensions["timeout"].values()) == {7}
+
+
+def test_fr3_default_query_timeout_is_20_seconds():
+    """The default client timeout is 20 s."""
+    assert config.QUERY_TIMEOUT_S == 20
+
+
+def test_fr3_200_wav_returns_the_answer_bytes():
+    """A 200 audio/wav response returns the exact answer WAV bytes."""
+    assert query_with(answer_handler) == ANSWER_WAV
+
+
+def test_fr3_content_type_parameters_are_ignored():
+    """audio/wav with parameters (charset) is still accepted."""
+    handler = fixed_response(
+        200, content=ANSWER_WAV, headers={"content-type": "audio/wav; charset=binary"}
+    )
+    assert query_with(handler) == ANSWER_WAV
+
+
+def test_fr3_400_raises_query_error_with_status_and_server_text():
+    """A 400 raises QueryError that includes the status and the server's error text."""
+    handler = fixed_response(400, json={"error": "no speech detected"})
+    with pytest.raises(QueryError) as info:
+        query_with(handler)
+    assert "400" in str(info.value)
+    assert "no speech detected" in str(info.value)
+
+
+def test_fr3_500_raises_query_error_with_status_and_server_text():
+    """A 500 raises QueryError that includes the status and the '<stage>: <reason>' text."""
+    handler = fixed_response(500, json={"error": "stt: boom"})
+    with pytest.raises(QueryError) as info:
+        query_with(handler)
+    assert "500" in str(info.value)
+    assert "stt: boom" in str(info.value)
+
+
+def test_fr3_500_with_non_json_body_still_raises_with_body_text():
+    """A 500 whose body is not JSON raises QueryError that includes the raw body text."""
+    handler = fixed_response(500, text="Internal Server Error xyz")
+    with pytest.raises(QueryError) as info:
+        query_with(handler)
+    assert "500" in str(info.value)
+    assert "Internal Server Error xyz" in str(info.value)
+
+
+def test_fr3_200_with_json_content_type_is_a_client_error():
+    """A 200 whose content type is not audio/wav raises QueryError."""
+    handler = fixed_response(200, json={"hello": "world"})
+    with pytest.raises(QueryError):
+        query_with(handler)
+
+
+def test_fr3_200_with_html_content_type_is_a_client_error():
+    """A 200 text/html response raises QueryError, not returned as audio."""
+    handler = fixed_response(200, html="<html></html>")
+    with pytest.raises(QueryError):
+        query_with(handler)
+
+
+def test_fr3_timeout_raises_query_timeout_mentioning_limit():
+    """A timeout raises QueryTimeout, which names the 20 s limit."""
+    with pytest.raises(QueryTimeout) as info:
+        query_with(raising(httpx.ReadTimeout("x")))
+    assert type(info.value) is QueryTimeout
+    assert "20" in str(info.value)
+
+
+def test_fr3_refused_connection_raises_server_unreachable_mentioning_url():
+    """A refused connection raises ServerUnreachable, which names the server URL."""
+    with pytest.raises(ServerUnreachable) as info:
+        query_with(raising(httpx.ConnectError("refused")))
+    assert type(info.value) is ServerUnreachable
+    assert config.SERVER_URL in str(info.value)
+
+
+def test_fr3_other_http_error_raises_plain_query_error():
+    """Any other httpx error raises plain QueryError, not a subclass."""
+    with pytest.raises(QueryError) as info:
+        query_with(raising(httpx.ReadError("broken")))
+    assert type(info.value) is QueryError
+
+
+def test_fr3_http_status_error_is_plain_query_error():
+    """A server error response raises plain QueryError, distinct from timeout and unreachable."""
+    with pytest.raises(QueryError) as info:
+        query_with(fixed_response(400, json={"error": "bad audio"}))
+    assert type(info.value) is QueryError
+
+
+def test_fr3_error_classes_inherit_from_query_error():
+    """QueryTimeout and ServerUnreachable are QueryError subclasses and are distinct."""
+    assert issubclass(QueryError, Exception)
+    assert issubclass(QueryTimeout, QueryError)
+    assert issubclass(ServerUnreachable, QueryError)
+    assert not issubclass(QueryTimeout, ServerUnreachable)
+    assert not issubclass(ServerUnreachable, QueryTimeout)
