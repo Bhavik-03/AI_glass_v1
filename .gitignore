@@ -29,3 +29,6 @@ __pycache__/
 models/
 *.onnx
 *.onnx.json
+
+# exploratory eval reports; the final one is added with git add -f (M7-T11)
+eval/results/
