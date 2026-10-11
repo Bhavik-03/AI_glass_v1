@@ -8,6 +8,21 @@ Pipeline: microphone -> faster-whisper -> Gemini with tools -> Piper -> speakers
 
 The long-term goal is a pair of glasses that act as a second brain; this is version 1.
 
+## Architecture
+
+```mermaid
+flowchart LR
+    C["PC client<br/>mic, F9 key, speakers"] -->|"question WAV"| STT
+    subgraph S["Laptop server (FastAPI, 127.0.0.1)"]
+        STT["Whisper<br/>speech to text, GPU"] --> LLM["Gemini with tools<br/>cloud API"]
+        LLM <--> T["Tools<br/>web search (Tavily),<br/>notes and reminders (SQLite)"]
+        LLM --> TTS["Piper<br/>text to speech"]
+    end
+    TTS -->|"answer WAV"| C
+```
+
+The client also polls the server every 10 s and speaks reminders when they are due.
+
 ## Requirements
 
 - Windows, Python 3.11.
