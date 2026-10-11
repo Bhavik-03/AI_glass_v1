@@ -10,7 +10,9 @@ MARKER_PATH = CLIP_DIR / "restore-pending"
 DB_PATH = server_config.DB_PATH
 LOG_PATH = server_config.LOG_PATH
 SERVER_URL = client_config.SERVER_URL
-QUERY_TIMEOUT_S = client_config.QUERY_TIMEOUT_S
+# Above the server's 20 s worst case and the client's 25 s, so the runner records a 500
+# instead of giving up first.
+QUERY_TIMEOUT_S = 30
 # Gemini free tier allows 15 requests a minute, so each call gets 4 s.
 SECONDS_PER_CALL = 4
 CLIENT_MODULE = "client_pc.client"

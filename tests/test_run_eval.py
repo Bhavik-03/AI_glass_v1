@@ -402,6 +402,33 @@ def main_env(env, monkeypatch):
     return state
 
 
+def test_fr16_eval_query_timeout_is_its_own_value_of_at_least_30(monkeypatch):
+    """The eval timeout is >= 30 s and independent of the client's QUERY_TIMEOUT_S."""
+    from client_pc import config as client_config
+
+    assert eval_config.QUERY_TIMEOUT_S >= 30
+    before = eval_config.QUERY_TIMEOUT_S
+    monkeypatch.setattr(client_config, "QUERY_TIMEOUT_S", 999)
+    assert eval_config.QUERY_TIMEOUT_S == before
+
+
+def test_fr16_main_http_client_uses_eval_query_timeout(main_env, monkeypatch):
+    """run_eval builds its httpx client with eval config.QUERY_TIMEOUT_S."""
+    monkeypatch.setattr(eval_config, "QUERY_TIMEOUT_S", 47)
+    seen: list = []
+    real_factory = run_eval.httpx.Client
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs.get("timeout"))
+        return real_factory(*args, **kwargs)
+
+    monkeypatch.setattr(run_eval.httpx, "Client", spy)
+    main_env["health"] = 503  # stop early; the client is built before the health check
+    run_eval.main()
+    assert seen
+    assert all(t == 47 for t in seen)
+
+
 def untouched(state) -> bool:
     return (
         counts(state["env"]) == (2, 1)
