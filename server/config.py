@@ -12,6 +12,8 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 LLM_MODEL = "gemini-3.5-flash-lite"
 LLM_TIMEOUT_S = 10
 LLM_DEADLINE_S = 15
+LLM_FINAL_DEADLINE_S = 18
+LLM_FINAL_START_MAX_S = 8
 LLM_THINKING_LEVEL = "MINIMAL"
 MAX_TOOL_ROUNDS = 3
 TIMEZONE = "Asia/Kolkata"
@@ -30,5 +32,9 @@ STT_DEVICE = "cuda"
 STT_COMPUTE_TYPE = "float16"
 SAMPLE_RATE = 16000
 STT_WARMUP_S = 1
+# Vocabulary hint for whisper: the assistant's own command words and the home city only.
+STT_INITIAL_PROMPT = (
+    f"Note, notes, remind me, reminder, reminders, cancel. {HOME_CITY}."
+)
 TTS_VOICE_PATH = ROOT / "models" / "en_US-lessac-medium.onnx"
 TTS_WARMUP_TEXT = "Ready."

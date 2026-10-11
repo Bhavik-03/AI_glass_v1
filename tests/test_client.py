@@ -574,15 +574,15 @@ def test_fr3_only_one_part_is_sent():
     assert seen[0].content.count(b"Content-Disposition") == 1
 
 
-def test_fr3_timeout_is_20_seconds_on_all_phases():
-    """The request uses the 20 s client timeout for connect, read, write and pool."""
+def test_fr3_timeout_is_25_seconds_on_all_phases():
+    """The query uses the 25 s client timeout for connect, read, write and pool."""
     seen: list[httpx.Request] = []
     query_with(capture(seen))
     assert seen[0].extensions["timeout"] == {
-        "connect": 20,
-        "read": 20,
-        "write": 20,
-        "pool": 20,
+        "connect": 25,
+        "read": 25,
+        "write": 25,
+        "pool": 25,
     }
 
 
@@ -594,9 +594,71 @@ def test_fr3_timeout_follows_config_at_call_time(monkeypatch):
     assert set(seen[0].extensions["timeout"].values()) == {7}
 
 
-def test_fr3_default_query_timeout_is_20_seconds():
-    """The default client timeout is 20 s."""
-    assert config.QUERY_TIMEOUT_S == 20
+def test_fr3_default_query_timeout_is_25_seconds():
+    """The default query timeout is 25 s."""
+    assert config.QUERY_TIMEOUT_S == 25
+
+
+def test_fr15_default_poll_timeout_is_20_seconds():
+    """The default timeout for reminder calls (due, audio, ack) is 20 s."""
+    assert config.POLL_TIMEOUT_S == 20
+
+
+def test_fr3_send_query_uses_query_timeout_not_poll_timeout(monkeypatch):
+    """send_query passes config.QUERY_TIMEOUT_S to the request; POLL_TIMEOUT_S is not used."""
+    monkeypatch.setattr(config, "QUERY_TIMEOUT_S", 31)
+    monkeypatch.setattr(config, "POLL_TIMEOUT_S", 13)
+    seen: list[httpx.Request] = []
+    query_with(capture(seen))
+    assert set(seen[0].extensions["timeout"].values()) == {31}
+
+
+def _poll_calls():
+    return [
+        ("due", lambda t: fetch_due(transport=t), httpx.Response(204)),
+        (
+            "audio",
+            lambda t: fetch_audio(3, transport=t),
+            httpx.Response(200, content=AUDIO3, headers={"content-type": "audio/wav"}),
+        ),
+        (
+            "ack",
+            lambda t: ack_reminder(3, transport=t),
+            httpx.Response(200, json={"status": "ok"}),
+        ),
+    ]
+
+
+@pytest.mark.parametrize("index", [0, 1, 2])
+def test_fr15_poll_calls_use_poll_timeout_not_query_timeout(monkeypatch, index):
+    """fetch_due, fetch_audio and ack_reminder pass config.POLL_TIMEOUT_S, read at call time."""
+    monkeypatch.setattr(config, "POLL_TIMEOUT_S", 13)
+    monkeypatch.setattr(config, "QUERY_TIMEOUT_S", 31)
+    _, call, response = _poll_calls()[index]
+    seen: list[httpx.Request] = []
+    call(httpx.MockTransport(capture(seen, lambda request: response)))
+    assert len(seen) == 1
+    assert set(seen[0].extensions["timeout"].values()) == {13}
+
+
+def test_fr15_poll_timeout_message_names_poll_timeout(monkeypatch):
+    """A timeout on a poll call raises QueryTimeout naming the poll timeout, not the query one."""
+    monkeypatch.setattr(config, "POLL_TIMEOUT_S", 13)
+    monkeypatch.setattr(config, "QUERY_TIMEOUT_S", 31)
+    with pytest.raises(QueryTimeout) as info:
+        fetch_due(transport=httpx.MockTransport(raising(httpx.ReadTimeout("x"))))
+    assert "13" in str(info.value)
+    assert "31" not in str(info.value)
+
+
+def test_fr3_query_timeout_message_names_query_timeout(monkeypatch):
+    """A timeout on send_query raises QueryTimeout naming the query timeout actually used."""
+    monkeypatch.setattr(config, "POLL_TIMEOUT_S", 13)
+    monkeypatch.setattr(config, "QUERY_TIMEOUT_S", 31)
+    with pytest.raises(QueryTimeout) as info:
+        query_with(raising(httpx.ReadTimeout("x")))
+    assert "31" in str(info.value)
+    assert "13" not in str(info.value)
 
 
 def test_fr3_200_wav_returns_the_answer_bytes():
@@ -654,11 +716,11 @@ def test_fr3_200_with_html_content_type_is_a_client_error():
 
 
 def test_fr3_timeout_raises_query_timeout_mentioning_limit():
-    """A timeout raises QueryTimeout, which names the 20 s limit."""
+    """A timeout raises QueryTimeout, which names the 25 s limit."""
     with pytest.raises(QueryTimeout) as info:
         query_with(raising(httpx.ReadTimeout("x")))
     assert type(info.value) is QueryTimeout
-    assert "20" in str(info.value)
+    assert "25" in str(info.value)
 
 
 def test_fr3_refused_connection_raises_server_unreachable_mentioning_url():

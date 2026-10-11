@@ -44,10 +44,16 @@ ai-glasses/
 ├── tests/
 │   ├── conftest.py        # shared fixtures, fakes, temporary database
 │   ├── test_server.py     # endpoint tests
-│   ├── test_<module>.py   # one module's own logic
-│   ├── questions.csv      # frozen 30-question eval set
-│   └── run_eval.py        # runs the eval: accuracy + latency
-├── data/                  # assistant.db, gitignored
+│   └── test_<module>.py   # one module's own logic
+├── eval/
+│   ├── questions.json     # frozen 30-question eval set
+│   ├── config.py          # eval paths, pacing
+│   ├── record.py          # records the 30 clips into data/eval/
+│   ├── run_eval.py        # runs the eval: accuracy + latency
+│   ├── live_questions.md  # 10 questions to speak with the key
+│   ├── live_log.py        # prints the last 10 logged queries
+│   └── results/           # <date>.md and .json per run
+├── data/                  # assistant.db; eval/ clips; gitignored
 ├── models/                # Piper voice files, gitignored
 ├── logs/                  # queries.jsonl, gitignored
 └── .claude/               # Claude Code setup: skills, agents, settings
@@ -64,11 +70,13 @@ ai-glasses/
 - Gemini: `gemini-3.5-flash-lite` via `google-genai`, minimal thinking, 10 s timeout per call (API minimum),
   the tool functions (incl. `web_search`, run by the server against Tavily) in every request, at most 3 tool rounds, answers ≤ 2 short
   sentences (< 40 words) except lists. Home city for weather comes from config.
-- LLM stage deadline 15 s: a Gemini or search call starts only if its full timeout fits in the time
-  left; search timeout 5 s. Worst case STT + LLM + TTS = 17 s stays under the client's 20 s.
+- LLM stage deadline 15 s: a Gemini call starts only if its full timeout fits in the time left;
+  the first search always runs; a later tool round needs elapsed + tool timeout + 10 s <= 18 s;
+  one last call without tools may start by 8 s. Search timeout 5 s. Worst case STT + LLM + TTS
+  = 20 s stays under the client's 25 s query timeout (reminder poll timeout stays 20 s).
 - Time zone Asia/Kolkata; current date and time in the system instruction
 - Server binds to 127.0.0.1 in v1
-- Client timeout 20 s; recording max 10 s; reminder poll every 10 s; "missed" after 60 s
+- Client query timeout 25 s; recording max 10 s; reminder poll every 10 s; "missed" after 60 s
 - /query: 400 `{"error": "<reason>"}` if audio is missing or unreadable;
   500 `{"error": "<stage>: <reason>"}` if a stage fails; the server never crashes
 - Every query, failed ones included, writes one JSONL line: question, answer, per-stage timings,
@@ -99,7 +107,9 @@ py -3.11 -m venv .venv                                    # create the venv once
 .venv\Scripts\python -m pytest -q                          # all tests; must pass before any commit
 .venv\Scripts\python -m ruff check .                       # lint
 .venv\Scripts\python -m ruff format --check .              # format check
-.venv\Scripts\python tests\run_eval.py                     # 30-question eval; real Gemini, slow
+.venv\Scripts\python -m eval.record                        # record the 30 eval clips once
+.venv\Scripts\python -m eval.run_eval                      # 30-question eval; real Gemini, slow
+.venv\Scripts\python -m eval.live_log                      # last 10 logged queries
 ```
 Use PowerShell syntax: run commands on separate lines, not `&&` (Windows PowerShell 5.1 lacks it).
 Client microphone: it stays open while the client runs, frames are discarded unless the key is held,
@@ -122,6 +132,6 @@ and nothing is stored.
 - Send anything but the search query to Tavily: no notes, reminders or (from v3) memory content
   in a `web_search` query (Tavily may use queries to improve its models)
 - Commit `logs/`, `.venv/`, `models/`, or model files
-- Edit `tests/questions.csv` after the first eval run: the set is frozen
+- Edit `eval/questions.json` after the first eval run: the set is frozen (only an obvious error, logged in plan.md)
 - Add a dependency without adding it to `requirements.txt`
 - `git push --force` or rewrite pushed history

@@ -114,5 +114,95 @@ Notes: dependencies are added with the code that uses them (sounddevice in T2, p
 
 Manual checks, with the real server and models: 20 spoken clips are clear on playback (FR-1); the start, thinking and error sounds tell the state without a screen, and the error sound plays with the server stopped (refused), on a silent recording (real 400 "no speech detected"), on a short tap (discarded locally), and on a real timeout made by temporarily setting QUERY_TIMEOUT_S = 1, restored afterwards (FR-2); after a timeout the next key press works (FR-3); a reminder due while the client runs is heard within 10 s, and one set while the client was closed is heard as "Missed reminder" within 10 s of the next start; the reminder is acked only after its audio has played (FR-15); Ctrl+C stops the key listener and the audio stream with no hanging process.
 
-## M7 (v1): Evaluation and reliability | planned
-Goal: Frozen questions.csv and run_eval.py; meet the correctness, latency, transcription, reliability and secrets targets · FRs: quality targets; settles how eval questions are spoken · Tasks: not planned yet
+## M7 (v1): Evaluation and reliability | done
+Goal: Frozen eval set, recorder, runner and report; measure, then fix only what the numbers justify · GitHub milestone: #7
+
+| Task | FR | Files | Done when | Test | Issue | Done |
+| --- | --- | --- | --- | --- | --- | --- |
+| M7-T1 | FR-4 | CLAUDE.md, docs/spec.md, docs/design.md | The structure, commands and frozen-set rule in CLAUDE.md, and spec.md and design.md, name `eval/` (questions.json, config.py, record.py, run_eval.py, live_questions.md, live_log.py, results/) and `data/eval/` instead of `tests/questions.csv` and `tests/run_eval.py`; the "how questions are spoken" decision reads: recorded once, in `data/eval/`, not in git | manual | #49 | [x] |
+| M7-T2 | FR-5, FR-8, FR-9, FR-10 | eval/questions.json, eval/__init__.py (+ tests/test_eval_questions.py) | 30 rows: 10 general/live (7 stable facts, 3 live incl. weather in Pune and a recent-news search), 10 notes, 10 reminders; each has id, group, spoken text, expected transcript and pass rule; in a group, add comes before list or cancel; no row needs a reminder to become due; test checks counts, unique ids, fields and order | pytest | #50 | [x] |
+| M7-T3 | FR-1, FR-4 | eval/config.py, eval/record.py (+ tests/test_record.py) | `python -m eval.record` shows one question at a time, waits for ENTER, records 16 kHz mono 16-bit with the client `Recorder`, plays back on request, allows redo, saves `data/eval/<id>.wav`; stopping and restarting skips clips already saved; tests use a fake recorder and fake input | pytest | #51 | [x] |
+| M7-T4 | FR-16, FR-17 | eval/run_eval.py, eval/config.py (+ tests/test_run_eval.py) | Checks `/health` and that all 30 clips exist; writes a restore-pending marker, backs up the DB with `sqlite3.Connection.backup` to `data/eval/`, then clears the notes and reminders rows (tables stay); a marker found at start restores first; posts the clips in order, one at a time, sleeping 4 s per Gemini call used (tool calls + 1) to stay under 15 per minute; reads the new `logs/queries.jsonl` lines by byte offset; a 500 is recorded and the run continues; restores the DB at the end and on Ctrl+C, then removes the marker; warns, without stopping, if a `client_pc.client` process runs (found with PowerShell through subprocess, no new dependency); tests use a temp DB, fake server and fake process list | pytest | #52 | [x] |
+| M7-T5 | FR-5, FR-8, FR-9, FR-10 | eval/run_eval.py (+ tests/test_run_eval.py) | Per question: transcript, answer, tools used, stt/llm/tts/total seconds, pass or fail and the reason; general passes on expected keywords; live also needs the sought kind of fact (e.g. a temperature) and `searched` true; notes and reminders pass on the real DB rows and the logged tool call, and the answer repeats the action back; relative times such as "tomorrow 17:00" resolve at run time | pytest | #53 | [x] |
+| M7-T6 | FR-4, FR-17 | eval/run_eval.py (+ tests/test_run_eval.py) | Compares transcript and expected after lowercasing and removing punctuation, and treats spoken numbers and digits as equal on both texts (five = 5, ten = 10, etc.; a test covers it), per question and overall; writes `eval/results/<date>.md` and `.json`; verdict on: ≥ 80% per group, median total ≤ 15 s, no 500 in the 30, transcription ≥ 90%; secrets check: no configured key value in `logs/`, and `.env`, `data/` and `*.db` untracked | pytest | #54 | [x] |
+| M7-T7 | FR-2, FR-15 | eval/live_questions.md, eval/live_log.py (+ tests/test_live_log.py) | 10 fixed questions to speak with F9 (4 general, 3 notes, 3 reminders), none equal to the 30 recorded ones (a test compares the texts); `python -m eval.live_log` prints question, answer and latency of the last 10 log lines as a table | pytest | #55 | [x] |
+| M7-T8 | FR-4, FR-5, FR-8, FR-9 | docs/plan.md | You record the 30 clips and run the first eval; numbers and a cause per failure (STT, tool choice, deadline, other) are recorded below; `eval/questions.json` is frozen from now on | manual | #56 | [x] |
+| M7-T9 | FR-4 | server/stt.py, server/config.py (+ tests/test_stt.py) | Only if T8 shows failures caused by #38: `transcribe` passes an `initial_prompt` vocabulary hint (remind, reminder, notes, cancel; text in config); only the failing questions are re-run | pytest | #38 | [x] |
+| M7-T10b | FR-3 | client_pc/client.py, client_pc/config.py, eval/config.py (+ tests/test_client.py, tests/test_run_eval.py) | Do first. `QUERY_TIMEOUT_S` = 25 s for `/query`; new `POLL_TIMEOUT_S` = 20 s used by the reminder poll, audio fetch and ack; the eval sets its own request timeout of 30 s in `eval/config.py` (no longer taken from the client config, which is 25 s); tests check each timeout reaches its request | pytest | #25 (client part) | [x] |
+| M7-T10a | FR-5, FR-7 | server/llm.py, server/config.py (+ tests/test_llm.py) | After T10b; the spec decision is committed (ecb08f2). `LLM_FINAL_DEADLINE_S` = 18 and `LLM_FINAL_START_MAX_S` = 8 in config. The first search always runs; a later tool round runs only if elapsed + tool timeout (0 s local tools, 5 s `web_search`) + 10 <= 18, else its calls get an error result; when the deadline stops the model and elapsed <= 8 s, one last Gemini call with function calling mode NONE answers; otherwise the 500 `llm: deadline exceeded`; tests include list-then-cancel running both rounds and a refused second search | pytest | #25 | [x] |
+| M7-T11 | all quality targets | docs/plan.md | Full re-run on the final code; every target met; the final report in `eval/results/` is committed with `git add -f` (the folder is gitignored for exploratory runs); numbers recorded below | manual | #57 | [x] |
+| M7-T12 | — | README.md | What it does, the pipeline, setup, how to run server, client and eval, the final numbers; docs only, after T11 | manual | #58 | [x] |
+
+Notes: no new dependency. Pacing counts Gemini calls from the log line (tool calls + 1), 4 s each. The runner never deletes the DB file: the backup uses `sqlite3.Connection.backup` and the marker makes a crash recoverable. After T8, `eval/questions.json` changes only for an obvious error in a question, logged here with the reason. T9 and T10 are skipped if T8 does not show their failures. Reliability: the 30 clips in a row cover the 20-in-a-row target.
+
+### M7-T8: first measurement (2026-10-11, `eval/results/2026-10-11_1402.json`)
+
+| Target | Result | Met |
+| --- | --- | --- |
+| General >= 80% | 7/10 | no |
+| Notes >= 80% | 4/10 | no |
+| Reminders >= 80% | 10/10 | yes |
+| Transcription >= 90% | 22/30 (73%) | no |
+| Median total <= 15 s | 3.5 s (worst 9.1 s) | yes |
+| No 500 in the 30 | 2 errors (g05, g10) | no |
+| Secrets check | ok | yes |
+
+Targets not met. Cause per failure:
+
+| Id | Cause |
+| --- | --- |
+| g05 | STT ("Rings of Fire"), then two searches ran into the deadline (500) |
+| g09 | STT ("Israel" for "ISRO") |
+| g10 | Deadline: two searches, LLM stage over 15 s (500); heard "dollar 2 rupee" |
+| n03 | STT ("safe or not" for "save a note"), so no note was added |
+| n06-n10 | Knock-on of n03: 4 notes stored, 5 expected; answers were correct for 4 |
+| n09 | Also STT ("nodes" for "notes") |
+
+Other transcript misses that still passed: n01 ("by" for "buy"), n04 ("4 cell packed").
+n10 was also cut off ("What was my latest").
+
+T9 (#38, STT hint) and T10 (#25, deadline) are triggered. `eval/questions.json` is
+frozen from now on; it was not changed.
+
+Rule for T9: the `initial_prompt` hint may contain only the assistant's own command
+words (remind, reminder, notes, cancel and similar), never words taken from the eval
+questions (no "Wings of Fire", "ISRO", "rupee" and so on).
+
+T9 result (speech only, 30 clips, same matching as the runner): transcript mismatches 8
+without the hint, 4 with it. Left: g09 (Israel), g10 (rent), n01 (by), n02 (drivers need).
+They are not command words, so the hint cannot fix them; accepted for now.
+
+### M7-T11: final measurement (2026-10-11, `eval/results/2026-10-11_1555.json`)
+
+Run on the final code (T9 hint, T10a last call, T10b timeouts); the report files
+`eval/results/2026-10-11_1555.md` and `.json` are committed with `git add -f`.
+
+| Target | Result | Met |
+| --- | --- | --- |
+| General >= 80% | 8/10 | yes |
+| Notes >= 80% | 10/10 | yes |
+| Reminders >= 80% | 10/10 | yes |
+| Median total <= 15 s | 3.1 s (worst 6.7 s) | yes |
+| No 500 in the 30 | 0 errors | yes |
+| Secrets check | ok | yes |
+| Transcription >= 90% | 26/30 (87%) | no |
+
+Transcription missed the target by one clip and is accepted as a known gap. Failures:
+
+| Id | Cause |
+| --- | --- |
+| g09 | STT: "Israel" for "ISRO", so the answer was about Israel |
+| g10 | STT: "rent" for "rate"; then an honest "could not fetch" answer |
+
+For g10 the second search failed or was refused; the log cannot tell which.
+
+The other two transcript misses still passed: n01 ("by" for "buy"; its pass rule needs
+only "soldering" and "wire" in the note), n02 ("drivers need").
+
+Decision: `small.en` stays. `medium.en` with the same hint was tested (speech only, throwaway
+script over the 30 clips, 2026-10-11, not committed) and rejected: 27/30 transcripts, but +1.1 s per query (1.91 s against 0.79 s per clip) and
+about 2.6 GB of GPU memory in use, which blocks v3 (a local text model must fit 4 GB VRAM).
+Remaining misses (ISRO, rate/rent, buy/by) are noted on #38, which stays open (Refs, not
+Closes). Follow-up after v0.1.0: log whether the last call ran or a tool was refused.
+
+Manual checks: record the 30 clips in a quiet room and play a few back (T3); speak the 10 live questions with F9 and read the table (T7); after T11, check the targets in the report (done, see T11 above).

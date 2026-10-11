@@ -189,6 +189,7 @@ def _request(
     method: str,
     path: str,
     transport: httpx.BaseTransport | None,
+    timeout_s: float,
     ok: tuple[int, ...] = (200,),
     **kwargs,
 ) -> httpx.Response:
@@ -196,12 +197,12 @@ def _request(
     try:
         with httpx.Client(
             base_url=config.SERVER_URL,
-            timeout=config.QUERY_TIMEOUT_S,
+            timeout=timeout_s,
             transport=transport,
         ) as http:
             response = http.request(method, path, **kwargs)
     except httpx.TimeoutException as e:
-        raise QueryTimeout(f"no answer within {config.QUERY_TIMEOUT_S} s") from e
+        raise QueryTimeout(f"no answer within {timeout_s} s") from e
     except httpx.ConnectError as e:
         raise ServerUnreachable(
             f"cannot reach the server at {config.SERVER_URL}"
@@ -227,11 +228,15 @@ def _wav_body(response: httpx.Response) -> bytes:
 def send_query(wav: bytes, transport: httpx.BaseTransport | None = None) -> bytes:
     """POST the question to /query and return the answer WAV."""
     files = {"audio": ("question.wav", wav, "audio/wav")}
-    return _wav_body(_request("POST", "/query", transport, files=files))
+    return _wav_body(
+        _request("POST", "/query", transport, config.QUERY_TIMEOUT_S, files=files)
+    )
 
 
 def fetch_due(transport: httpx.BaseTransport | None = None) -> list[dict]:
-    response = _request("GET", "/reminders/due", transport, ok=(200, 204))
+    response = _request(
+        "GET", "/reminders/due", transport, config.POLL_TIMEOUT_S, ok=(200, 204)
+    )
     if response.status_code == 204:
         return []
     try:
@@ -246,13 +251,15 @@ def fetch_due(transport: httpx.BaseTransport | None = None) -> list[dict]:
 def fetch_audio(
     reminder_id: int, transport: httpx.BaseTransport | None = None
 ) -> bytes:
-    return _wav_body(_request("GET", f"/reminders/{reminder_id}/audio", transport))
+    path = f"/reminders/{reminder_id}/audio"
+    return _wav_body(_request("GET", path, transport, config.POLL_TIMEOUT_S))
 
 
 def ack_reminder(
     reminder_id: int, transport: httpx.BaseTransport | None = None
 ) -> None:
-    _request("POST", f"/reminders/{reminder_id}/ack", transport)
+    path = f"/reminders/{reminder_id}/ack"
+    _request("POST", path, transport, config.POLL_TIMEOUT_S)
 
 
 def _error_text(response: httpx.Response) -> str:

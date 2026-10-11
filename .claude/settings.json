@@ -20,7 +20,7 @@
       "Edit(**/docs/spec.md)",
       "Edit(**/docs/design.md)",
       "Edit(**/docs/hardware_plan.md)",
-      "Edit(**/tests/questions.csv)"
+      "Edit(**/eval/questions.json)"
     ],
     "deny": [
       "Read(**/.env)",

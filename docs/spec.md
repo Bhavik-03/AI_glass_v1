@@ -28,11 +28,11 @@ Each ID later becomes one or more build tasks and tests. Fixed values (rates, ti
 | --- | --- | --- | --- |
 | FR-1 | Record the question while the push-to-talk key is held, 10 s max | Key hold → WAV, 16 kHz mono 16-bit | Speech clear on playback in 20 of 20 tests; recording stops at release or at 10 s |
 | FR-2 | Play status sounds: start sound on key press, thinking sound after release, error sound on any failure | Client events → sounds | The user can tell the state without a screen; the error sound plays on a 400, a 500, a timeout and a refused connection |
-| FR-3 | Send the question to the server with a 20 s client timeout | WAV → `POST /query` with one `audio` field | After a 20 s timeout the client plays the error sound and accepts the next key press |
+| FR-3 | Send the question to the server with a 25 s client timeout | WAV → `POST /query` with one `audio` field | After a 25 s timeout the client plays the error sound and accepts the next key press |
 | FR-4 | Transcribe the question locally with faster-whisper `small.en` | WAV → question text | ≥ 90% of the 30 eval questions keep their meaning; ≤ 1 s each |
-| FR-5 | Answer with the Gemini model from config (`gemini-3.5-flash-lite`) through `google-genai`: minimal thinking, 10 s timeout per call (the API minimum), API key from an environment variable, the tool functions (including `web_search`) in every request; `web_search(query)` runs on the server against the web search API (key from an environment variable, timeout from config) and its results go back to Gemini; answers ≤ 2 short sentences (under 40 words) except list answers (FR-8, FR-9) | Question text → answer text, `searched` flag | ≥ 80% of the 10 general and live eval questions correct; each Gemini call ≤ 10 s; `searched` is true in the log when `web_search` ran and returned results; a search API failure goes back to Gemini as an error result, not a crash; the LLM stage ends within its deadline (15 s, config): a Gemini or search call starts only if its full timeout fits in the time left, else 500 `{"error": "llm: deadline exceeded"}`; `web_search` sends only the search query to the search API, never note, reminder or memory content |
+| FR-5 | Answer with the Gemini model from config (`gemini-3.5-flash-lite`) through `google-genai`: minimal thinking, 10 s timeout per call (the API minimum), API key from an environment variable, the tool functions (including `web_search`) in every request; `web_search(query)` runs on the server against the web search API (key from an environment variable, timeout from config) and its results go back to Gemini; answers ≤ 2 short sentences (under 40 words) except list answers (FR-8, FR-9) | Question text → answer text, `searched` flag | ≥ 80% of the 10 general and live eval questions correct; each Gemini call ≤ 10 s; `searched` is true in the log when `web_search` ran and returned results; a search API failure goes back to Gemini as an error result, not a crash; the LLM stage ends within its deadline (15 s, config): a Gemini call starts only if its full timeout fits in the time left; the first search always runs; a tool round after the first runs only if elapsed + its tool timeout (0 s for notes and reminders, 5 s for `web_search`) + 10 s <= 18 s (`LLM_FINAL_DEADLINE_S`, config), and a refused tool call goes back to Gemini as an error result ("no time left"). When the deadline stops the model, the server makes one last Gemini call that may not call tools, using what the tools returned, if elapsed <= 8 s (`LLM_FINAL_START_MAX_S`, config), and speaks that answer; only if that is not possible or fails, 500 `{"error": "llm: deadline exceeded"}`; `web_search` sends only the search query to the search API, never note, reminder or memory content |
 | FR-6 | Put the current date, weekday and time in the configured time zone (Asia/Kolkata) in the system instruction, so relative times become exact times | Clock → system instruction | With the clock fixed at Fri 9 Oct 2026 14:00 IST, the instruction contains that date, weekday and time; in the eval, "remind me tomorrow at 5 to call the lab" asked on 9 Oct gives `due_at` 2026-10-10T17:00+05:30 |
-| FR-7 | Run Gemini's tool calls: execute each call, send the results back together with the model's previous content unchanged (including the `id` and `thought_signature`), repeat until Gemini returns text, at most 3 rounds | Function calls → tool results → final answer | A call followed by text runs the tool once and returns the answer; an unknown tool name or bad arguments goes back to Gemini as an error result, not a crash; more than 3 rounds gives 500 `{"error": "llm: too many tool rounds"}` |
+| FR-7 | Run Gemini's tool calls: execute each call, send the results back together with the model's previous content unchanged (including the `id` and `thought_signature`), repeat until Gemini returns text, at most 3 rounds | Function calls → tool results → final answer | A call followed by text runs the tool once and returns the answer; an unknown tool name or bad arguments goes back to Gemini as an error result, not a crash; more than 3 rounds gives 500 `{"error": "llm: too many tool rounds"}`; when the deadline (FR-5) stops the rounds, the last call without tools gives the answer instead of the 500; a list-then-cancel command runs both rounds |
 | FR-8 | Notes tools: `add_note(text)` stores a note; `list_notes()` returns every note, newest first | Tool call → SQLite row / list | After `add_note`, the notes table has one new row with that text and its creation time; `list_notes` returns all notes newest first, or an empty list |
 | FR-9 | Reminder tools: `add_reminder(text, due_at)` stores a pending reminder (`due_at` is ISO 8601 with offset); `list_reminders()` returns every pending reminder by due time with id, text and due time; `cancel_reminder(id)` cancels a pending reminder | Tool call → SQLite row / list / status change | `add_reminder` stores one pending row; a `due_at` in the past returns an error result and stores nothing; `list_reminders` excludes delivered and cancelled ones; `cancel_reminder` sets the status to cancelled, and an unknown or non-pending id returns an error result; the spoken list gives each reminder's date and time |
 | FR-10 | Confirm every action by repeating it back with the stored values; on a tool error, say what went wrong | Tool result → answer text | In the eval, every passing notes and reminder answer names the action and its text, plus the time for reminders ("Reminder set for 5 pm tomorrow: call the lab") |
@@ -106,18 +106,18 @@ v1 is done, and tagged v0.1.0, when every target below is met.
 
 Latency budget: STT 1 s + Gemini (one call for a plain answer, usually two for a live question or a tool command; 10 s timeout each, typically 2–4 s) + one web search call for a live question (5 s timeout) + TTS 1 s + playback start 1 s. The log shows which stage broke the budget.
 
-Worst case: the LLM stage stops at its 15 s deadline (one Gemini call 10 s + search 5 s fits; a second Gemini call starts only if 10 s are left), so STT 1 s + LLM 15 s + TTS 1 s = 17 s, under the client's 20 s timeout. The server then returns a clean 500 before the client gives up.
+Worst case: the last call without tools starts at 8 s at the latest and ends by 18 s, so STT 1 s + LLM 18 s + TTS 1 s = 20 s, under the client's 25 s timeout. Past that the server returns a clean 500 before the client gives up.
 
 ## Test plan
 
 pytest covers the server with Gemini, whisper and Piper faked and a temporary SQLite database. The evaluation below uses the real models.
 
-1. Write all 30 rows in `tests/questions.csv` before the first run, then freeze it. Columns: id, group (general, notes, reminders), setup, question, expected.
-   - setup: the notes and reminders that must exist before the question (for list and cancel commands), or "none".
-   - expected: the answer for general questions; the tool name and arguments for tool questions, with times written relative to the run ("tomorrow 17:00") and resolved by `run_eval.py` at run time.
-2. Run against a fresh evaluation database, never the real one.
-3. Grading:
-   - General and live: correct, partial or wrong, judged by me; live answers checked against a trusted website at test time. Only "correct" counts.
+1. Write all 30 rows in `eval/questions.json` before the first run, then freeze it (only an obvious error in a question may be fixed, logged in plan.md). Fields: id, group (general, notes, reminders), spoken text, expected transcript, pass rule.
+   - The questions are spoken once and recorded as WAV files in `data/eval/` (not in git) by `eval/record.py`; `eval/run_eval.py` replays them through `POST /query`.
+   - pass rule: expected keywords for general questions; the tool name and arguments for tool questions, with times written relative to the run ("tomorrow 17:00") and resolved by `run_eval.py` at run time.
+2. Run against a clean evaluation state: `run_eval.py` backs up and clears the notes and reminders, and restores them afterwards.
+3. Grading, done by `run_eval.py`:
+   - General and live: pass on the expected keywords; a live question also needs the sought kind of fact and `searched` true.
    - Notes and reminders: pass when the right tool is called with the right arguments, the database holds the expected result afterwards, and the answer repeats the action back (FR-10).
 4. Report accuracy per group, median and worst latency, and transcription accuracy.
 5. Re-run the whole set whenever the model, prompt or tool declarations change.
@@ -126,7 +126,7 @@ The home city for weather questions comes from the server config.
 
 ## Open decisions
 
-- How the eval questions are spoken: live into the mic during `run_eval.py`, or recorded once as WAV files. Decide when planning M7.
+None.
 
 ## Decisions settled in Design
 

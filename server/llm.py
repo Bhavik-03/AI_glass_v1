@@ -21,6 +21,10 @@ offset, based on the time above.
 - When you tell the user a reminder time, say the due_spoken text from the tool result, never an ISO timestamp.
 - Never say an id aloud; ids are only for calling cancel_reminder."""
 
+SKIPPED_RESULT = {
+    "error": "skipped: no time left; tell the user you could not look it up, do not guess"
+}
+
 _client: genai.Client | None = None
 _clock = time.monotonic
 
@@ -50,10 +54,40 @@ def _get_client() -> genai.Client:
     return _client
 
 
-def _check_deadline(start: float, needed_s: float) -> None:
+def _fits(start: float, needed_s: float, limit_s: float) -> bool:
     # A call starts only if its full timeout fits, so the stage never outlives the client's wait.
-    if _clock() - start + needed_s > config.LLM_DEADLINE_S:
+    return _clock() - start + needed_s <= limit_s
+
+
+def _tool_fits(start: float, name: str) -> bool:
+    """Whether a tool in a later round leaves time for the last call (FR-5)."""
+    tool_s = config.SEARCH_TIMEOUT_S if name == "web_search" else 0
+    return _fits(start, tool_s + config.LLM_TIMEOUT_S, config.LLM_FINAL_DEADLINE_S)
+
+
+def _final_answer(
+    start: float, contents: list, request: types.GenerateContentConfig, searched: bool
+) -> tuple[str, bool]:
+    """One last call that may not use tools, from what the tools already returned (FR-5)."""
+    if _clock() - start > config.LLM_FINAL_START_MAX_S:
         raise RuntimeError("deadline exceeded")
+    final = request.model_copy(
+        update={
+            "tool_config": types.ToolConfig(
+                function_calling_config=types.FunctionCallingConfig(mode="NONE")
+            )
+        }
+    )
+    try:
+        response = _get_client().models.generate_content(
+            model=config.LLM_MODEL, contents=contents, config=final
+        )
+        text = response.text
+    except Exception as e:
+        raise RuntimeError("deadline exceeded") from e
+    if not text:
+        raise RuntimeError("deadline exceeded")
+    return text, searched
 
 
 def ask(question: str, now: datetime) -> tuple[str, bool, list[dict]]:
@@ -80,8 +114,12 @@ def _ask(question: str, now: datetime, tool_calls: list[dict]) -> tuple[str, boo
     )
     contents = [types.Content(role="user", parts=[types.Part(text=question)])]
     searched = False
+    refused = False
     for round_ in range(config.MAX_TOOL_ROUNDS + 1):
-        _check_deadline(start, config.LLM_TIMEOUT_S)
+        if refused or not _fits(start, config.LLM_TIMEOUT_S, config.LLM_DEADLINE_S):
+            if round_ == 0:  # no tool has run, so there is nothing to answer from
+                raise RuntimeError("deadline exceeded")
+            return _final_answer(start, contents, request, searched)
         response = _get_client().models.generate_content(
             model=config.LLM_MODEL, contents=contents, config=request
         )
@@ -94,9 +132,12 @@ def _ask(question: str, now: datetime, tool_calls: list[dict]) -> tuple[str, boo
         contents.append(response.candidates[0].content)
         replies = []
         for call in calls:
-            if call.name == "web_search":
-                _check_deadline(start, config.SEARCH_TIMEOUT_S)
-            result = tools.run(call.name, call.args, now)
+            # The first round always runs; later ones must leave time for the last call.
+            if round_ > 0 and not _tool_fits(start, call.name):
+                refused = True
+                result = SKIPPED_RESULT
+            else:
+                result = tools.run(call.name, call.args, now)
             searched = searched or (
                 call.name == "web_search" and bool(result.get("results"))
             )

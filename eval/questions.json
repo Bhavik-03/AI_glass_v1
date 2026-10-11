@@ -1,0 +1,264 @@
+[
+  {
+    "id": "g01",
+    "group": "general",
+    "spoken": "What is the capital of India?",
+    "expected_transcript": "what is the capital of india",
+    "pass": {"tools": [], "answer_all": [["delhi"]]}
+  },
+  {
+    "id": "g02",
+    "group": "general",
+    "spoken": "Who painted the Mona Lisa?",
+    "expected_transcript": "who painted the mona lisa",
+    "pass": {"tools": [], "answer_all": [["leonardo", "vinci"]]}
+  },
+  {
+    "id": "g03",
+    "group": "general",
+    "spoken": "How many days are there in a leap year?",
+    "expected_transcript": "how many days are there in a leap year",
+    "pass": {"tools": [], "answer_all": [["366", "three hundred sixty-six", "three hundred and sixty-six"]]}
+  },
+  {
+    "id": "g04",
+    "group": "general",
+    "spoken": "What is the boiling point of water in Celsius?",
+    "expected_transcript": "what is the boiling point of water in celsius",
+    "pass": {"tools": [], "answer_all": [["100", "hundred"]]}
+  },
+  {
+    "id": "g05",
+    "group": "general",
+    "spoken": "Who wrote the book Wings of Fire?",
+    "expected_transcript": "who wrote the book wings of fire",
+    "pass": {"tools": [], "answer_all": [["kalam"]]}
+  },
+  {
+    "id": "g06",
+    "group": "general",
+    "spoken": "What is the largest ocean on Earth?",
+    "expected_transcript": "what is the largest ocean on earth",
+    "pass": {"tools": [], "answer_all": [["pacific"]]}
+  },
+  {
+    "id": "g07",
+    "group": "general",
+    "spoken": "Which planet is known as the red planet?",
+    "expected_transcript": "which planet is known as the red planet",
+    "pass": {"tools": [], "answer_all": [["mars"]]}
+  },
+  {
+    "id": "g08",
+    "group": "general",
+    "spoken": "What is the weather in Pune right now?",
+    "expected_transcript": "what is the weather in pune right now",
+    "pass": {
+      "tools": ["web_search"],
+      "searched": true,
+      "answer_all": [["degrees", "celsius", "temperature"]],
+      "answer_fact": "\\d+\\s*(°|degrees|celsius|c\\b)"
+    }
+  },
+  {
+    "id": "g09",
+    "group": "general",
+    "spoken": "What is the latest news about ISRO?",
+    "expected_transcript": "what is the latest news about isro",
+    "pass": {"tools": ["web_search"], "searched": true, "answer_all": [["isro"]]}
+  },
+  {
+    "id": "g10",
+    "group": "general",
+    "spoken": "What is the dollar to rupee rate today?",
+    "expected_transcript": "what is the dollar to rupee rate today",
+    "pass": {
+      "tools": ["web_search"],
+      "searched": true,
+      "answer_all": [["rupee", "rupees", "inr"]],
+      "answer_fact": "\\d{2,3}(\\.\\d+)?\\s*(rupees?|inr|₹)|(rupees?|inr|₹)\\s*\\d{2,3}"
+    }
+  },
+  {
+    "id": "n01",
+    "group": "notes",
+    "spoken": "Take a note: buy soldering wire.",
+    "expected_transcript": "take a note buy soldering wire",
+    "pass": {"tools": ["add_note"], "note_added": ["soldering", "wire"], "answer_all": [["soldering"], ["wire"]]}
+  },
+  {
+    "id": "n02",
+    "group": "notes",
+    "spoken": "Note that the motor driver needs a new fuse.",
+    "expected_transcript": "note that the motor driver needs a new fuse",
+    "pass": {"tools": ["add_note"], "note_added": ["motor", "driver", "fuse"], "answer_all": [["motor"], ["fuse"]]}
+  },
+  {
+    "id": "n03",
+    "group": "notes",
+    "spoken": "Save a note to calibrate the sensor on Monday.",
+    "expected_transcript": "save a note to calibrate the sensor on monday",
+    "pass": {"tools": ["add_note"], "note_added": ["calibrate", "sensor"], "answer_all": [["calibrate"], ["sensor"]]}
+  },
+  {
+    "id": "n04",
+    "group": "notes",
+    "spoken": "Note down that the battery is a four cell pack.",
+    "expected_transcript": "note down that the battery is a four cell pack",
+    "pass": {"tools": ["add_note"], "note_added": ["battery", "cell"], "answer_all": [["battery"]]}
+  },
+  {
+    "id": "n05",
+    "group": "notes",
+    "spoken": "Add a note: order new jumper wires.",
+    "expected_transcript": "add a note order new jumper wires",
+    "pass": {"tools": ["add_note"], "note_added": ["jumper", "wires"], "answer_all": [["jumper"], ["wires"]]}
+  },
+  {
+    "id": "n06",
+    "group": "notes",
+    "spoken": "What are my notes?",
+    "expected_transcript": "what are my notes",
+    "pass": {
+      "tools": ["list_notes"],
+      "notes_total": 5,
+      "answer_some": {"min": 3, "words": ["soldering", "motor", "calibrate", "battery", "jumper"]}
+    }
+  },
+  {
+    "id": "n07",
+    "group": "notes",
+    "spoken": "Read out my notes.",
+    "expected_transcript": "read out my notes",
+    "pass": {
+      "tools": ["list_notes"],
+      "notes_total": 5,
+      "answer_some": {"min": 3, "words": ["soldering", "motor", "calibrate", "battery", "jumper"]}
+    }
+  },
+  {
+    "id": "n08",
+    "group": "notes",
+    "spoken": "Do I have any notes about the battery?",
+    "expected_transcript": "do i have any notes about the battery",
+    "pass": {"tools": ["list_notes"], "notes_total": 5, "answer_all": [["battery"]]}
+  },
+  {
+    "id": "n09",
+    "group": "notes",
+    "spoken": "How many notes do I have?",
+    "expected_transcript": "how many notes do i have",
+    "pass": {"tools": ["list_notes"], "notes_total": 5, "answer_all": [["5", "five"]]}
+  },
+  {
+    "id": "n10",
+    "group": "notes",
+    "spoken": "What was my latest note?",
+    "expected_transcript": "what was my latest note",
+    "pass": {"tools": ["list_notes"], "notes_total": 5, "answer_all": [["jumper"]]}
+  },
+  {
+    "id": "r01",
+    "group": "reminders",
+    "spoken": "Remind me tomorrow at five in the evening to call the lab.",
+    "expected_transcript": "remind me tomorrow at five in the evening to call the lab",
+    "pass": {
+      "tools": ["add_reminder"],
+      "reminder_added": {"words": ["call", "lab"], "due": {"at": "tomorrow 17:00"}},
+      "answer_all": [["call"], ["lab"]]
+    }
+  },
+  {
+    "id": "r02",
+    "group": "reminders",
+    "spoken": "Remind me in half an hour to check the battery.",
+    "expected_transcript": "remind me in half an hour to check the battery",
+    "pass": {
+      "tools": ["add_reminder"],
+      "reminder_added": {"words": ["check", "battery"], "due": {"in_minutes": 30}},
+      "answer_all": [["battery"]]
+    }
+  },
+  {
+    "id": "r03",
+    "group": "reminders",
+    "spoken": "Remind me tomorrow at nine in the morning to submit the report.",
+    "expected_transcript": "remind me tomorrow at nine in the morning to submit the report",
+    "pass": {
+      "tools": ["add_reminder"],
+      "reminder_added": {"words": ["submit", "report"], "due": {"at": "tomorrow 09:00"}},
+      "answer_all": [["submit"], ["report"]]
+    }
+  },
+  {
+    "id": "r04",
+    "group": "reminders",
+    "spoken": "Remind me in an hour to charge the laptop.",
+    "expected_transcript": "remind me in an hour to charge the laptop",
+    "pass": {
+      "tools": ["add_reminder"],
+      "reminder_added": {"words": ["charge", "laptop"], "due": {"in_minutes": 60}},
+      "answer_all": [["laptop"]]
+    }
+  },
+  {
+    "id": "r05",
+    "group": "reminders",
+    "spoken": "Remind me the day after tomorrow at three in the afternoon to email the professor.",
+    "expected_transcript": "remind me the day after tomorrow at three in the afternoon to email the professor",
+    "pass": {
+      "tools": ["add_reminder"],
+      "reminder_added": {"words": ["email", "professor"], "due": {"at": "day_after_tomorrow 15:00"}},
+      "answer_all": [["professor"]]
+    }
+  },
+  {
+    "id": "r06",
+    "group": "reminders",
+    "spoken": "What are my reminders?",
+    "expected_transcript": "what are my reminders",
+    "pass": {
+      "tools": ["list_reminders"],
+      "reminders_pending": 5,
+      "answer_some": {"min": 3, "words": ["lab", "battery", "report", "laptop", "professor"]}
+    }
+  },
+  {
+    "id": "r07",
+    "group": "reminders",
+    "spoken": "What is my next reminder?",
+    "expected_transcript": "what is my next reminder",
+    "pass": {"tools": ["list_reminders"], "reminders_pending": 5, "answer_all": [["battery"]]}
+  },
+  {
+    "id": "r08",
+    "group": "reminders",
+    "spoken": "Cancel the lab reminder.",
+    "expected_transcript": "cancel the lab reminder",
+    "pass": {
+      "tools": ["list_reminders", "cancel_reminder"],
+      "reminder_cancelled": ["lab"],
+      "reminders_pending": 4,
+      "answer_all": [["lab"]]
+    }
+  },
+  {
+    "id": "r09",
+    "group": "reminders",
+    "spoken": "Cancel my reminder about the laptop.",
+    "expected_transcript": "cancel my reminder about the laptop",
+    "pass": {
+      "tools": ["list_reminders", "cancel_reminder"],
+      "reminder_cancelled": ["laptop"],
+      "reminders_pending": 3,
+      "answer_all": [["laptop"]]
+    }
+  },
+  {
+    "id": "r10",
+    "group": "reminders",
+    "spoken": "How many reminders do I have?",
+    "expected_transcript": "how many reminders do i have",
+    "pass": {"tools": ["list_reminders"], "reminders_pending": 3, "answer_all": [["3", "three"]]}
+  }
+]
