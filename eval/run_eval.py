@@ -1,6 +1,7 @@
 import json
 import re
 import sqlite3
+import statistics
 import subprocess
 import time
 from collections.abc import Callable
@@ -311,6 +312,220 @@ def _server_ok(client: httpx.Client) -> bool:
         return False
 
 
+UNIT_WORDS = (
+    ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine")
+    + ("ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen")
+    + ("seventeen", "eighteen", "nineteen")
+)
+TEN_WORDS = (
+    "twenty",
+    "thirty",
+    "forty",
+    "fifty",
+    "sixty",
+    "seventy",
+    "eighty",
+    "ninety",
+)
+UNITS = {w: i for i, w in enumerate(UNIT_WORDS)}
+TENS = {w: 10 * i for i, w in enumerate(TEN_WORDS, 2)}
+STAGES = ("stt", "llm", "tts")
+KEY_NAMES = ("GEMINI_API_KEY", "TAVILY_API_KEY")
+
+
+def normalize(text: str) -> str:
+    """Lowercase, no punctuation, number words as digits, so "five" equals "5"."""
+    no_apostrophes = re.sub(r"['’]", "", text.lower())
+    words = re.sub(r"[^\w\s]|_", " ", no_apostrophes).split()
+    out, i = [], 0
+    while i < len(words):
+        word = words[i]
+        if word in TENS:
+            unit = UNITS.get(words[i + 1]) if i + 1 < len(words) else None
+            if unit:  # "twenty one"; zero is not a unit
+                out.append(str(TENS[word] + unit))
+                i += 1
+            else:
+                out.append(str(TENS[word]))
+        else:
+            out.append(str(UNITS[word]) if word in UNITS else word)
+        i += 1
+    return " ".join(out)
+
+
+def transcript_match(expected: str, heard: str | None) -> bool:
+    return heard is not None and normalize(expected) == normalize(heard)
+
+
+def timings_s(entry: dict | None) -> dict:
+    ms = entry["timings_ms"] if entry else {}
+    seconds = {stage: ms.get(stage, 0) / 1000 for stage in STAGES}
+    return {**seconds, "total": sum(seconds.values())}
+
+
+def _row(question: dict, result: dict) -> dict:
+    log = result["log"]
+    t = timings_s(log)
+    heard = log["question"] if log else None
+    return {
+        "id": result["id"],
+        "group": result["group"],
+        "spoken": question["spoken"],
+        "expected_transcript": question["expected_transcript"],
+        "heard": heard,
+        "transcript_ok": transcript_match(question["expected_transcript"], heard),
+        "answer": log["answer"] if log else "",
+        "tools": [c["name"] for c in log["tool_calls"]] if log else [],
+        "searched": log["searched"] if log else False,
+        "stt_s": t["stt"],
+        "llm_s": t["llm"],
+        "tts_s": t["tts"],
+        "total_s": t["total"] if log else result["wall_s"],
+        "wall_s": result["wall_s"],
+        "status": result["status"],
+        "passed": result["passed"],
+        "reason": result["reason"],
+    }
+
+
+def summarize(questions: list[dict], results: list[dict]) -> dict:
+    rows = [_row(q, r) for q, r in zip(questions, results)]
+    groups: dict[str, dict] = {}
+    for row in rows:
+        g = groups.setdefault(row["group"], {"passed": 0, "total": 0})
+        g["total"] += 1
+        g["passed"] += row["passed"]
+    for g in groups.values():
+        g["rate"] = g["passed"] / g["total"]
+    matched = sum(row["transcript_ok"] for row in rows)
+    transcription = {
+        "matched": matched,
+        "total": len(rows),
+        "rate": matched / len(rows),
+    }
+    totals = [row["total_s"] for row in rows]
+    latency = {
+        "median_total_s": statistics.median(totals),
+        "worst_total_s": max(totals),
+    }
+    errors = sum(row["status"] != 200 for row in rows)
+    verdict = {
+        "groups": all(g["rate"] >= config.GROUP_PASS_MIN for g in groups.values()),
+        "latency": latency["median_total_s"] <= config.MEDIAN_TOTAL_MAX_S,
+        "no_errors": errors == 0,
+        "transcription": transcription["rate"] >= config.TRANSCRIPTION_MIN,
+    }
+    verdict["all_met"] = all(verdict.values())
+    return {
+        "rows": rows,
+        "groups": groups,
+        "transcription": transcription,
+        "latency": latency,
+        "errors": errors,
+        "verdict": verdict,
+    }
+
+
+def secrets_problems(run: Callable = subprocess.run) -> list[str]:
+    """Key values found in the logs, or secret files tracked by git; never the key itself."""
+    problems = []
+    log_text = ""
+    if config.LOG_PATH.exists():
+        log_text = config.LOG_PATH.read_text(encoding="utf-8")
+    for name in KEY_NAMES:
+        value = getattr(server_config, name)
+        if value and value in log_text:
+            problems.append(f"{name} value found in logs")
+    try:
+        done = run(
+            ["git", "ls-files"],
+            capture_output=True,
+            text=True,
+            timeout=config.PROCESS_LIST_TIMEOUT_S,
+            cwd=config.ROOT,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        done = None
+    if done is None or done.returncode != 0:
+        return [*problems, "git ls-files failed"]
+    for path in done.stdout.splitlines():
+        if path == ".env" or path.startswith("data/") or path.endswith(".db"):
+            problems.append(f"secret file tracked by git: {path}")
+    return problems
+
+
+def _met(ok: bool) -> str:
+    return "met" if ok else "NOT met"
+
+
+def render_markdown(summary: dict, secrets: list[str]) -> str:
+    v, lat, tr = summary["verdict"], summary["latency"], summary["transcription"]
+    lines = ["# Eval report", "", "## Targets", ""]
+    for name, g in summary["groups"].items():
+        lines.append(f"- {name}: {g['passed']}/{g['total']} passed ({g['rate']:.0%})")
+    lines += [
+        f"- every group >= {config.GROUP_PASS_MIN:.0%}: {_met(v['groups'])}",
+        (
+            f"- median total {lat['median_total_s']:.1f} s, "
+            f"worst {lat['worst_total_s']:.1f} s "
+            f"(target <= {config.MEDIAN_TOTAL_MAX_S} s): {_met(v['latency'])}"
+        ),
+        f"- errors (non-200): {summary['errors']}: {_met(v['no_errors'])}",
+        (
+            f"- transcription {tr['matched']}/{tr['total']} ({tr['rate']:.0%}, "
+            f"target >= {config.TRANSCRIPTION_MIN:.0%}): {_met(v['transcription'])}"
+        ),
+        f"- secrets: {'; '.join(secrets) if secrets else 'ok'}",
+        "",
+        "## Questions",
+        "",
+        "| id | group | result | transcript | tools | stt s | llm s | tts s | total s | reason |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for r in summary["rows"]:
+        lines.append(
+            f"| {r['id']} | {r['group']} | {'pass' if r['passed'] else 'FAIL'} "
+            f"| {'ok' if r['transcript_ok'] else 'differs'} | {', '.join(r['tools'])} "
+            f"| {r['stt_s']:.1f} | {r['llm_s']:.1f} | {r['tts_s']:.1f} "
+            f"| {r['total_s']:.1f} | {r['reason']} |"
+        )
+    lines += ["", "## Transcript differences", ""]
+    lines += [
+        f"- {r['id']}: expected `{r['expected_transcript']}`, heard `{r['heard']}`"
+        for r in summary["rows"]
+        if not r["transcript_ok"]
+    ]
+    lines += ["", "## Answers", ""]
+    lines += [f"- {r['id']}: {r['answer']}" for r in summary["rows"]]
+    return "\n".join(lines) + "\n"
+
+
+def write_report(summary: dict, secrets: list[str]) -> Path:
+    config.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    stem = now().strftime("%Y-%m-%d_%H%M")
+    md_path = config.RESULTS_DIR / f"{stem}.md"
+    md_path.write_text(render_markdown(summary, secrets), encoding="utf-8")
+    data = {**summary, "secrets": secrets}
+    (config.RESULTS_DIR / f"{stem}.json").write_text(
+        json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    return md_path
+
+
+def print_summary(summary: dict, secrets: list[str], report: Path) -> None:
+    for name, g in summary["groups"].items():
+        print(f"{name}: {g['passed']}/{g['total']} passed")
+    tr, lat = summary["transcription"], summary["latency"]
+    print(f"transcription: {tr['matched']}/{tr['total']}")
+    print(
+        f"latency: median {lat['median_total_s']:.1f} s, worst {lat['worst_total_s']:.1f} s"
+    )
+    print(f"errors: {summary['errors']}")
+    print(f"secrets: {'; '.join(secrets) if secrets else 'ok'}")
+    print(f"targets met: {'yes' if summary['verdict']['all_met'] else 'no'}")
+    print(f"report: {report}")
+
+
 def main() -> int:
     questions = json.loads(config.QUESTIONS_PATH.read_text(encoding="utf-8"))
     with httpx.Client(
@@ -331,9 +546,12 @@ def main() -> int:
             )
         try:
             begin()
-            replay(questions, client)
+            results = replay(questions, client)
         finally:
             end()
+    summary = summarize(questions, results)
+    secrets = secrets_problems()
+    print_summary(summary, secrets, write_report(summary, secrets))
     return 0
 
 

@@ -35,7 +35,15 @@ def counts(path) -> tuple[int, int]:
 
 
 def questions(n: int = 3) -> list[dict]:
-    return [{"id": f"q{i:02d}", "group": "general"} for i in range(1, n + 1)]
+    return [
+        {
+            "id": f"q{i:02d}",
+            "group": "general",
+            "spoken": f"Question {i}.",
+            "expected_transcript": f"question {i}",
+        }
+        for i in range(1, n + 1)
+    ]
 
 
 @pytest.fixture
@@ -390,6 +398,7 @@ def main_env(env, monkeypatch):
     write_clips(qs)
     state["env"] = env
     state["qs"] = qs
+    state["results"] = eval_config.CLIP_DIR.parent / "results"
     return state
 
 
@@ -450,11 +459,15 @@ def test_fr16_main_runs_and_restores_on_success(main_env, monkeypatch):
                 "error": None,
                 "wall_s": 1.0,
                 "log": None,
+                "passed": True,
+                "reason": "ok",
             }
             for q in qs
         ]
 
     monkeypatch.setattr(run_eval, "replay", fake_replay)
+    monkeypatch.setattr(run_eval, "secrets_problems", lambda *a, **k: [])
+    monkeypatch.setattr(eval_config, "RESULTS_DIR", main_env["results"])
     assert run_eval.main() == 0
     assert seen["cleared"] == (0, 0)
     assert seen["ids"] == ["q01", "q02", "q03"]
@@ -468,9 +481,26 @@ def test_fr16_main_warns_when_client_running_but_continues(
     """A running PC client prints a warning but does not stop the run."""
     monkeypatch.setattr(run_eval, "client_running", lambda *a, **k: True)
     ran = []
-    monkeypatch.setattr(
-        run_eval, "replay", lambda qs, client, *a, **k: ran.append(1) or []
-    )
+
+    def fake_replay(qs, client, *a, **k):
+        ran.append(1)
+        return [
+            {
+                "id": q["id"],
+                "group": q["group"],
+                "status": 200,
+                "error": None,
+                "wall_s": 1.0,
+                "log": None,
+                "passed": True,
+                "reason": "ok",
+            }
+            for q in qs
+        ]
+
+    monkeypatch.setattr(run_eval, "replay", fake_replay)
+    monkeypatch.setattr(run_eval, "secrets_problems", lambda *a, **k: [])
+    monkeypatch.setattr(eval_config, "RESULTS_DIR", main_env["results"])
     assert run_eval.main() == 0
     assert "warn" in capsys.readouterr().out.lower()
     assert ran == [1]
@@ -976,3 +1006,551 @@ def test_fr5_replay_progress_line_shows_pass_or_fail(env, fixed_now, capsys):
     out = capsys.readouterr().out
     assert "PASS" in out and "FAIL" in out
     assert [r["passed"] for r in results] == [True, False]
+
+
+# ---------- normalize / transcript_match (FR-4) ----------
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("Remind me at five, to call.", "remind me at 5 to call"),
+        ("remind me at 5 to call", "remind me at 5 to call"),
+        ("What's the weather?", "whats the weather"),
+        ("four-cell pack", "4 cell pack"),
+        ("  Hello,   WORLD!!  ", "hello world"),
+        ("ten", "10"),
+        ("zero", "0"),
+        ("nineteen", "19"),
+        ("twenty", "20"),
+        ("ninety", "90"),
+        ("twenty one", "21"),
+        ("twenty-one", "21"),
+        ("ninety nine", "99"),
+        ("call at 10", "call at 10"),
+    ],
+)
+def test_fr4_normalize_cases(text, expected):
+    """normalize lowercases, drops punctuation and turns number words into digits."""
+    assert run_eval.normalize(text) == expected
+
+
+def test_fr4_normalize_number_words_and_digits_equal_both_ways():
+    """Spoken numbers and digits compare equal whichever side has the words."""
+    assert run_eval.normalize("five") == run_eval.normalize("5")
+    assert run_eval.normalize("Ten, minutes") == run_eval.normalize("10 minutes")
+    assert run_eval.normalize("add 7 notes") == run_eval.normalize("add seven notes")
+
+
+def test_fr4_transcript_match_number_word_vs_digit():
+    """transcript_match treats 'five' and '5' as equal, in both directions."""
+    assert run_eval.transcript_match("Remind me at five.", "remind me at 5") is True
+    assert run_eval.transcript_match("remind me at 5", "Remind me at five!") is True
+
+
+def test_fr4_transcript_match_ignores_case_and_punctuation():
+    """transcript_match ignores case and punctuation."""
+    assert run_eval.transcript_match("What's the time?", "whats the time") is True
+
+
+def test_fr4_transcript_match_different_text_is_false():
+    """Different words do not match."""
+    assert run_eval.transcript_match("call mom", "call dad") is False
+
+
+def test_fr4_transcript_match_none_is_false():
+    """No heard text (None) never matches."""
+    assert run_eval.transcript_match("call mom", None) is False
+
+
+# ---------- timings_s (FR-17) ----------
+
+
+def test_fr17_timings_s_converts_ms_and_sums_total():
+    """timings_s gives stt/llm/tts in seconds and total as their sum."""
+    t = run_eval.timings_s({"timings_ms": {"stt": 1500, "llm": 2500, "tts": 500}})
+    assert t == {
+        "stt": pytest.approx(1.5),
+        "llm": pytest.approx(2.5),
+        "tts": pytest.approx(0.5),
+        "total": pytest.approx(4.5),
+    }
+
+
+def test_fr17_timings_s_missing_stage_counts_zero():
+    """A stage missing from timings_ms counts as 0.0."""
+    t = run_eval.timings_s({"timings_ms": {"stt": 1000, "llm": 2000}})
+    assert t["tts"] == 0.0
+    assert t["total"] == pytest.approx(3.0)
+
+
+def test_fr17_timings_s_none_is_all_zero():
+    """No log entry gives all zeros."""
+    assert run_eval.timings_s(None) == {
+        "stt": 0.0,
+        "llm": 0.0,
+        "tts": 0.0,
+        "total": 0.0,
+    }
+
+
+# ---------- summarize (FR-4, FR-17) ----------
+
+
+def spec(
+    id,
+    group="general",
+    passed=True,
+    expected="hello there",
+    heard="hello there",
+    ms=(1000, 1000, 1000),
+    status=200,
+    tools=(),
+    answer="an answer",
+    log=True,
+    wall_s=2.0,
+    reason=None,
+):
+    q = {
+        "id": id,
+        "group": group,
+        "spoken": f"spoken {id}",
+        "expected_transcript": expected,
+    }
+    entry = None
+    if log:
+        entry = {
+            "question": heard,
+            "answer": answer,
+            "searched": bool(tools),
+            "tool_calls": [{"name": t, "args": {}, "ok": True} for t in tools],
+            "error": None,
+            "timings_ms": {"stt": ms[0], "llm": ms[1], "tts": ms[2]},
+        }
+    r = {
+        "id": id,
+        "group": group,
+        "status": status,
+        "error": None if status == 200 else "llm: broke",
+        "wall_s": wall_s,
+        "log": entry,
+        "passed": passed,
+        "reason": reason or ("ok" if passed else "tool x not called"),
+    }
+    return q, r
+
+
+def build(specs):
+    pairs = list(specs)
+    return [p[0] for p in pairs], [p[1] for p in pairs]
+
+
+def group_specs(group, passes, **kw):
+    return [spec(f"{group}{i}", group, p, **kw) for i, p in enumerate(passes)]
+
+
+def all_good(**kw):
+    return (
+        group_specs("general", [True] * 5, **kw)
+        + group_specs("notes", [True] * 5, **kw)
+        + group_specs("reminders", [True] * 5, **kw)
+    )
+
+
+def test_fr17_summarize_counts_and_rates_per_group():
+    """summarize counts passed/total and the rate per group."""
+    qs, rs = build(
+        group_specs("general", [True, True, False, True])
+        + group_specs("notes", [True, False])
+        + group_specs("reminders", [True])
+    )
+    s = run_eval.summarize(qs, rs)
+    assert s["groups"]["general"] == {
+        "passed": 3,
+        "total": 4,
+        "rate": pytest.approx(0.75),
+    }
+    assert s["groups"]["notes"] == {
+        "passed": 1,
+        "total": 2,
+        "rate": pytest.approx(0.5),
+    }
+    assert s["groups"]["reminders"]["rate"] == pytest.approx(1.0)
+
+
+def test_fr17_summarize_rows_carry_report_fields():
+    """Each row holds transcript, answer, tools, seconds, pass and reason."""
+    qs, rs = build(
+        [
+            spec(
+                "a1",
+                "notes",
+                False,
+                expected="add a note",
+                heard="add a node",
+                ms=(1000, 2000, 500),
+                tools=["add_note"],
+                answer="Done.",
+                reason="note_added: nope",
+            )
+        ]
+    )
+    row = run_eval.summarize(qs, rs)["rows"][0]
+    assert row["id"] == "a1" and row["group"] == "notes"
+    assert row["spoken"] == "spoken a1"
+    assert row["expected_transcript"] == "add a note"
+    assert row["heard"] == "add a node"
+    assert row["transcript_ok"] is False
+    assert row["answer"] == "Done."
+    assert row["tools"] == ["add_note"]
+    assert row["searched"] is True
+    assert row["stt_s"] == pytest.approx(1.0)
+    assert row["llm_s"] == pytest.approx(2.0)
+    assert row["tts_s"] == pytest.approx(0.5)
+    assert row["total_s"] == pytest.approx(3.5)
+    assert row["wall_s"] == pytest.approx(2.0)
+    assert row["status"] == 200
+    assert row["passed"] is False
+    assert row["reason"] == "note_added: nope"
+
+
+def test_fr4_summarize_transcription_rate_uses_number_equality():
+    """Transcription matches count 'five' = '5'; None heard is a miss."""
+    qs, rs = build(
+        [
+            spec("t1", expected="call at five", heard="Call at 5."),
+            spec("t2", expected="call mom", heard="call dad"),
+            spec("t3", log=False, status=None),
+            spec("t4", expected="ten pm", heard="10 PM"),
+        ]
+    )
+    s = run_eval.summarize(qs, rs)
+    assert s["transcription"] == {
+        "matched": 2,
+        "total": 4,
+        "rate": pytest.approx(0.5),
+    }
+    assert [r["transcript_ok"] for r in s["rows"]] == [True, False, False, True]
+    assert s["rows"][2]["heard"] is None
+
+
+def test_fr17_summarize_latency_median_and_worst():
+    """median_total_s and worst_total_s come from the per-question totals."""
+    qs, rs = build(
+        [
+            spec("l1", ms=(1000, 1000, 1000)),  # 3
+            spec("l2", ms=(2000, 2000, 1000)),  # 5
+            spec("l3", ms=(5000, 5000, 5000)),  # 15
+        ]
+    )
+    lat = run_eval.summarize(qs, rs)["latency"]
+    assert lat["median_total_s"] == pytest.approx(5.0)
+    assert lat["worst_total_s"] == pytest.approx(15.0)
+
+
+def test_fr17_summarize_without_log_total_falls_back_to_wall_s():
+    """With no log line, total_s is wall_s and stage seconds are 0."""
+    qs, rs = build([spec("w1", log=False, status=None, wall_s=7.5, passed=False)])
+    row = run_eval.summarize(qs, rs)["rows"][0]
+    assert row["total_s"] == pytest.approx(7.5)
+    assert row["stt_s"] == 0.0 and row["llm_s"] == 0.0 and row["tts_s"] == 0.0
+    assert row["answer"] == ""
+    assert row["tools"] == []
+    assert row["searched"] is False
+    assert run_eval.summarize(qs, rs)["latency"]["worst_total_s"] == pytest.approx(7.5)
+
+
+def test_fr17_summarize_errors_count_500_and_connection_error():
+    """errors counts every result whose status is not 200 (500 and None)."""
+    qs, rs = build(
+        [
+            spec("e1"),
+            spec("e2", status=500, passed=False),
+            spec("e3", log=False, status=None, passed=False),
+        ]
+    )
+    s = run_eval.summarize(qs, rs)
+    assert s["errors"] == 2
+    assert s["verdict"]["no_errors"] is False
+
+
+def test_fr17_summarize_verdict_all_met_on_clean_run():
+    """A clean run meets all four criteria."""
+    qs, rs = build(all_good())
+    v = run_eval.summarize(qs, rs)["verdict"]
+    assert v == {
+        "groups": True,
+        "latency": True,
+        "no_errors": True,
+        "transcription": True,
+        "all_met": True,
+    }
+
+
+def test_fr17_verdict_groups_threshold_exactly_80_percent_passes():
+    """A group at exactly 0.8 meets the per-group criterion."""
+    qs, rs = build(
+        group_specs("general", [True, True, True, True, False])
+        + group_specs("notes", [True] * 5)
+        + group_specs("reminders", [True] * 5)
+    )
+    s = run_eval.summarize(qs, rs)
+    assert s["groups"]["general"]["rate"] == pytest.approx(0.8)
+    assert s["verdict"]["groups"] is True
+    assert s["verdict"]["all_met"] is True
+
+
+def test_fr17_verdict_groups_below_80_percent_fails():
+    """One group under 0.8 fails the groups criterion and all_met."""
+    qs, rs = build(
+        group_specs("general", [True, True, True, False, False])
+        + group_specs("notes", [True] * 5)
+        + group_specs("reminders", [True] * 5)
+    )
+    v = run_eval.summarize(qs, rs)["verdict"]
+    assert v["groups"] is False
+    assert v["all_met"] is False
+
+
+def test_fr17_verdict_median_exactly_15s_passes_above_fails():
+    """Median total of exactly 15 s meets the criterion; above 15 s does not."""
+    qs, rs = build(all_good(ms=(5000, 5000, 5000)))
+    assert run_eval.summarize(qs, rs)["verdict"]["latency"] is True
+    qs, rs = build(all_good(ms=(5000, 5000, 5001)))
+    v = run_eval.summarize(qs, rs)["verdict"]
+    assert v["latency"] is False
+    assert v["all_met"] is False
+
+
+def test_fr4_verdict_transcription_exactly_90_percent_passes():
+    """Transcription at exactly 0.9 meets the criterion; below fails."""
+    specs = all_good()[:10]
+    specs[9] = spec("g9", heard="something else")
+    qs, rs = build(specs)
+    s = run_eval.summarize(qs, rs)
+    assert s["transcription"]["rate"] == pytest.approx(0.9)
+    assert s["verdict"]["transcription"] is True
+    specs[8] = spec("g8", heard="something else")
+    qs, rs = build(specs)
+    v = run_eval.summarize(qs, rs)["verdict"]
+    assert v["transcription"] is False
+    assert v["all_met"] is False
+
+
+# ---------- secrets_problems (FR-17) ----------
+
+GEMINI_KEY = "AIza-gemini-secret-value-123"
+TAVILY_KEY = "tvly-tavily-secret-value-456"
+
+
+@pytest.fixture
+def secret_env(monkeypatch, tmp_path):
+    monkeypatch.setattr(run_eval.server_config, "GEMINI_API_KEY", GEMINI_KEY)
+    monkeypatch.setattr(run_eval.server_config, "TAVILY_API_KEY", TAVILY_KEY)
+    monkeypatch.setattr(eval_config, "LOG_PATH", tmp_path / "queries.jsonl")
+
+
+def test_fr17_secrets_clean_gives_empty_list(secret_env):
+    """No key in the log and clean git output gives []."""
+    eval_config.LOG_PATH.write_text('{"question": "hi"}\n', encoding="utf-8")
+    out = "server/main.py\nREADME.md\ntests/test_server.py\n"
+    assert run_eval.secrets_problems(fake_run(out)) == []
+
+
+def test_fr17_secrets_missing_log_file_is_fine(secret_env):
+    """A missing log file is not a problem."""
+    assert not eval_config.LOG_PATH.exists()
+    assert run_eval.secrets_problems(fake_run("README.md\n")) == []
+
+
+def test_fr17_secrets_key_in_log_detected_without_printing_key(secret_env):
+    """A configured key found in the log gives '<NAME> value found in logs', never the value."""
+    eval_config.LOG_PATH.write_text(
+        f'{{"error": "bad key {GEMINI_KEY}"}}\n', encoding="utf-8"
+    )
+    problems = run_eval.secrets_problems(fake_run("README.md\n"))
+    assert problems == ["GEMINI_API_KEY value found in logs"]
+    assert all(GEMINI_KEY not in p and TAVILY_KEY not in p for p in problems)
+
+
+def test_fr17_secrets_both_keys_in_log_reported(secret_env):
+    """Both keys in the log give one problem each."""
+    eval_config.LOG_PATH.write_text(f"{GEMINI_KEY}\n{TAVILY_KEY}\n", encoding="utf-8")
+    problems = run_eval.secrets_problems(fake_run(""))
+    assert "GEMINI_API_KEY value found in logs" in problems
+    assert "TAVILY_API_KEY value found in logs" in problems
+    assert len(problems) == 2
+
+
+def test_fr17_secrets_empty_configured_key_is_ignored(secret_env, monkeypatch):
+    """An empty configured key is skipped, even though '' is in every text."""
+    monkeypatch.setattr(run_eval.server_config, "GEMINI_API_KEY", "")
+    monkeypatch.setattr(run_eval.server_config, "TAVILY_API_KEY", "")
+    eval_config.LOG_PATH.write_text("anything\n", encoding="utf-8")
+    assert run_eval.secrets_problems(fake_run("README.md\n")) == []
+
+
+@pytest.mark.parametrize(
+    "path", [".env", "data/clip.wav", "data/assistant.db", "a.db", "sub/x.db"]
+)
+def test_fr17_secrets_tracked_forbidden_path_flagged(secret_env, path):
+    """A tracked .env, data/ file or *.db is a problem naming the path."""
+    problems = run_eval.secrets_problems(fake_run(f"README.md\n{path}\n"))
+    assert len(problems) == 1
+    assert path in problems[0]
+
+
+def test_fr17_secrets_env_example_is_not_flagged(secret_env):
+    """.env.example is allowed to be tracked."""
+    assert run_eval.secrets_problems(fake_run(".env.example\n")) == []
+
+
+def test_fr17_secrets_git_ls_files_called_with_capture(secret_env):
+    """git ls-files is run with captured text output."""
+    seen = []
+    run_eval.secrets_problems(fake_run("README.md\n", seen=seen))
+    args, kwargs = seen[0]
+    assert list(args) == ["git", "ls-files"]
+    assert kwargs.get("capture_output") is True
+    assert kwargs.get("text") is True
+
+
+@pytest.mark.parametrize(
+    "run",
+    [fake_run("", returncode=128), fake_run(exc=OSError("no git"))],
+    ids=["nonzero", "oserror"],
+)
+def test_fr17_secrets_git_failure_reported(secret_env, run):
+    """A failing git (non-zero exit or OSError) gives 'git ls-files failed'."""
+    assert "git ls-files failed" in run_eval.secrets_problems(run)
+
+
+# ---------- render_markdown / write_report (FR-4, FR-17) ----------
+
+
+def mixed_summary():
+    qs, rs = build(
+        [
+            spec(
+                "m1",
+                "general",
+                True,
+                expected="what is the capital of france",
+                heard="what is the capital of france",
+                answer="Paris is the capital.",
+                tools=["web_search"],
+            ),
+            spec(
+                "m2",
+                "notes",
+                False,
+                expected="add a note buy milk",
+                heard="add a note buy silk",
+                answer="Noted buy silk.",
+                tools=["add_note"],
+                reason="note_added: no note has all of milk",
+            ),
+            spec("m3", "reminders", True, status=500, answer="boom"),
+        ]
+    )
+    return run_eval.summarize(qs, rs)
+
+
+def test_fr17_render_markdown_has_verdict_rates_and_per_question_table():
+    """The report shows group rates, transcription, latency, errors, verdicts and each question."""
+    s = mixed_summary()
+    md = run_eval.render_markdown(s, [])
+    assert isinstance(md, str)
+    for gid in ("m1", "m2", "m3"):
+        assert gid in md
+    for g in ("general", "notes", "reminders"):
+        assert g in md
+    assert "FAIL" in md
+    assert "note_added: no note has all of milk" in md
+    assert "web_search" in md and "add_note" in md
+    assert "transcription" in md.lower()
+    assert "median" in md.lower()
+    assert "error" in md.lower()
+
+
+def test_fr4_render_markdown_lists_transcript_mismatches_and_answers():
+    """Mismatched transcripts show expected vs heard; every answer is listed."""
+    md = run_eval.render_markdown(mixed_summary(), [])
+    assert "add a note buy milk" in md
+    assert "add a note buy silk" in md
+    assert "Paris is the capital." in md
+    assert "Noted buy silk." in md
+
+
+def test_fr17_render_markdown_shows_secrets_problems_and_no_key(secret_env):
+    """Secrets problems appear in the report; no key value ever does."""
+    md = run_eval.render_markdown(
+        mixed_summary(), ["GEMINI_API_KEY value found in logs"]
+    )
+    assert "GEMINI_API_KEY value found in logs" in md
+    assert GEMINI_KEY not in md and TAVILY_KEY not in md
+
+
+@pytest.fixture
+def report_env(monkeypatch, tmp_path):
+    results_dir = tmp_path / "out" / "results"
+    monkeypatch.setattr(eval_config, "RESULTS_DIR", results_dir)
+    monkeypatch.setattr(
+        run_eval, "now", lambda: datetime(2026, 10, 11, 14, 5, tzinfo=IST)
+    )
+    return results_dir
+
+
+def test_fr17_write_report_writes_md_and_json_with_dated_stem(report_env):
+    """write_report writes <date>.md and .json in RESULTS_DIR, creating it, and returns the .md path."""
+    path = run_eval.write_report(mixed_summary(), ["x problem"])
+    assert path == report_env / "2026-10-11_1405.md"
+    assert path.exists()
+    assert (report_env / "2026-10-11_1405.json").exists()
+    assert path.read_text(encoding="utf-8").strip() != ""
+
+
+def test_fr17_write_report_json_is_summary_plus_secrets(report_env):
+    """The JSON file parses and equals the summary plus a 'secrets' key."""
+    s = mixed_summary()
+    run_eval.write_report(s, ["x problem"])
+    data = json.loads((report_env / "2026-10-11_1405.json").read_text(encoding="utf-8"))
+    assert data == json.loads(json.dumps({**s, "secrets": ["x problem"]}))
+
+
+# ---------- main writes the report (FR-17) ----------
+
+
+def test_fr17_main_prints_report_path_and_writes_files(main_env, monkeypatch, capsys):
+    """main prints group/transcription/latency/error/secrets lines and the report path, and writes both files."""
+    monkeypatch.setattr(
+        run_eval, "now", lambda: datetime(2026, 10, 11, 14, 5, tzinfo=IST)
+    )
+    monkeypatch.setattr(eval_config, "RESULTS_DIR", main_env["results"])
+    monkeypatch.setattr(run_eval, "secrets_problems", lambda *a, **k: [])
+    monkeypatch.setattr(
+        run_eval,
+        "replay",
+        lambda qs, client, *a, **k: [
+            {
+                "id": q["id"],
+                "group": q["group"],
+                "status": 200,
+                "error": None,
+                "wall_s": 1.0,
+                "log": None,
+                "passed": True,
+                "reason": "ok",
+            }
+            for q in qs
+        ],
+    )
+    assert run_eval.main() == 0
+    out = capsys.readouterr().out
+    md = main_env["results"] / "2026-10-11_1405.md"
+    assert md.exists()
+    assert (main_env["results"] / "2026-10-11_1405.json").exists()
+    assert str(md) in out
+    assert "general" in out
+    assert "transcription" in out.lower()
+    assert "secrets" in out.lower()

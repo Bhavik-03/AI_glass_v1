@@ -19,3 +19,8 @@ PROCESS_LIST_TIMEOUT_S = 10
 # before the reminder is stored; fixed clock times must land on the minute.
 DUE_AT_TOLERANCE_S = 60
 DUE_IN_TOLERANCE_S = 120
+RESULTS_DIR = ROOT / "eval" / "results"
+# Quality targets from spec.md.
+GROUP_PASS_MIN = 0.8
+MEDIAN_TOTAL_MAX_S = 15
+TRANSCRIPTION_MIN = 0.9
