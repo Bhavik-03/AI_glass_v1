@@ -263,34 +263,327 @@ def test_fr7_too_many_tool_rounds(monkeypatch) -> None:
     assert len(fake.models.calls) == rounds + 1
 
 
-def test_fr5_deadline_before_search(monkeypatch) -> None:
-    """A search whose 5 s timeout does not fit in the 15 s deadline raises 'deadline exceeded'."""
+def scripted_clock(monkeypatch, model_times: list[float] | None = None):
+    """Install a FakeClock. After the i-th Gemini call returns, the clock reads model_times[i]
+    (the last value repeats). Returns (clock, on_model_call)."""
     clock = FakeClock()
     monkeypatch.setattr(llm, "_clock", clock)
+    times = list(model_times or [])
+    state = {"i": 0}
 
-    def advance() -> None:
-        clock.t = 12.0
+    def on_model_call() -> None:
+        if times:
+            clock.t = times[min(state["i"], len(times) - 1)]
+        state["i"] += 1
 
-    install_fake(monkeypatch, [call_response(), text_response()], on_call=advance)
+    return clock, on_model_call
+
+
+def install_named_run(monkeypatch, results: dict) -> list:
+    """Fake tools.run returning results[name]; records (name, args)."""
+    seen: list = []
+
+    def fake_run(name, args, now):
+        seen.append((name, args))
+        return results[name]
+
+    monkeypatch.setattr(tools, "run", fake_run)
+    return seen
+
+
+def search_round(call_id: str):
+    return named_call_response("web_search", {"query": "q"}, call_id, b"sig")
+
+
+def mode_of(call: dict) -> str:
+    fc = call["config"].tool_config.function_calling_config
+    return enum_value(fc.mode)
+
+
+def test_fr5_config_final_call_defaults() -> None:
+    """LLM_FINAL_DEADLINE_S is 18 and LLM_FINAL_START_MAX_S is 8."""
+    assert config.LLM_FINAL_DEADLINE_S == 18
+    assert config.LLM_FINAL_START_MAX_S == 8
+
+
+def test_fr5_first_round_search_runs_even_late(monkeypatch) -> None:
+    """A web_search in the first tool round always runs, even when 9 s have already passed;
+    the next Gemini call then does not fit and elapsed > 8, so 'deadline exceeded'."""
+    _, on_model = scripted_clock(monkeypatch, [9.0])
+    fake = install_fake(
+        monkeypatch, [call_response(), text_response()], on_call=on_model
+    )
     seen = install_run(monkeypatch, SEARCH_RESULT)
-    with pytest.raises(RuntimeError, match="deadline exceeded"):
+    with pytest.raises(RuntimeError, match="deadline exceeded") as exc:
         llm.ask("q?", fixed_now())
-    assert seen == []
+    assert len(seen) == 1
+    assert exc.value.tool_calls == [
+        {"name": "web_search", "args": {"query": "q"}, "ok": True}
+    ]
+    assert len(fake.models.calls) == 1
 
 
-def test_fr5_deadline_before_second_gemini_call(monkeypatch) -> None:
-    """A Gemini call whose 10 s timeout does not fit in the time left raises 'deadline exceeded'."""
-    clock = FakeClock()
-    monkeypatch.setattr(llm, "_clock", clock)
+def test_fr5_first_round_local_tool_runs_even_late(monkeypatch) -> None:
+    """A local tool in the first tool round also runs regardless of elapsed time."""
+    _, on_model = scripted_clock(monkeypatch, [9.0])
+    install_fake(
+        monkeypatch,
+        [named_call_response("list_reminders", {}, "c1", b"s"), text_response()],
+        on_call=on_model,
+    )
+    seen = install_named_run(monkeypatch, {"list_reminders": {"reminders": []}})
+    with pytest.raises(RuntimeError, match="deadline exceeded") as exc:
+        llm.ask("what reminders?", fixed_now())
+    assert seen == [("list_reminders", {})]
+    assert exc.value.tool_calls == [{"name": "list_reminders", "args": {}, "ok": True}]
+
+
+def test_fr5_deadline_before_second_gemini_call_makes_final_call(monkeypatch) -> None:
+    """If the second tool-enabled call does not fit (elapsed 6 s) the FINAL call is made with
+    function calling mode NONE; its text is the answer and it carries the tool results."""
+    clock, _ = scripted_clock(monkeypatch)
 
     def advance() -> None:
         clock.t = 6.0
+
+    fake = install_fake(monkeypatch, [call_response(), text_response("final answer")])
+    install_run(monkeypatch, SEARCH_RESULT, on_call=advance)
+    answer, searched, tool_calls = llm.ask("q?", fixed_now())
+    assert answer == "final answer"
+    assert searched is True
+    assert tool_calls == [{"name": "web_search", "args": {"query": "q"}, "ok": True}]
+    assert len(fake.models.calls) == 2
+    final = fake.models.calls[1]
+    assert mode_of(final) == types.FunctionCallingConfigMode.NONE.value
+    contents = final["contents"]
+    assert len(contents) == 3
+    assert contents[1].role == "model"
+    assert contents[2].parts[0].function_response.response == SEARCH_RESULT
+
+
+def test_fr5_deadline_after_late_tool_raises_without_final_call(monkeypatch) -> None:
+    """At elapsed 9 s (> 8) the second call does not fit and no FINAL call is allowed:
+    'deadline exceeded', no further Gemini call."""
+    clock, _ = scripted_clock(monkeypatch)
+
+    def advance() -> None:
+        clock.t = 9.0
 
     fake = install_fake(monkeypatch, [call_response(), text_response()])
     install_run(monkeypatch, SEARCH_RESULT, on_call=advance)
     with pytest.raises(RuntimeError, match="deadline exceeded"):
         llm.ask("q?", fixed_now())
     assert len(fake.models.calls) == 1
+
+
+def test_fr5_later_round_search_refused_when_it_does_not_fit(monkeypatch) -> None:
+    """A round-1 web_search at elapsed 4 s (4 + 5 + 10 > 18) is not run: it gets an error
+    function response, is logged ok False, and the next request is the FINAL call."""
+    clock, on_model = scripted_clock(monkeypatch)
+    seen: list = []
+
+    def fake_run(name, args, now):
+        seen.append((name, args))
+        clock.t = 4.0
+        return SEARCH_RESULT
+
+    monkeypatch.setattr(tools, "run", fake_run)
+    fake = install_fake(
+        monkeypatch,
+        [search_round("c1"), search_round("c2"), text_response("no luck")],
+        on_call=on_model,
+    )
+    answer, searched, tool_calls = llm.ask("q?", fixed_now())
+    assert searched is True  # the first search returned results
+    assert answer == "no luck"
+    assert len(seen) == 1
+    assert len(fake.models.calls) == 3
+    assert tool_calls == [
+        {"name": "web_search", "args": {"query": "q"}, "ok": True},
+        {"name": "web_search", "args": {"query": "q"}, "ok": False},
+    ]
+    final = fake.models.calls[2]
+    assert mode_of(final) == types.FunctionCallingConfigMode.NONE.value
+    reply = final["contents"][4].parts[0].function_response
+    assert reply.id == "c2"
+    assert reply.name == "web_search"
+    assert isinstance(reply.response, dict)
+    assert "no time" in str(reply.response["error"])
+
+
+def test_fr5_later_round_search_runs_when_it_fits(monkeypatch) -> None:
+    """A round-1 web_search at elapsed 3 s (3 + 5 + 10 <= 18) runs."""
+    clock, on_model = scripted_clock(monkeypatch)
+    seen: list = []
+
+    def fake_run(name, args, now):
+        seen.append(name)
+        clock.t = 3.0
+        return SEARCH_RESULT
+
+    monkeypatch.setattr(tools, "run", fake_run)
+    fake = install_fake(
+        monkeypatch,
+        [search_round("c1"), search_round("c2"), text_response("done")],
+        on_call=on_model,
+    )
+    answer, searched, tool_calls = llm.ask("q?", fixed_now())
+    assert answer == "done"
+    assert seen == ["web_search", "web_search"]
+    assert [c["ok"] for c in tool_calls] == [True, True]
+    assert searched is True
+    assert (
+        mode_of(fake.models.calls[2]) == types.FunctionCallingConfigMode.VALIDATED.value
+    )
+
+
+def test_fr7_list_then_cancel_both_run_then_text(monkeypatch) -> None:
+    """list_reminders then cancel_reminder (tool timeout 0) at elapsed 3 s both run;
+    the plain text answer follows and both tool calls are ok."""
+    _, on_model = scripted_clock(monkeypatch, [3.0])
+    fake = install_fake(
+        monkeypatch,
+        [
+            named_call_response("list_reminders", {}, "c1", b"s1"),
+            named_call_response("cancel_reminder", {"id": 4}, "c2", b"s2"),
+            text_response("Cancelled."),
+        ],
+        on_call=on_model,
+    )
+    seen = install_named_run(
+        monkeypatch,
+        {"list_reminders": {"reminders": []}, "cancel_reminder": {"id": 4}},
+    )
+    answer, searched, tool_calls = llm.ask("cancel it", fixed_now())
+    assert answer == "Cancelled."
+    assert searched is False
+    assert [s[0] for s in seen] == ["list_reminders", "cancel_reminder"]
+    assert tool_calls == [
+        {"name": "list_reminders", "args": {}, "ok": True},
+        {"name": "cancel_reminder", "args": {"id": 4}, "ok": True},
+    ]
+    assert (
+        mode_of(fake.models.calls[2]) == types.FunctionCallingConfigMode.VALIDATED.value
+    )
+
+
+def test_fr7_later_round_local_tool_runs_at_8s(monkeypatch) -> None:
+    """A round-1 local tool at elapsed 8 s (8 + 0 + 10 <= 18) runs."""
+    _, on_model = scripted_clock(monkeypatch, [1.0, 8.0, 8.0])
+    install_fake(
+        monkeypatch,
+        [
+            named_call_response("list_reminders", {}, "c1", b"s1"),
+            named_call_response("cancel_reminder", {"id": 4}, "c2", b"s2"),
+            text_response("Cancelled."),
+        ],
+        on_call=on_model,
+    )
+    seen = install_named_run(
+        monkeypatch,
+        {"list_reminders": {"reminders": []}, "cancel_reminder": {"id": 4}},
+    )
+    answer, _, tool_calls = llm.ask("cancel it", fixed_now())
+    assert answer == "Cancelled."
+    assert [s[0] for s in seen] == ["list_reminders", "cancel_reminder"]
+    assert [c["ok"] for c in tool_calls] == [True, True]
+
+
+def test_fr7_later_round_local_tool_refused_at_8_5s(monkeypatch) -> None:
+    """A round-1 local tool at elapsed 8.5 s (8.5 + 10 > 18) is not run; the FINAL call is
+    then not allowed (8.5 > 8), so 'deadline exceeded' with the refused call logged ok False."""
+    _, on_model = scripted_clock(monkeypatch, [1.0, 8.5, 8.5])
+    fake = install_fake(
+        monkeypatch,
+        [
+            named_call_response("list_reminders", {}, "c1", b"s1"),
+            named_call_response("cancel_reminder", {"id": 4}, "c2", b"s2"),
+            text_response("unused"),
+        ],
+        on_call=on_model,
+    )
+    seen = install_named_run(
+        monkeypatch,
+        {"list_reminders": {"reminders": []}, "cancel_reminder": {"id": 4}},
+    )
+    with pytest.raises(RuntimeError, match="deadline exceeded") as exc:
+        llm.ask("cancel it", fixed_now())
+    assert [s[0] for s in seen] == ["list_reminders"]
+    assert exc.value.tool_calls == [
+        {"name": "list_reminders", "args": {}, "ok": True},
+        {"name": "cancel_reminder", "args": {"id": 4}, "ok": False},
+    ]
+    assert len(fake.models.calls) == 2
+
+
+@pytest.mark.parametrize(
+    "bad_final",
+    [
+        ConnectionError("api down"),
+        text_response(""),
+        types.GenerateContentResponse(candidates=[]),
+    ],
+    ids=["api-error", "empty-text", "no-candidates"],
+)
+def test_fr5_final_call_failure_is_deadline_exceeded(monkeypatch, bad_final) -> None:
+    """A FINAL call that raises or returns no text gives RuntimeError('deadline exceeded'),
+    still carrying the tool calls made."""
+    clock, _ = scripted_clock(monkeypatch)
+
+    def advance() -> None:
+        clock.t = 6.0
+
+    fake = install_fake(monkeypatch, [call_response(), bad_final])
+    install_run(monkeypatch, SEARCH_RESULT, on_call=advance)
+    with pytest.raises(RuntimeError, match="deadline exceeded") as exc:
+        llm.ask("q?", fixed_now())
+    assert len(fake.models.calls) == 2  # the FINAL call was really made
+    assert exc.value.tool_calls == [
+        {"name": "web_search", "args": {"query": "q"}, "ok": True}
+    ]
+
+
+def test_fr5_final_request_mode_none_normal_requests_validated(monkeypatch) -> None:
+    """The FINAL request has function calling mode NONE and still declares the same tools;
+    the normal requests before it keep VALIDATED."""
+    clock, _ = scripted_clock(monkeypatch)
+
+    def advance() -> None:
+        clock.t = 6.0
+
+    fake = install_fake(monkeypatch, [call_response(), text_response("x")])
+    install_run(monkeypatch, SEARCH_RESULT, on_call=advance)
+    llm.ask("q?", fixed_now())
+    first, final = fake.models.calls
+    assert mode_of(first) == types.FunctionCallingConfigMode.VALIDATED.value
+    assert mode_of(final) == types.FunctionCallingConfigMode.NONE.value
+    names = [d.name for d in final["config"].tools[0].function_declarations]
+    assert names == [d["name"] for d in tools.DECLARATIONS]
+
+
+def test_fr7_refused_only_search_is_not_searched(monkeypatch) -> None:
+    """When the only web_search is refused, then the FINAL call answers: tool_calls holds both
+    calls and searched is False."""
+    _, on_model = scripted_clock(monkeypatch, [1.0, 5.0, 5.0])
+    fake = install_fake(
+        monkeypatch,
+        [
+            named_call_response("list_reminders", {}, "c1", b"s1"),
+            search_round("c2"),
+            text_response("I could not look it up."),
+        ],
+        on_call=on_model,
+    )
+    seen = install_named_run(monkeypatch, {"list_reminders": {"reminders": []}})
+    answer, searched, tool_calls = llm.ask("q?", fixed_now())
+    assert answer == "I could not look it up."
+    assert searched is False
+    assert [s[0] for s in seen] == ["list_reminders"]
+    assert tool_calls == [
+        {"name": "list_reminders", "args": {}, "ok": True},
+        {"name": "web_search", "args": {"query": "q"}, "ok": False},
+    ]
+    assert mode_of(fake.models.calls[2]) == types.FunctionCallingConfigMode.NONE.value
 
 
 def test_fr17_too_many_rounds_error_carries_tool_calls(monkeypatch) -> None:
@@ -305,12 +598,13 @@ def test_fr17_too_many_rounds_error_carries_tool_calls(monkeypatch) -> None:
 
 
 def test_fr17_deadline_error_carries_tool_calls(monkeypatch) -> None:
-    """'deadline exceeded' after a tool call is still a RuntimeError and carries that call."""
+    """'deadline exceeded' after a tool call (elapsed 9 s, no FINAL call allowed) is still a
+    RuntimeError and carries that call."""
     clock = FakeClock()
     monkeypatch.setattr(llm, "_clock", clock)
 
     def advance() -> None:
-        clock.t = 6.0
+        clock.t = 9.0
 
     install_fake(monkeypatch, [call_response(), text_response()])
     install_run(monkeypatch, SEARCH_RESULT, on_call=advance)
