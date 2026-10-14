@@ -10,6 +10,7 @@ from contextlib import ExitStack
 
 import httpx
 import sounddevice as sd
+from PIL import Image, ImageGrab
 from pynput import keyboard
 
 from client_pc import config
@@ -279,6 +280,17 @@ def _error_text(response: httpx.Response) -> str:
 IDLE, RECORDING, WAITING, PLAYING = "idle", "recording", "waiting", "playing"
 
 
+def to_jpeg(image: Image.Image) -> bytes:
+    """Shrink a screenshot to SCREENSHOT_MAX_SIDE_PX and encode it as JPEG in memory,
+    never on disk (FR-19)."""
+    small = image.convert("RGB")  # a copy; JPEG has no alpha
+    side = config.SCREENSHOT_MAX_SIDE_PX
+    small.thumbnail((side, side))  # keeps the aspect ratio, never enlarges
+    buf = io.BytesIO()
+    small.save(buf, "JPEG", quality=config.SCREENSHOT_JPEG_QUALITY)
+    return buf.getvalue()
+
+
 def _spawn_thread(fn: Callable[[], None]) -> None:
     threading.Thread(target=fn, daemon=True).start()
 
@@ -296,13 +308,18 @@ class Client:
         self,
         recorder: Recorder,
         player: Player,
-        send: Callable[[bytes], bytes] = send_query,
+        send: Callable[..., bytes] = send_query,
         clock: Callable[[], float] = time.monotonic,
         spawn: Callable[[Callable[[], None]], None] = _spawn_thread,
         timer: Callable = threading.Timer,
         transport: httpx.BaseTransport | None = None,
+        grab: Callable[[], Image.Image] = ImageGrab.grab,
     ) -> None:
         self._transport = transport
+        self._grab = grab
+        # The key that started the recording; only its release stops it.
+        self._key = None
+        self._shot: Image.Image | None = None
         self._poll_failing = False
         self._recorder = recorder
         self._player = player
@@ -316,13 +333,16 @@ class Client:
         self.state = IDLE
 
     def on_key_press(self, key) -> None:
-        if not self._is_ptt(key) or self.state != IDLE:
+        if not self._is_record_key(key) or self.state != IDLE:
             return
         if not self._lock.acquire(blocking=False):
             return
         try:
             if self.state != IDLE:
                 return
+            # Grab at press: the screen then shows what the question is about (FR-19).
+            self._shot = self._grab() if self._is_look(key) else None
+            self._key = key
             self._recorder.start_recording()
             self._started = self._clock()
             self._timer = self._timer_factory(config.MAX_RECORD_S, self._release)
@@ -334,7 +354,7 @@ class Client:
         self._spawn(self._start_sound)
 
     def on_key_release(self, key) -> None:
-        if self._is_ptt(key):
+        if key == self._key:
             self._release()
 
     def _release(self) -> None:
@@ -348,10 +368,11 @@ class Client:
             held = t_release - self._started
             self.state = WAITING
             wav = self._recorder.stop_recording()
+            shot, self._shot, self._key = self._shot, None, None
         if held < config.MIN_RECORDING_S:
             self._spawn(self._discard)
         else:
-            self._spawn(lambda: self._query(wav, t_release))
+            self._spawn(lambda: self._query(wav, shot, t_release))
 
     def poll(self) -> None:
         """Deliver due reminders, but only while the client is idle."""
@@ -407,11 +428,12 @@ class Client:
         finally:
             self.state = IDLE
 
-    def _query(self, wav: bytes, t_release: float) -> None:
+    def _query(self, wav: bytes, shot: Image.Image | None, t_release: float) -> None:
         try:
             with self._lock:
                 self._player.play_thinking()
-            answer = self._send(wav)
+            # Shrink and encode here, not in the key handler, so the listener stays quick.
+            answer = self._send(wav, image=to_jpeg(shot) if shot is not None else None)
             with self._lock:
                 self.state = PLAYING
                 log.info("latency %.1f s", self._clock() - t_release)
@@ -428,8 +450,12 @@ class Client:
             play()
 
     @staticmethod
-    def _is_ptt(key) -> bool:
-        return key == getattr(keyboard.Key, config.VOICE_KEY)
+    def _is_look(key) -> bool:
+        return key == getattr(keyboard.Key, config.LOOK_KEY)
+
+    @classmethod
+    def _is_record_key(cls, key) -> bool:
+        return key == getattr(keyboard.Key, config.VOICE_KEY) or cls._is_look(key)
 
 
 def run(

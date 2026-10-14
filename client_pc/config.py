@@ -17,6 +17,11 @@ ERROR_TONE = ((300, 0.2), (200, 0.3))
 # Name of a pynput.keyboard.Key member. Right Alt reports alt_gr on this laptop (after an
 # extra ctrl_l press, which is ignored).
 VOICE_KEY = "alt_gr"
+LOOK_KEY = "ctrl_r"  # Right Ctrl: voice plus one screenshot taken at press
+SCREENSHOT_MAX_SIDE_PX = 1280
+SCREENSHOT_JPEG_QUALITY = (
+    70  # chosen in the M9-T1 spike: about 76 KB, small text readable
+)
 MIN_RECORDING_S = 0.3
 ERROR_MAX_CHARS = 200
 POLL_INTERVAL_S = 10

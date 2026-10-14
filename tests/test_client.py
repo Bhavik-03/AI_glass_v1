@@ -10,6 +10,7 @@ from itertools import pairwise
 
 import httpx
 import pytest
+from PIL import Image
 from pynput import keyboard
 
 from client_pc import client as client_mod
@@ -28,6 +29,7 @@ from client_pc.client import (
     make_tone,
     run,
     send_query,
+    to_jpeg,
 )
 
 CHUNK = 1600  # samples per fed chunk (0.1 s)
@@ -886,13 +888,15 @@ class FakeSend:
     def __init__(self, log: list, clock) -> None:
         self.log = log
         self.clock = clock
+        self.images: list[bytes | None] = []
         self.exc: Exception | None = None
         self.answer_at: float | None = None
         self.entered = threading.Event()
         self.gate: threading.Event | None = None
 
-    def __call__(self, wav: bytes) -> bytes:
+    def __call__(self, wav: bytes, image: bytes | None = None) -> bytes:
         self.log.append(("send", wav))
+        self.images.append(image)
         self.entered.set()
         if self.gate is not None:
             assert self.gate.wait(WAIT_S)
@@ -976,7 +980,12 @@ class Rig:
             spawn=spawn or (lambda fn: fn()),
             timer=self.make_timer,
             transport=transport,
+            grab=self.fake_grab,
         )
+
+    def fake_grab(self) -> Image.Image:
+        self.log.append(("grab",))
+        return Image.new("RGB", (2560, 1440), (10, 120, 200))
 
     def make_timer(self, interval: float, fn) -> FakeTimer:
         t = FakeTimer(interval, fn)
@@ -2203,3 +2212,189 @@ def test_fr15_main_wires_recorder_player_client_and_logging(monkeypatch):
     assert isinstance(recorder, Recorder)
     assert isinstance(player, Player)
     assert built == [(recorder, player)]
+
+
+# ---- FR-19: Look key (M9-T8). Fake screen grab: no real screen, no files. ----
+
+LOOK = keyboard.Key.ctrl_r
+
+
+def look_cycle(rig: Rig, held: float = 1.0) -> None:
+    rig.press(LOOK)
+    rig.clock.t += held
+    rig.release(LOOK)
+
+
+def test_fr19_look_config_values():
+    """Look key is Right Ctrl (ctrl_r), screenshots are at most 1280 px, JPEG quality 70."""
+    assert config.LOOK_KEY == "ctrl_r"
+    assert config.SCREENSHOT_MAX_SIDE_PX == 1280
+    assert config.SCREENSHOT_JPEG_QUALITY == 70
+
+
+def test_fr19_look_press_grabs_once_at_press_and_starts_recording(rig):
+    """Right Ctrl takes one screenshot at press, not at release, and starts recording."""
+    rig.press(LOOK)
+    assert rig.count(("grab",)) == 1
+    assert rig.client.state == "recording"
+    assert rig.count("start_recording") == 1
+    rig.clock.t += 1.0
+    rig.release(LOOK)
+    assert rig.count(("grab",)) == 1
+    assert rig.log.index(("grab",)) < rig.log.index("stop_recording")
+
+
+def test_fr19_look_release_sends_one_jpeg_within_max_side(rig):
+    """The request carries one JPEG whose longest side is at most 1280 px."""
+    look_cycle(rig)
+    assert rig.count(("send", REC_WAV)) == 1
+    assert len(rig.send.images) == 1
+    data = rig.send.images[0]
+    assert isinstance(data, bytes)
+    assert data.startswith(b"\xff\xd8")
+    with Image.open(io.BytesIO(data)) as img:
+        assert img.format == "JPEG"
+        assert max(img.size) <= config.SCREENSHOT_MAX_SIDE_PX
+    assert rig.client.state == "idle"
+
+
+def test_fr19_look_key_comes_from_config_at_call_time(monkeypatch, rig):
+    """The look key is read from config.LOOK_KEY."""
+    monkeypatch.setattr(config, "LOOK_KEY", "f8")
+    rig.press(LOOK)
+    assert rig.log == []
+    rig.press(keyboard.Key.f8)
+    assert rig.count(("grab",)) == 1
+    assert rig.client.state == "recording"
+
+
+def test_fr19_key_repeat_while_looking_grabs_only_once(rig):
+    """Key-repeat presses of Right Ctrl while held do not take more screenshots."""
+    rig.press(LOOK)
+    rig.press(LOOK)
+    rig.press(LOOK)
+    assert rig.count(("grab",)) == 1
+    assert rig.count("start_recording") == 1
+
+
+@pytest.mark.parametrize(
+    ("size", "expected"),
+    [
+        ((2560, 1440), (1280, 720)),
+        ((1440, 2560), (720, 1280)),
+        ((800, 600), (800, 600)),
+        ((1280, 1280), (1280, 1280)),
+    ],
+    ids=["landscape", "portrait", "small_not_enlarged", "exact_limit"],
+)
+def test_fr19_to_jpeg_shrinks_longest_side_keeping_aspect(size, expected):
+    """A screenshot is shrunk so its longest side is at most 1280 px, never enlarged."""
+    data = to_jpeg(Image.new("RGB", size, (200, 50, 50)))
+    assert isinstance(data, bytes)
+    with Image.open(io.BytesIO(data)) as img:
+        assert img.format == "JPEG"
+        assert img.size == expected
+
+
+def test_fr19_to_jpeg_accepts_rgba_input():
+    """An RGBA screen grab is converted to RGB and still encoded as JPEG."""
+    data = to_jpeg(Image.new("RGBA", (2000, 1000), (1, 2, 3, 128)))
+    assert data.startswith(b"\xff\xd8")
+    with Image.open(io.BytesIO(data)) as img:
+        assert img.format == "JPEG"
+        assert img.mode == "RGB"
+        assert img.size == (1280, 640)
+
+
+def test_fr19_to_jpeg_does_not_change_the_input_image():
+    """Shrinking works on a copy: the grabbed image keeps its size."""
+    src = Image.new("RGB", (2560, 1440))
+    to_jpeg(src)
+    assert src.size == (2560, 1440)
+
+
+def test_fr19_right_alt_cycle_sends_no_image_and_does_not_grab(rig):
+    """Right Alt (ctrl_l then alt_gr) takes no screenshot and sends no image."""
+    rig.press(keyboard.Key.ctrl_l)
+    rig.press(keyboard.Key.alt_gr)
+    rig.clock.t += 1.0
+    rig.release(keyboard.Key.alt_gr)
+    rig.release(keyboard.Key.ctrl_l)
+    assert rig.count(("grab",)) == 0
+    assert rig.count(("send", REC_WAV)) == 1
+    assert rig.send.images == [None]
+
+
+def test_fr19_releasing_voice_key_does_not_stop_a_look_recording(rig):
+    """While recording with Right Ctrl, pressing or releasing Right Alt or ctrl_l does not stop it."""
+    rig.press(LOOK)
+    rig.press(keyboard.Key.ctrl_l)
+    rig.press(keyboard.Key.alt_gr)
+    rig.release(keyboard.Key.alt_gr)
+    rig.release(keyboard.Key.ctrl_l)
+    assert rig.client.state == "recording"
+    assert rig.count("stop_recording") == 0
+    assert rig.count("start_recording") == 1
+    assert rig.count(("grab",)) == 1
+    rig.clock.t += 1.0
+    rig.release(LOOK)
+    assert rig.count("stop_recording") == 1
+    assert rig.count(("send", REC_WAV)) == 1
+    assert rig.send.images[0].startswith(b"\xff\xd8")
+
+
+def test_fr19_releasing_look_key_does_not_stop_a_voice_recording(rig):
+    """While recording with Right Alt, Right Ctrl press and release are ignored: no grab, no stop."""
+    rig.press(PTT)
+    rig.press(LOOK)
+    rig.release(LOOK)
+    assert rig.client.state == "recording"
+    assert rig.count("stop_recording") == 0
+    assert rig.count(("grab",)) == 0
+    rig.clock.t += 1.0
+    rig.release(PTT)
+    assert rig.count("stop_recording") == 1
+    assert rig.count(("grab",)) == 0
+    assert rig.send.images == [None]
+
+
+def test_fr19_look_cycle_runs_in_order_and_plays_answer(rig):
+    """A Look query follows the voice flow: record, thinking sound, send, play the answer."""
+    look_cycle(rig)
+    assert [x for x in rig.log if x != ("grab",)] == [
+        "start_recording",
+        "start",
+        "stop_recording",
+        "thinking",
+        ("send", REC_WAV),
+        ("wav", REPLY_WAV),
+    ]
+    assert rig.client.state == "idle"
+
+
+def test_fr19_short_look_press_is_discarded_like_voice(rig):
+    """A Look press shorter than MIN_RECORDING_S plays the error tone and sends nothing."""
+    look_cycle(rig, held=0.1)
+    assert rig.count(("send", REC_WAV)) == 0
+    assert rig.send.images == []
+    assert "thinking" not in rig.log
+    assert rig.count("error") == 1
+    assert rig.client.state == "idle"
+
+
+def test_fr19_look_then_voice_cycle_second_has_no_image(rig):
+    """The image belongs to one query only: a voice query after a Look query sends none."""
+    look_cycle(rig)
+    rig.cycle()
+    assert len(rig.send.images) == 2
+    assert rig.send.images[0] is not None
+    assert rig.send.images[1] is None
+    assert rig.count(("grab",)) == 1
+
+
+def test_fr19_look_cycle_writes_no_file(rig, tmp_path, monkeypatch):
+    """No image file is written anywhere during a Look cycle."""
+    monkeypatch.chdir(tmp_path)
+    look_cycle(rig)
+    assert isinstance(rig.send.images[0], bytes)
+    assert list(tmp_path.iterdir()) == []

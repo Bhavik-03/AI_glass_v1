@@ -30,7 +30,7 @@ Goal: Right Alt voice, Right Ctrl voice + screenshot; image to Gemini and in the
 | M9-T5 | FR-21 | server/session.py (+ tests/test_session.py) | The session keeps the most recent image (bytes and type); it ends with the session at 120 s; `reset()` clears it | pytest | #78 | [x] |
 | M9-T6 | FR-20, FR-21, FR-17 | server/main.py (+ tests/test_server.py) | `/query` sends the new image to `llm.ask`, else the saved one; the image is saved only after a 200; the log has `image_sent` (true only for a new image), never the image | pytest | #79 | [x] |
 | M9-T7 | FR-3 | client_pc/client.py (+ tests/test_client.py) | `send_query(wav, image=None)` adds an `image` field (JPEG) only when given; the 25 s timeout and error sound behave as before | pytest | #80 | [x] |
-| M9-T8 | FR-19 | client_pc/config.py, client_pc/client.py (+ tests/test_client.py) | Right Ctrl (`LOOK_KEY = "ctrl_r"`) records like Right Alt and takes one screenshot at press, not release; shrunk to `SCREENSHOT_MAX_SIDE_PX` (1280), JPEG in memory; Right Alt sends no image; releasing the other key does not stop the recording; no image file is written (fake screen grab) | pytest | #81 | [ ] |
+| M9-T8 | FR-19 | client_pc/config.py, client_pc/client.py (+ tests/test_client.py) | Right Ctrl (`LOOK_KEY = "ctrl_r"`) records like Right Alt and takes one screenshot at press, not release; shrunk to `SCREENSHOT_MAX_SIDE_PX` (1280), JPEG in memory; Right Alt sends no image; releasing the other key does not stop the recording; no image file is written (fake screen grab) | pytest | #81 | [x] |
 
 M9-T1 spike results (Oct 14, 2026; Pillow 12.3.0, pynput 1.8.2):
 - `ImageGrab.grab()` of the 1920x1080 screen: median 29 ms, max 49 ms (10 grabs).
