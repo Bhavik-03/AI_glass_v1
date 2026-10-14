@@ -754,6 +754,81 @@ def test_fr3_error_classes_inherit_from_query_error():
     assert not issubclass(ServerUnreachable, QueryTimeout)
 
 
+# ---- FR-3: send_query with an optional Look image (M9-T7) ----
+
+JPEG = b"\xff\xd8\xff\xe0" + bytes(range(256)) + b"\xff\xd9"
+
+
+def multipart_parts(request: httpx.Request) -> dict[str, tuple[bytes, bytes]]:
+    """Return {field name: (part headers, part body)} from a multipart request."""
+    content_type = request.headers["content-type"]
+    boundary = content_type.split("boundary=")[1].split(";")[0].strip('"').encode()
+    parts: dict[str, tuple[bytes, bytes]] = {}
+    for raw in request.content.split(b"--" + boundary):
+        if b"\r\n\r\n" not in raw:
+            continue
+        headers, body = raw.split(b"\r\n\r\n", 1)
+        body = body.removesuffix(b"\r\n")
+        name = headers.split(b'name="', 1)[1].split(b'"', 1)[0].decode()
+        parts[name] = (headers, body)
+    return parts
+
+
+def query_with_image(handler, image: bytes = JPEG) -> bytes:
+    return send_query(QUESTION_WAV, transport=httpx.MockTransport(handler), image=image)
+
+
+def test_fr3_image_is_sent_as_jpeg_part_with_exact_bytes():
+    """With an image, the body has an audio part and an image part (screenshot.jpg, image/jpeg, exact bytes)."""
+    seen: list[httpx.Request] = []
+    query_with_image(capture(seen))
+    parts = multipart_parts(seen[0])
+    assert set(parts) == {"audio", "image"}
+    headers, body = parts["image"]
+    assert b'filename="screenshot.jpg"' in headers
+    assert b"image/jpeg" in headers.lower()
+    assert body == JPEG
+    assert parts["audio"][1] == QUESTION_WAV
+
+
+def test_fr3_no_image_part_when_image_is_none():
+    """Without an image the body has only the audio part and no image field."""
+    seen: list[httpx.Request] = []
+    send_query(QUESTION_WAV, transport=httpx.MockTransport(capture(seen)), image=None)
+    assert b'name="image"' not in seen[0].content
+    assert set(multipart_parts(seen[0])) == {"audio"}
+
+
+def test_fr3_image_query_returns_the_answer_bytes():
+    """A query with an image still returns the answer WAV bytes."""
+    assert query_with_image(answer_handler) == ANSWER_WAV
+
+
+def test_fr3_image_query_uses_the_25_second_timeout():
+    """A query with an image still uses the 25 s query timeout."""
+    seen: list[httpx.Request] = []
+    query_with_image(capture(seen))
+    assert set(seen[0].extensions["timeout"].values()) == {25}
+
+
+def test_fr3_image_query_timeout_raises_query_timeout():
+    """With an image, a timeout still raises QueryTimeout naming the 25 s limit."""
+    with pytest.raises(QueryTimeout) as info:
+        query_with_image(raising(httpx.ReadTimeout("x")))
+    assert type(info.value) is QueryTimeout
+    assert "25" in str(info.value)
+
+
+def test_fr3_image_query_400_raises_query_error_with_server_text():
+    """With an image, a 400 still raises QueryError with the status and the server's text."""
+    handler = fixed_response(400, json={"error": "image too large"})
+    with pytest.raises(QueryError) as info:
+        query_with_image(handler)
+    assert type(info.value) is QueryError
+    assert "400" in str(info.value)
+    assert "image too large" in str(info.value)
+
+
 # ---- FR-1/FR-2/FR-3: Client state machine (M6-T5). All collaborators are fakes. ----
 
 PTT = keyboard.Key.alt_gr

@@ -225,9 +225,16 @@ def _wav_body(response: httpx.Response) -> bytes:
     return response.content
 
 
-def send_query(wav: bytes, transport: httpx.BaseTransport | None = None) -> bytes:
-    """POST the question to /query and return the answer WAV."""
+def send_query(
+    wav: bytes,
+    transport: httpx.BaseTransport | None = None,
+    image: bytes | None = None,
+) -> bytes:
+    """POST the question, and a Look screenshot as JPEG if given, to /query and return
+    the answer WAV (FR-3)."""
     files = {"audio": ("question.wav", wav, "audio/wav")}
+    if image is not None:
+        files["image"] = ("screenshot.jpg", image, "image/jpeg")
     return _wav_body(
         _request("POST", "/query", transport, config.QUERY_TIMEOUT_S, files=files)
     )
