@@ -2,7 +2,7 @@ import inspect
 import io
 import json
 import wave
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -357,6 +357,7 @@ def test_fr17_success_writes_one_complete_line(fake_stages, silent_wav, log_path
     assert line["searched"] is False
     assert line["tool_calls"] == []
     assert line["error"] is None
+    assert line["session_continued"] is False
 
 
 @pytest.mark.parametrize(
@@ -390,6 +391,7 @@ def test_fr17_audio_400_writes_one_line(fake_stages, log_path, files, error):
     assert line["searched"] is False
     assert line["tool_calls"] == []
     assert line["error"] == error
+    assert line["session_continued"] is False
 
 
 def test_fr17_no_speech_400_logs_only_stt_timing(
@@ -407,6 +409,7 @@ def test_fr17_no_speech_400_logs_only_stt_timing(
     assert set(line["timings_ms"]) == {"stt"}
     assert line["answer"] is None
     assert line["error"] == "no speech detected"
+    assert line["session_continued"] is False
 
 
 @pytest.mark.parametrize("stage", ["stt", "llm", "tts"])
@@ -492,6 +495,149 @@ def test_fr17_two_requests_write_two_lines(fake_stages, silent_wav, log_path):
     _post_query(silent_wav)
     _post_query(silent_wav)
     assert len(_log_lines(log_path)) == 2
+
+
+TURN = {"question": FAKE_TRANSCRIPT, "answer": FAKE_ANSWER}
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    """Mutable clock: clock.t is what server.main.now() returns."""
+
+    class Clock:
+        t = FIXED_NOW
+
+        def at(self, seconds: int):
+            self.t = FIXED_NOW + timedelta(seconds=seconds)
+
+    c = Clock()
+    monkeypatch.setattr("server.main.now", lambda: c.t)
+    return c
+
+
+def test_fr21_first_query_sends_no_turns(fake_stages, silent_wav, log_path):
+    """FR-21: the first query has no saved turns: llm.ask gets none and the
+    log line has session_continued false."""
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["llm_turns"] == [[]]
+    assert _log_lines(log_path)[0]["session_continued"] is False
+
+
+def test_fr21_second_query_within_120s_gets_previous_turn(
+    fake_stages, silent_wav, log_path, clock
+):
+    """FR-21: a query within 120 s of the last answer passes the saved turn to
+    llm.ask and the log line has session_continued true."""
+    _post_query(silent_wav)
+    clock.at(60)
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["llm_turns"][1] == [TURN]
+    lines = _log_lines(log_path)
+    assert lines[0]["session_continued"] is False
+    assert lines[1]["session_continued"] is True
+
+
+def test_fr21_turns_passed_oldest_first_and_grow(fake_stages, silent_wav, clock):
+    """FR-21: each successful query adds one turn; the next llm.ask gets all
+    saved turns, oldest first."""
+    for i in range(3):
+        clock.at(i * 10)
+        _post_query(silent_wav)
+    assert [len(t) for t in fake_stages["llm_turns"]] == [0, 1, 2]
+    assert fake_stages["llm_turns"][2] == [TURN, TURN]
+
+
+def test_fr21_second_query_after_121s_starts_new_session(
+    fake_stages, silent_wav, log_path, clock
+):
+    """FR-21: a query 121 s after the last answer gets no turns and the log
+    line has session_continued false."""
+    _post_query(silent_wav)
+    clock.at(121)
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["llm_turns"][1] == []
+    assert _log_lines(log_path)[1]["session_continued"] is False
+
+
+@pytest.mark.parametrize("stage", ["llm", "tts"])
+def test_fr21_failed_query_adds_no_turn(
+    fake_stages, silent_wav, monkeypatch, log_path, clock, stage
+):
+    """FR-21: a 500 adds no turn: the next query sees no turns from it."""
+    normal = _make_stage_raise(monkeypatch, fake_stages, stage, RuntimeError("boom"))
+    clock.at(10)
+    assert _post_query(silent_wav).status_code == 500
+    assert _log_lines(log_path)[0]["session_continued"] is False
+    monkeypatch.setattr(STAGE_FAKES[stage], normal)
+    clock.at(20)
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["llm_turns"][-1] == []
+    assert _log_lines(log_path)[1]["session_continued"] is False
+
+
+def test_fr21_failed_query_does_not_extend_window(
+    fake_stages, silent_wav, monkeypatch, clock
+):
+    """FR-21: a failed query does not extend the 120 s: success at T0, failure
+    at T0+100 s, a query at T0+130 s gets no turns."""
+    _post_query(silent_wav)
+    normal = _make_stage_raise(monkeypatch, fake_stages, "tts", RuntimeError("boom"))
+    clock.at(100)
+    assert _post_query(silent_wav).status_code == 500
+    monkeypatch.setattr(STAGE_FAKES["tts"], normal)
+    clock.at(130)
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["llm_turns"][-1] == []
+
+
+def test_fr21_failed_query_keeps_earlier_turns(
+    fake_stages, silent_wav, monkeypatch, clock
+):
+    """FR-21: a failure inside the window leaves the saved turns unchanged."""
+    _post_query(silent_wav)
+    normal = _make_stage_raise(monkeypatch, fake_stages, "llm", RuntimeError("boom"))
+    clock.at(30)
+    assert _post_query(silent_wav).status_code == 500
+    monkeypatch.setattr(STAGE_FAKES["llm"], normal)
+    clock.at(60)
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["llm_turns"][-1] == [TURN]
+
+
+def test_fr21_audio_400_adds_no_turn(fake_stages, silent_wav, log_path):
+    """FR-21 / FR-17: a 400 audio error logs session_continued false and adds no
+    turn."""
+    assert client.post("/query").status_code == 400
+    assert _log_lines(log_path)[0]["session_continued"] is False
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["llm_turns"] == [[]]
+
+
+def test_fr21_no_speech_400_adds_no_turn(
+    fake_stages, silent_wav, monkeypatch, log_path, clock
+):
+    """FR-21 / FR-17: a no-speech 400 logs session_continued false, adds no
+    turn and does not extend the window."""
+    _post_query(silent_wav)
+    monkeypatch.setattr("server.stt.transcribe", lambda wav: "  ")
+    clock.at(100)
+    assert _post_query(silent_wav).status_code == 400
+    assert _log_lines(log_path)[1]["session_continued"] is False
+    monkeypatch.setattr("server.stt.transcribe", lambda wav: FAKE_TRANSCRIPT)
+    clock.at(130)
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["llm_turns"][-1] == []
+
+
+def test_fr17_failed_continued_query_logs_session_continued_true(
+    fake_stages, silent_wav, monkeypatch, log_path, clock
+):
+    """FR-17: a 500 whose question used saved turns logs session_continued true."""
+    _post_query(silent_wav)
+    _make_stage_raise(monkeypatch, fake_stages, "tts", RuntimeError("boom"))
+    clock.at(30)
+    assert _post_query(silent_wav).status_code == 500
+    assert _log_lines(log_path)[1]["session_continued"] is True
 
 
 PAST = "2026-10-09T13:00:00+05:30"

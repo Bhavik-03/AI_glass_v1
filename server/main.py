@@ -11,7 +11,7 @@ import uvicorn
 from fastapi import FastAPI, File, Response, UploadFile
 from fastapi.responses import JSONResponse
 
-from server import config, llm, logger, store, stt, tools, tts
+from server import config, llm, logger, session, store, stt, tools, tts
 
 
 @asynccontextmanager
@@ -89,10 +89,15 @@ def _answer(data: bytes | None, record: dict) -> Response:
         record["question"] = run_stage("stt", timings, stt.transcribe, data)
         if not record["question"].strip():
             return _error(400, "no speech detected", record)
+        asked_at = now()
+        turns = session.turns(asked_at)
+        record["session_continued"] = bool(turns)
         record["answer"], record["searched"], record["tool_calls"] = run_stage(
-            "llm", timings, llm.ask, record["question"], now()
+            "llm", timings, llm.ask, record["question"], asked_at, turns
         )
         wav = run_stage("tts", timings, tts.synthesize, record["answer"])
+        # Only an answered question becomes a turn, so a failure never extends the session (FR-21).
+        session.add_turn(record["question"], record["answer"], asked_at)
     except StageFailed as e:
         record["tool_calls"] = e.tool_calls or record["tool_calls"]
         return _error(500, f"{e.stage}: {e.reason}", record)
@@ -154,6 +159,7 @@ def query(audio: Annotated[UploadFile | None, File()] = None) -> Response:
         "searched": False,
         "tool_calls": [],
         "error": None,
+        "session_continued": False,
     }
     try:
         return _answer(audio.file.read() if audio else None, record)
