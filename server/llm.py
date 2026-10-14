@@ -136,14 +136,14 @@ def _ask(question: str, now: datetime, tool_calls: list[dict]) -> tuple[str, boo
             if round_ > 0 and not _tool_fits(start, call.name):
                 refused = True
                 result = SKIPPED_RESULT
+                status = "refused"
             else:
                 result = tools.run(call.name, call.args, now)
+                status = "failed" if "error" in result else "ok"
             searched = searched or (
                 call.name == "web_search" and bool(result.get("results"))
             )
-            tool_calls.append(
-                {"name": call.name, "args": call.args, "ok": "error" not in result}
-            )
+            tool_calls.append({"name": call.name, "args": call.args, "status": status})
             replies.append(
                 types.Part(
                     function_response=types.FunctionResponse(
