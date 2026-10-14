@@ -1,73 +1,122 @@
 # Roadmap
 
-Updated Oct 9, 2026 · Bhavik Fulfagar
+Updated Oct 14, 2026 · Bhavik Fulfagar
 
 ## Final goal
 
-Glasses that act as my second brain and handle most quick phone tasks hands-free: answer questions (with live info), take notes, set reminders, manage my calendar, call and text my contacts, privately remember what I said and discussed, and later see what I see.
+A learning companion and assistant for an engineering student, worn as glasses: it sees
+what I study, answers in a few short sentences, tracks what I am learning and quizzes me,
+remembers me, and helps me run my day and my habits.
 
 - Single user (me), no accounts.
-- Phone: Android. Messages: SMS only. Calendar: Google Calendar.
-- Hero feature: memory, stored on my own machine. Gemini sees only what is sent to it.
-- Phone tasks are the useful base the memory builds on.
+- Voice in, voice out. Nothing is shown on a screen (no AR display).
+- "Look" sends one image with the question: a screenshot on the laptop now, a camera
+  frame on the glasses later. Never video.
+- Answers are 1 to 3 short sentences; "tell me more" gives one more short layer.
+- A free cloud API (Gemini) first. Open-source models replace a part later only when
+  the eval shows they are at least as good.
+- A prototype, not a product: each version is the smallest useful thing and ends with
+  a measured eval.
 
 ## Process rule
 
-- Only the current version has detailed docs: `brief.md`, `spec.md`, `design.md` (and `plan.md`) in `docs/`.
-- At the end of a version: copy them to `docs/archive/vN/`, tag the release, then write the next version's docs.
-- Milestone IDs continue across versions (v1 ends at M7, so v2 starts at M8).
+- Only the current version has detailed docs: `brief.md`, `spec.md`, `design.md` and
+  `plan.md` in `docs/`.
+- At the end of a version: copy them to `docs/archive/vN/`, tag the release, then write
+  the next version's docs.
+- Milestone IDs continue across versions (v1 ended at M7, so v2 starts at M8).
+- This roadmap replaced the phone-link-first roadmap on Oct 14, 2026.
 
-## v1 Voice assistant · tag v0.1.0 · current
+## v1 Voice assistant · tag v0.1.0 · done
 
-- **Goal:** a spoken assistant on the laptop that answers questions and keeps my notes and reminders.
-- **At the end I can:** hold one key, ask a general or live question, add or list notes, set, list or cancel reminders, and hear due reminders spoken on time.
+- Hold one key, ask a general or live question, add or list notes, set, list or cancel
+  reminders, hear due reminders. Laptop client and local server (127.0.0.1).
+- Pipeline: faster-whisper `small.en` → Gemini Flash-Lite with tools (Tavily web search,
+  notes, reminders in SQLite) → Piper TTS.
+- Results (Oct 11, 2026): general 8/10, notes 10/10, reminders 10/10, median 3.1 s,
+  0 errors in 30 in a row, transcription 26/30 (known gap, issue #38).
+- Docs: `docs/archive/v1/`.
+
+## v2 Teacher · tag v0.2.0 · current
+
+- **Goal:** the assistant sees what I study, explains briefly at my level, remembers
+  which concepts I asked about, and quizzes me when I ask.
+- **At the end I can:**
+  - hold Right Ctrl, ask "what is this graph?" and hear a short answer about my screen;
+  - say "tell me more" or ask a follow-up, and it understands the context;
+  - ask "what is LoRA?" and LoRA is logged as a concept I am learning;
+  - say "quiz me": it asks about 2 to 3 concepts, grades each answer in one line, and
+    does not ask those again unless I got them wrong;
+  - ask "what did I learn this week?" and hear a short list.
 - **Key pieces:**
-  - Push-to-talk PC client: one key, start, thinking and error sounds; polls for due reminders.
-  - Server: faster-whisper `small.en` → Gemini Flash-Lite with function calling and a `web_search` tool → Piper TTS.
-  - Tools: `add_note`, `list_notes`, `add_reminder`, `list_reminders`, `cancel_reminder`, stored in SQLite.
-  - Current date and time (Asia/Kolkata) in the system prompt; every action is repeated back.
-  - Server binds to 127.0.0.1.
-- **Milestones:** M1 server skeleton, config and logger · M2 speech-to-text · M3 Gemini answers with Search · M4 TTS and full /query pipeline with server errors · M5 tools: notes and reminders · M6 PC client · M7 evaluation and reliability.
-- **Out of scope:** camera, phone, calendar, calls, SMS, memory, network access from other devices, wake word, streaming audio.
-- **Done when:** 30 spoken questions (10 general and live, 10 notes, 10 reminders) reach ≥ 80% correct per group, median latency ≤ 15 s, and 20 queries in a row run without a crash.
+  - Client keys: Right Alt = voice only (the v1 F9 job); Right Ctrl = voice plus a
+    screenshot. Both keys are set in `client_pc/config.py`.
+  - Sessions: the last few turns are kept for about 2 minutes, so follow-ups work.
+  - Look: the screenshot is sent with the question to the same Gemini model.
+  - Concept tracker in SQLite: short name, one-line summary, date asked, status, last
+    quizzed. Only learning questions are logged; Gemini reuses an existing name when
+    the concept is the same. No embeddings.
+  - Quiz me, on request only: 2 to 3 concepts, never quizzed first, then ones answered
+    wrong. Quizzed concepts are kept, never deleted.
+  - Privacy: questions and screenshots go to the Gemini free tier. Never use Look on a
+    private screen (bank, chats, passwords).
+- **Out of scope:** long-term memory of me, embeddings, proactive quiz offers, habits,
+  schedule, cloud deployment, open-source models, a spoken "look" word.
+- **Done when:** targets set in the v2 spec (look answers, follow-ups, concept logging,
+  quiz grading, latency).
 
-## v2 Phone link · tag v0.2.0
+## v3 Memory · tag v0.3.0
 
-- **Goal:** the phone becomes the client and the hands for phone tasks.
-- **At the end I can:** talk through my phone, call and text contacts by name after a spoken "yes", and read and add Google Calendar events.
+- **Goal:** it knows me and recalls our past conversations, stored as short key points.
+- **At the end I can:** say "remember that ..." or "forget ..."; ask "what did we discuss
+  about annotation last week?" or "what are my goals?"; list, delete and wipe memories.
 - **Key pieces:**
-  - Android companion app: push-to-talk client (phone mic and speaker) plus an action bridge for calls, SMS and contact lookup by name.
-  - Due reminders shown as text on the phone and played as audio, using the v1 reminder endpoints unchanged.
-  - Google Calendar read and add through the API (OAuth; token file gitignored).
-  - Calls and SMS always need a spoken "yes": the server holds a pending action until confirmed or cancelled.
-  - Server listens on the hotspot; an `AUTH_TOKEN` header on every endpoint, so nobody else on the network can make my phone call or text.
-- **Out of scope:** memory, glasses hardware, camera, messaging apps other than SMS.
-- **Open decision:** app framework (Kotlin or Flutter), decided at v2 start.
-- **Done when:** targets set in the v2 spec.
+  - Memory items are key points of at most about 12 words, never full transcripts, each
+    with a type (fact about me, project, preference, session summary) and a date.
+  - A memory writer runs after each session and keeps 0 to 3 key points.
+  - Compaction merges near-duplicates and rolls old session summaries into monthly lines.
+  - A profile of key facts is always in the prompt; other memories are searched on demand.
+- **Open decision:** embeddings and the vector store (local model or API), at v3 start.
+- **Done when:** targets set in the v3 spec, including a frozen recall test.
 
-## v3 Remember · tag v0.3.0
+## v4 Planner and habits · tag v0.4.0
 
-- **Goal:** the assistant remembers what I said and discussed, privately.
-- **At the end I can:** ask about past questions, answers and notes; record a conversation or lecture and get a summary and follow-ups; list, delete and wipe memories.
-- **Key pieces:**
-  - Voice memory of questions, answers and notes; a personal profile file.
-  - Consent-aware conversation and lecture recording with an audible start signal, then a summary and follow-ups.
-  - `SEND_MEMORY_TO_GEMINI=false` by default: memory questions go to a small local text model that fits 4 GB VRAM, chosen by a bake-off of current models.
-- **Out of scope:** photo memory, glasses hardware, camera.
-- **Done when:** targets set in the v3 spec.
-
-## v4 Wearable (audio only) · tag v0.4.0
-
-- **Goal:** the glasses replace the phone as the push-to-talk client.
-- **At the end I can:** wear glasses with a mic, speaker, button and battery and use everything from v1–v3.
-- **Key pieces:** glasses with mic, speaker, button and battery.
-- **Open decision:** the board, chosen at v4 start. Call audio through the glasses needs a Bluetooth headset profile, which the ESP32-S3 does not support (BLE only).
-- **Out of scope:** camera.
+- **Goal:** it helps me run my day and build habits.
+- **At the end I can:** add events to the assistant's own schedule and hear an alert before
+  them; ask "what is my week?"; set recurring reminders ("drink water every 2 hours");
+  say "let's track today's habits" and answer a short check-in ("Gym?" "Yes."); see my
+  habit progress and insights on a small website.
+- **Key pieces:** schedule table, recurring reminders, habit table, check-in conversation,
+  a scheduler for alerts, a local dashboard page. Habit details (which habits, insights,
+  rules from Atomic Habits) are brainstormed before v4 starts.
 - **Done when:** targets set in the v4 spec.
 
-## v5 Camera · tag v1.0.0
+## v5 Cloud · tag v0.5.0
 
-- **Goal:** the glasses see what I see.
-- **At the end I can:** press Look and ask about what is in front of me; photos become part of memory.
-- **Key pieces:** Look button, vision questions, local VLM router, photo memory. The hardware plan (`hardware_plan.md`, XIAO ESP32S3 Sense) applies here.
-- **Done when:** targets set in the v5 spec.
+- **Goal:** the laptop is only a client; the server runs in the cloud.
+- **Key pieces:** server, database, scheduler and dashboard on an always-on host; managed
+  Postgres; `AUTH_TOKEN` on every endpoint; HTTPS.
+- **Done when:** the v2 to v4 evals pass against the cloud server, and reminders fire while
+  the laptop server is off.
+
+## v6 Own models · tag v0.6.0
+
+- **Goal:** replace cloud APIs with open-source models wherever they are good enough.
+- **Key pieces:** bake-offs for STT, LLM, vision, TTS and embeddings against the API
+  baseline; a LoRA fine-tune of Whisper on my voice and AI words (issue #38); models
+  served on serverless GPU behind an OpenAI-style API. A part switches only if its eval
+  is at least as good.
+- **Done when:** targets set in the v6 spec.
+
+## v7 Wearable · tag v1.0.0
+
+- **Goal:** the laptop client becomes a wearable device.
+- **Key pieces:** a phone or glasses client with mic, speaker, button and camera; the camera
+  frame replaces the screenshot; a spoken "look" word replaces the key.
+- **Open decision:** the hardware, at v7 start. `hardware_plan.md` is an older reference.
+- **Done when:** targets set in the v7 spec.
+
+## Parked
+
+Gym tracker (sets and reps), proactive quiz offers, Google Calendar sync, calls and SMS,
+a phone app, the trend line in the habit tracker (until the v4 brainstorm).
