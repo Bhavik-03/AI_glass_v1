@@ -1,6 +1,6 @@
 # Plan: AI Assistant v2 Teacher
 
-## M8 (v2): Sessions and follow-ups | in progress
+## M8 (v2): Sessions and follow-ups | done
 Goal: follow-ups and "tell me more" for 120 s, new answer limits, tool status in the log · GitHub milestone: #8
 
 | Task | FR | Files | Done when | Test | Issue | Done |
