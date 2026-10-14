@@ -225,7 +225,7 @@ def _make_stage_raise(monkeypatch, fake_stages, stage, exc):
     module = __import__(module_name, fromlist=[attr])
     normal = getattr(module, attr)
 
-    def failing(*args):
+    def failing(*args, **kwargs):
         fake_stages["order"].append(stage)
         raise exc
 
@@ -358,6 +358,7 @@ def test_fr17_success_writes_one_complete_line(fake_stages, silent_wav, log_path
     assert line["tool_calls"] == []
     assert line["error"] is None
     assert line["session_continued"] is False
+    assert line["image_sent"] is False
 
 
 @pytest.mark.parametrize(
@@ -392,6 +393,7 @@ def test_fr17_audio_400_writes_one_line(fake_stages, log_path, files, error):
     assert line["tool_calls"] == []
     assert line["error"] == error
     assert line["session_continued"] is False
+    assert line["image_sent"] is False
 
 
 def test_fr17_no_speech_400_logs_only_stt_timing(
@@ -410,6 +412,7 @@ def test_fr17_no_speech_400_logs_only_stt_timing(
     assert line["answer"] is None
     assert line["error"] == "no speech detected"
     assert line["session_continued"] is False
+    assert line["image_sent"] is False
 
 
 @pytest.mark.parametrize("stage", ["stt", "llm", "tts"])
@@ -1154,6 +1157,7 @@ def test_fr17_image_unreadable_400_writes_one_line(fake_stages, silent_wav, log_
     assert len(lines) == 1
     assert lines[0]["error"] == "image is not a readable image"
     assert lines[0]["answer"] is None
+    assert lines[0]["image_sent"] is False
 
 
 def test_fr17_image_too_large_400_writes_one_line(
@@ -1165,3 +1169,180 @@ def test_fr17_image_too_large_400_writes_one_line(
     lines = _log_lines(log_path)
     assert len(lines) == 1
     assert lines[0]["error"] == "image too large"
+    assert lines[0]["image_sent"] is False
+
+
+def _colored_jpeg(color: tuple[int, int, int]) -> bytes:
+    """A valid JPEG whose bytes differ from other colors."""
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (16, 16), color).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+IMG_A = _colored_jpeg((250, 10, 10))
+IMG_B = _colored_jpeg((10, 10, 250))
+
+
+def test_fr20_jpeg_upload_reaches_llm_with_mime(fake_stages, silent_wav):
+    """FR-20: a JPEG upload reaches llm.ask as (exact bytes, "image/jpeg")."""
+    assert _post_with_image(silent_wav, IMG_A).status_code == 200
+    assert fake_stages["llm_images"] == [(IMG_A, "image/jpeg")]
+
+
+def test_fr20_png_upload_reaches_llm_with_mime(fake_stages, silent_wav):
+    """FR-20: a PNG upload reaches llm.ask as (exact bytes, "image/png")."""
+    png = _image_bytes("PNG")
+    response = _post_with_image(silent_wav, png, "s.png", "image/png")
+    assert response.status_code == 200
+    assert fake_stages["llm_images"] == [(png, "image/png")]
+
+
+def test_fr20_mime_comes_from_content_not_declared_type(fake_stages, silent_wav):
+    """FR-20: the MIME type follows the real format: PNG bytes labelled
+    image/jpeg are sent as image/png."""
+    png = _image_bytes("PNG")
+    response = _post_with_image(silent_wav, png, "s.jpg", "image/jpeg")
+    assert response.status_code == 200
+    assert fake_stages["llm_images"] == [(png, "image/png")]
+
+
+def test_fr20_no_image_and_no_session_sends_none(fake_stages, silent_wav):
+    """FR-20: with no image and no saved image, llm.ask gets image None."""
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["llm_images"] == [None]
+
+
+def test_fr21_followup_within_120s_gets_saved_image(fake_stages, silent_wav, clock):
+    """FR-21: a text-only query within 120 s of an image query gets the saved
+    image."""
+    _post_with_image(silent_wav, IMG_A)
+    clock.at(60)
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["llm_images"][1] == (IMG_A, "image/jpeg")
+
+
+def test_fr21_followup_after_121s_gets_no_image(fake_stages, silent_wav, clock):
+    """FR-21: a text-only query 121 s after the image query gets image None."""
+    _post_with_image(silent_wav, IMG_A)
+    clock.at(121)
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["llm_images"][1] is None
+
+
+def test_fr21_newer_image_replaces_saved_image(fake_stages, silent_wav, clock):
+    """FR-21: a new image is sent instead of the saved one and replaces it for
+    the next follow-up."""
+    _post_with_image(silent_wav, IMG_A)
+    clock.at(10)
+    _post_with_image(silent_wav, IMG_B)
+    clock.at(20)
+    _post_query(silent_wav)
+    assert fake_stages["llm_images"] == [
+        (IMG_A, "image/jpeg"),
+        (IMG_B, "image/jpeg"),
+        (IMG_B, "image/jpeg"),
+    ]
+
+
+def test_fr21_text_query_keeps_saved_image_for_later(fake_stages, silent_wav, clock):
+    """FR-21: a text-only query does not drop the saved image: a second
+    follow-up still gets it."""
+    _post_with_image(silent_wav, IMG_A)
+    clock.at(30)
+    _post_query(silent_wav)
+    clock.at(60)
+    _post_query(silent_wav)
+    assert fake_stages["llm_images"][2] == (IMG_A, "image/jpeg")
+
+
+@pytest.mark.parametrize("stage", ["llm", "tts"])
+def test_fr21_failed_image_query_is_not_saved(
+    fake_stages, silent_wav, monkeypatch, clock, stage
+):
+    """FR-21: an image saved only after a 200: a 500 image query leaves nothing
+    saved, so the next text-only query gets None."""
+    normal = _make_stage_raise(monkeypatch, fake_stages, stage, RuntimeError("boom"))
+    clock.at(10)
+    assert _post_with_image(silent_wav, IMG_A).status_code == 500
+    monkeypatch.setattr(STAGE_FAKES[stage], normal)
+    clock.at(20)
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["llm_images"][-1] is None
+
+
+@pytest.mark.parametrize("stage", ["llm", "tts"])
+def test_fr21_failed_image_query_keeps_older_saved_image(
+    fake_stages, silent_wav, monkeypatch, clock, stage
+):
+    """FR-21: a failed image query does not replace the older saved image."""
+    _post_with_image(silent_wav, IMG_A)
+    normal = _make_stage_raise(monkeypatch, fake_stages, stage, RuntimeError("boom"))
+    clock.at(30)
+    assert _post_with_image(silent_wav, IMG_B).status_code == 500
+    monkeypatch.setattr(STAGE_FAKES[stage], normal)
+    clock.at(60)
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["llm_images"][-1] == (IMG_A, "image/jpeg")
+
+
+def test_fr21_rejected_image_is_not_saved(fake_stages, silent_wav, clock):
+    """FR-21: an image rejected with a 400 is not saved: the next text query
+    gets None."""
+    assert _post_with_image(silent_wav, b"not an image").status_code == 400
+    clock.at(10)
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["llm_images"] == [None]
+
+
+def test_fr22_reset_clears_saved_image(fake_stages, silent_wav, clock):
+    """FR-22 / FR-21: POST /session/reset clears the saved image: the next text
+    query within 120 s gets None."""
+    _post_with_image(silent_wav, IMG_A)
+    clock.at(30)
+    assert client.post("/session/reset").status_code == 200
+    clock.at(60)
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["llm_images"][-1] is None
+
+
+def test_fr17_image_sent_true_only_for_new_image(
+    fake_stages, silent_wav, log_path, clock
+):
+    """FR-17: image_sent is true for a request that carried an image, false for
+    a text follow-up that reused the saved image, false with no image."""
+    _post_with_image(silent_wav, IMG_A)
+    clock.at(30)
+    _post_query(silent_wav)
+    clock.at(500)
+    _post_query(silent_wav)
+    lines = _log_lines(log_path)
+    assert [line["image_sent"] for line in lines] == [True, False, False]
+    assert fake_stages["llm_images"][1] == (IMG_A, "image/jpeg")
+
+
+def test_fr17_failed_image_query_logs_image_sent_true(
+    fake_stages, silent_wav, monkeypatch, log_path
+):
+    """FR-17: a 500 whose request carried a valid image logs image_sent true."""
+    _make_stage_raise(monkeypatch, fake_stages, "llm", RuntimeError("boom"))
+    assert _post_with_image(silent_wav, IMG_A).status_code == 500
+    assert _log_lines(log_path)[0]["image_sent"] is True
+
+
+def test_fr17_log_never_contains_the_image(fake_stages, silent_wav, log_path):
+    """FR-17: the log line never holds the image: no bytes, hex or base64 of it,
+    and the only image field is the boolean image_sent."""
+    import base64
+
+    _post_with_image(silent_wav, IMG_A)
+    raw = log_path.read_text(encoding="utf-8")
+    assert base64.b64encode(IMG_A[:60]).decode() not in raw
+    assert base64.b64encode(IMG_A).decode()[:80] not in raw
+    assert IMG_A[:60].hex() not in raw
+    assert repr(IMG_A[:40])[2:-1] not in raw
+    (line,) = _log_lines(log_path)
+    image_keys = [k for k in line if "image" in k.lower()]
+    assert image_keys == ["image_sent"]
+    assert line["image_sent"] is True
