@@ -18,13 +18,30 @@ Manual checks: with the real model, ask "what is LoRA?", then "what is it used f
 answer about LoRA (FR-21); the same follow-up after 120 s is answered as a new question; with 7
 notes, the list says the count and 5 notes, and "tell me more" gives the rest (FR-5).
 
-## M9 (v2): Look | planned
-Goal: Right Alt voice, Right Ctrl voice + screenshot; image to Gemini and in the session
-FRs: FR-19, FR-20, FR-1, FR-3, FR-16, FR-17 · Tasks: not planned yet
+## M9 (v2): Look | in progress
+Goal: Right Alt voice, Right Ctrl voice + screenshot; image to Gemini and in the session · GitHub milestone: #9
+
+| Task | FR | Files | Done when | Test | Issue | Done |
+| --- | --- | --- | --- | --- | --- | --- |
+| M9-T1 | FR-19, FR-1 | docs/plan.md (spike scripts not committed) | Spike results recorded here: ImageGrab capture time; what it captures with two monitors (main screen only by default); size and look of a 1280 px JPEG at a few qualities and the chosen `SCREENSHOT_JPEG_QUALITY`; whether pynput reports Right Alt as `alt_r` or `alt_gr`, and Right Ctrl as `ctrl_r`. Pillow is installed in `.venv` for the spike only | manual | #74 | [ ] |
+| M9-T2 | FR-1 | client_pc/config.py, client_pc/client.py (+ tests/test_client.py) | `VOICE_KEY` (value from M9-T1) replaces `PTT_KEY = "f9"`; Right Alt starts and stops recording as F9 did; F9 no longer does | pytest | #75 | [ ] |
+| M9-T3 | FR-20, FR-16 | requirements.txt, server/config.py, server/main.py (+ tests/test_server.py) | `/query` takes an optional `image`; over `IMAGE_MAX_BYTES` gives 400 `{"error": "image too large"}`; not JPEG or PNG gives 400 `{"error": "image is not a readable image"}`; both before any stage; without an image, `/query` works as before. Pillow goes into requirements.txt after approval | pytest | #76 | [ ] |
+| M9-T4 | FR-20 | server/llm.py, .claude/skills/server-conventions/SKILL.md (+ tests/test_llm.py) | `ask(question, now, turns=(), image=None)`, image as bytes plus MIME type; with an image the Gemini request has an image part next to the question (fake client); without one the request is unchanged | pytest | #77 | [ ] |
+| M9-T5 | FR-21 | server/session.py (+ tests/test_session.py) | The session keeps the most recent image (bytes and type); it ends with the session at 120 s; `reset()` clears it | pytest | #78 | [ ] |
+| M9-T6 | FR-20, FR-21, FR-17 | server/main.py (+ tests/test_server.py) | `/query` sends the new image to `llm.ask`, else the saved one; the image is saved only after a 200; the log has `image_sent` (true only for a new image), never the image | pytest | #79 | [ ] |
+| M9-T7 | FR-3 | client_pc/client.py (+ tests/test_client.py) | `send_query(wav, image=None)` adds an `image` field (JPEG) only when given; the 25 s timeout and error sound behave as before | pytest | #80 | [ ] |
+| M9-T8 | FR-19 | client_pc/config.py, client_pc/client.py (+ tests/test_client.py) | Right Ctrl (`LOOK_KEY`) records like Right Alt and takes one screenshot at press, not release; shrunk to `SCREENSHOT_MAX_SIDE_PX` (1280), JPEG in memory; Right Alt sends no image; releasing the other key does not stop the recording; no image file is written (fake screen grab) | pytest | #81 | [ ] |
+
+Manual checks: Right Alt speech clear on playback in 20 of 20 tests (FR-1); Right Ctrl on a
+graph, ask "what is this graph?" and hear an answer about it (FR-19); a follow-up within 120 s
+uses the same screenshot (FR-21). The 8 s median with an image is checked in the M12 eval.
 
 ## M10 (v2): Concept tracker | planned
 Goal: concepts table, `log_concept` and `learned_this_week`, names in the prompt
 FRs: FR-23, FR-25, FR-17 · Tasks: not planned yet
+Add to the system instruction that the user is an engineering student learning AI/ML, so
+ambiguous terms take the AI/ML meaning (found in the M8 manual check: 'Lora' was answered as
+LoRa radio).
 
 ## M11 (v2): Quiz me | planned
 Goal: `start_quiz`, quiz state in the session, stop, grading call, score, 300 s wait
