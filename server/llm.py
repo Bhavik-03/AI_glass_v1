@@ -1,4 +1,5 @@
 import time
+from collections.abc import Sequence
 from datetime import datetime
 
 from google import genai
@@ -96,11 +97,14 @@ def _final_answer(
     return text, searched
 
 
-def ask(question: str, now: datetime) -> tuple[str, bool, list[dict]]:
-    """Answer one question, running Gemini's tool calls (FR-5, FR-7)."""
+def ask(
+    question: str, now: datetime, turns: Sequence[dict] = ()
+) -> tuple[str, bool, list[dict]]:
+    """Answer one question after the session's earlier turns, running Gemini's tool calls
+    (FR-5, FR-7, FR-21)."""
     tool_calls: list[dict] = []
     try:
-        answer, searched = _ask(question, now, tool_calls)
+        answer, searched = _ask(question, now, turns, tool_calls)
     except Exception as e:
         # The caller logs the calls made before the failure (FR-17).
         e.tool_calls = tool_calls
@@ -108,7 +112,22 @@ def ask(question: str, now: datetime) -> tuple[str, bool, list[dict]]:
     return answer, searched, tool_calls
 
 
-def _ask(question: str, now: datetime, tool_calls: list[dict]) -> tuple[str, bool]:
+def _history(turns: Sequence[dict]) -> list[types.Content]:
+    """Earlier turns as user and model text, oldest first (FR-21)."""
+    contents = []
+    for turn in turns:
+        contents.append(
+            types.Content(role="user", parts=[types.Part(text=turn["question"])])
+        )
+        contents.append(
+            types.Content(role="model", parts=[types.Part(text=turn["answer"])])
+        )
+    return contents
+
+
+def _ask(
+    question: str, now: datetime, turns: Sequence[dict], tool_calls: list[dict]
+) -> tuple[str, bool]:
     start = _clock()
     request = types.GenerateContentConfig(
         system_instruction=system_instruction(now),
@@ -118,7 +137,9 @@ def _ask(question: str, now: datetime, tool_calls: list[dict]) -> tuple[str, boo
         ),
         thinking_config=types.ThinkingConfig(thinking_level=config.LLM_THINKING_LEVEL),
     )
-    contents = [types.Content(role="user", parts=[types.Part(text=question)])]
+    contents = _history(turns) + [
+        types.Content(role="user", parts=[types.Part(text=question)])
+    ]
     searched = False
     refused = False
     for round_ in range(config.MAX_TOOL_ROUNDS + 1):

@@ -1,4 +1,4 @@
-"""LLM tests: system instruction (FR-6), Gemini call and tool loop (FR-5, FR-7). Fake client, no network."""
+"""LLM tests: system instruction (FR-6), Gemini call and tool loop (FR-5, FR-7), session turns (FR-21). Fake client, no network."""
 
 import copy
 from datetime import datetime
@@ -984,6 +984,70 @@ def test_fr7_fourth_tool_round_fails_cleanly(monkeypatch, db) -> None:
     assert exc.value.tool_calls == [
         {"name": "add_reminder", "args": a, "status": "ok"} for a in all_args[:rounds]
     ]
+
+
+TURNS = [
+    {"question": "q1", "answer": "a1"},
+    {"question": "q2", "answer": "a2"},
+]
+
+
+def role_text(contents: list) -> list[tuple[str, str]]:
+    return [(c.role, c.parts[0].text) for c in contents]
+
+
+def test_fr21_turns_sent_before_question(monkeypatch) -> None:
+    """ask sends earlier turns as user and model text, oldest first, then the new question."""
+    fake = install_fake(monkeypatch, [text_response("answer")])
+    llm.ask("now?", fixed_now(), TURNS)
+    assert role_text(fake.models.calls[0]["contents"]) == [
+        ("user", "q1"),
+        ("model", "a1"),
+        ("user", "q2"),
+        ("model", "a2"),
+        ("user", "now?"),
+    ]
+
+
+@pytest.mark.parametrize("empty", [None, []], ids=["two-args", "empty-list"])
+def test_fr21_no_turns_sends_only_question(monkeypatch, empty) -> None:
+    """With no turns (2-arg call or turns=[]) contents is just the user question."""
+    fake = install_fake(monkeypatch, [text_response("answer")])
+    if empty is None:
+        llm.ask("hi", fixed_now())
+    else:
+        llm.ask("hi", fixed_now(), empty)
+    assert role_text(fake.models.calls[0]["contents"]) == [("user", "hi")]
+
+
+def test_fr21_turns_stay_at_start_in_tool_round(monkeypatch) -> None:
+    """In a tool round the turns stay at the start of later requests, then the question,
+    then the function call and response."""
+    first = call_response("call-1")
+    fake = install_fake(monkeypatch, [first, text_response("answer")])
+    install_run(monkeypatch, SEARCH_RESULT)
+    llm.ask("now?", fixed_now(), TURNS)
+    assert len(fake.models.calls) == 2
+    contents = fake.models.calls[1]["contents"]
+    assert len(contents) == 7
+    assert role_text(contents[:5]) == [
+        ("user", "q1"),
+        ("model", "a1"),
+        ("user", "q2"),
+        ("model", "a2"),
+        ("user", "now?"),
+    ]
+    assert contents[5] == first.candidates[0].content
+    assert contents[6].role == "user"
+    assert contents[6].parts[0].function_response.id == "call-1"
+
+
+def test_fr21_turns_list_not_mutated(monkeypatch) -> None:
+    """The turns list passed to ask is not changed."""
+    install_fake(monkeypatch, [text_response("answer")])
+    turns = copy.deepcopy(TURNS)
+    llm.ask("now?", fixed_now(), turns)
+    assert turns == TURNS
 
 
 def test_fr5_api_failure_propagates(monkeypatch) -> None:
