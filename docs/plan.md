@@ -1,208 +1,38 @@
-# Plan: AI Assistant v1 Voice assistant
+# Plan: AI Assistant v2 Teacher
 
-## M1 (v1): Server skeleton, config and logger | done
-Goal: A FastAPI app with /health, settings in config, and a JSONL query logger · GitHub milestone: #1
-
-| Task | FR | Files | Done when | Test | Issue | Done |
-| --- | --- | --- | --- | --- | --- | --- |
-| M1-T1 | FR-18 | requirements.txt, server/config.py, server/main.py, CLAUDE.md (+ server/__init__.py, tests/test_server.py) | GET /health returns 200 {"status": "ok", "model": "<model name>"}; main.py calls `uvicorn.run(app, host=config.HOST, port=config.PORT)` under `if __name__ == "__main__"` and the CLAUDE.md run command becomes `.venv\Scripts\python -m server.main` | pytest | #6 | [x] |
-| M1-T2 | FR-17 | server/logger.py, server/config.py (+ tests/test_logger.py) | Writes one JSONL line with time, question, answer, per-stage timings, `searched`, tool calls (name, arguments, ok or error) and error; no API key or token ever appears in the log (the test sets a fake GEMINI_API_KEY and asserts it never appears in the line) | pytest | #5 | [x] |
-
-Manual checks: the server binds to the configured host 127.0.0.1, so another device on the same Wi-Fi gets no answer on the port (FR-18).
-
-## M2 (v1): Speech-to-text | done
-Goal: Turn question audio into text with faster-whisper `small.en`, loaded once at startup · GitHub milestone: #2
+## M8 (v2): Sessions and follow-ups | in progress
+Goal: follow-ups and "tell me more" for 120 s, new answer limits, tool status in the log · GitHub milestone: #8
 
 | Task | FR | Files | Done when | Test | Issue | Done |
 | --- | --- | --- | --- | --- | --- | --- |
-| M2-T1 | FR-4 | requirements.txt, server/config.py, server/stt.py (+ tests/test_stt.py) | Turns a question WAV into text with faster-whisper `small.en`; `load()` builds the model once from config `STT_MODEL`, `STT_DEVICE` ("cuda") and `STT_COMPUTE_TYPE` ("float16"), so "cpu"/"int8" needs only a config change; `transcribe(wav)` passes the WAV bytes to the model and returns the segment texts joined into one string; tests use a fake model (no download, GPU or CUDA) | pytest | #8 | [x] |
-| M2-T2 | FR-4 | server/main.py, server/stt.py, server/config.py (+ tests/test_server.py, tests/test_stt.py) | The FastAPI lifespan calls `stt.load()` once at startup, never per request; `/health` still returns 200; tests fake `stt.load`. After building the model, `load()` transcribes a short silent clip once as a warm-up and prints its time to stderr (`stt warm-up: <ms> ms`); the first transcription after startup takes ≤ 1 s; unit tests use a fake model only | pytest | #9 | [x] |
+| M8-T1 | FR-17 | server/llm.py, .claude/skills/server-conventions/SKILL.md (+ tests/test_llm.py) | Each tool call is `{name, args, status}`: "refused" when skipped for lack of time, "failed" on an error result, else "ok" (#59) | pytest | #65 | [ ] |
+| M8-T2 | FR-17 | eval/run_eval.py (+ tests/test_run_eval.py) | A tool call counts as made only when its `status` is "ok" (#59); `eval/live_log.py` does not read `ok`, so it needs no change | pytest | #66 | [ ] |
+| M8-T3 | FR-5 | server/config.py, server/llm.py (+ tests/test_llm.py) | The system instruction says at most 3 sentences and 60 words; a list says the total count and the first 5 (newest notes, soonest reminders); "tell me more" gives the next 5 within the same limit; values from `ANSWER_MAX_SENTENCES`, `ANSWER_MAX_WORDS`, `LIST_MAX_ITEMS` | pytest | #67 | [ ] |
+| M8-T4 | FR-21 | server/config.py, server/session.py (+ tests/test_session.py) | `add_turn`, `turns(now)` and `reset()` behind a lock; keeps the last 5 question and answer texts; no turns 120 s after the last answer; values from `SESSION_TTL_S`, `SESSION_MAX_TURNS` | pytest | #68 | [ ] |
+| M8-T5 | FR-21 | server/llm.py, .claude/skills/server-conventions/SKILL.md (+ tests/test_llm.py) | `ask(question, now, turns)` sends the earlier turns as user and model text before the question; a fake-client test checks the request contents | pytest | #69 | [ ] |
+| M8-T6 | FR-21, FR-17 | server/main.py, tests/conftest.py (+ tests/test_server.py) | `/query` passes the session turns to `llm.ask` and adds a turn only after a 200; a failed query adds no turn and does not extend the 120 s; the log line has `session_continued` | pytest | #70 | [ ] |
+| M8-T7 | FR-22 | server/main.py (+ tests/test_server.py) | `POST /session/reset` returns 200 `{"status": "ok"}` and clears the session; 200 also with no session | pytest | #71 | [ ] |
+| M8-T8 | FR-22 | eval/run_eval.py (+ tests/test_run_eval.py) | The v1 eval calls `POST /session/reset` before each clip, so rows do not share context | pytest | #72 | [ ] |
 
-Manual checks: with the CUDA 12 toolkit and cuDNN 9 installed, transcribe one short spoken 16 kHz mono WAV with a one-off command against `stt`; the text matches what was said and the command prints how long one transcription takes (target ≤ 1 s, FR-4). The first run downloads the small.en model. "≥ 90% keep their meaning" is measured in M7. After M2-T2: start the server, see the `stt warm-up` line on stderr, then the first transcription after startup takes ≤ 1 s.
+Manual checks: with the real model, ask "what is LoRA?", then "what is it used for?" and hear an
+answer about LoRA (FR-21); the same follow-up after 120 s is answered as a new question; with 7
+notes, the list says the count and 5 notes, and "tell me more" gives the rest (FR-5).
 
-## M3 (v1): Gemini answers with web search | done
-Goal: Spike Gemini with our key, then `llm.ask` with the system instruction, current time, a `web_search` tool backed by Tavily and the `searched` flag · GitHub milestone: #3
+## M9 (v2): Look | planned
+Goal: Right Alt voice, Right Ctrl voice + screenshot; image to Gemini and in the session
+FRs: FR-19, FR-20, FR-1, FR-3, FR-16, FR-17 · Tasks: not planned yet
 
-| Task | FR | Files | Done when | Test | Issue | Done |
-| --- | --- | --- | --- | --- | --- | --- |
-| M3-T1 | FR-5 | docs/plan.md, docs/spec.md, docs/design.md, docs/brief.md, docs/roadmap.md, CLAUDE.md, .env.example (spike scripts ran from the scratchpad, never committed) | Spike run with our key, following the current official docs ([tool combination](https://ai.google.dev/gemini-api/docs/generate-content/tool-combination), [Interactions API](https://ai.google.dev/gemini-api/docs/interactions-overview)); results recorded below; docs updated to the Plan B design (`web_search` via Tavily) | manual | #11 | [x] |
-| M3-T2 | FR-6 | requirements.txt (tzdata), server/config.py (`TIMEZONE`, `HOME_CITY` = Pune), server/llm.py (+ tests/test_llm.py) | With the clock fixed at Fri 9 Oct 2026 14:00 IST, the system instruction contains that date, weekday and time in Asia/Kolkata, plus the home city from config. It also contains the design's rules: at most 2 short sentences under 40 words except lists, call `web_search` for live info (with the date or home city in the query when needed), turn relative times into exact ISO 8601 with offset, repeat actions back | pytest | #12 | [x] |
-| M3-T3 | FR-5 | requirements.txt (tavily-python, python-dotenv), server/config.py (`TAVILY_API_KEY` from .env, `SEARCH_MAX_RESULTS`, `SEARCH_TIMEOUT_S` = 5), server/search.py (+ tests/test_search.py) | `search(query)` calls the Tavily Search API with basic depth, the result count and timeout from config, and the key from an environment variable; returns `[{title, url, content}]`; raises on failure. Tests use a fake client, so they need no network or key | pytest | #14 | [x] |
-| M3-T4 | FR-5, FR-7 | server/tools.py (+ tests/test_tools.py) | The `web_search(query)` function declaration; `run(name, args, now)` always returns a result dict: `web_search` gives `{results: [...]}` from `search`, or `{error}` when `search` raises; an unknown tool name or bad arguments gives `{error}`, never a crash | pytest | #15 | [x] |
-| M3-T5 | FR-5, FR-7 | requirements.txt (google-genai), server/config.py (`GEMINI_API_KEY` from .env, `LLM_MODEL` = gemini-3.5-flash-lite, `LLM_TIMEOUT_S` = 10, `LLM_DEADLINE_S` = 15, `LLM_THINKING_LEVEL`, `MAX_TOOL_ROUNDS` = 3), server/llm.py (+ tests/test_llm.py) | `ask(question, now)` calls the model from config through `google-genai` with minimal thinking, a 10 s timeout per call, the key from an environment variable, the system instruction and the `tools` declarations in `VALIDATED` mode. A call followed by text runs the tool once through `tools.run`, sends back the model's previous content unchanged (including `thought_signature`) plus the result, and returns the answer; a test with the fake client checks that the second request contains that content with its `thought_signature`. More than 3 rounds raises `too many tool rounds`; a timeout or API failure propagates. A Gemini or search call starts only if its full timeout (10 s / 5 s) fits in the time left of the 15 s stage deadline, else it raises `deadline exceeded` (tested with a fake clock). main.py adds the `llm:` prefix in M4. Returns the answer, `searched` (true when `web_search` ran and returned results) and the tool calls (name, arguments, ok or error). Tests use a fake client, so they need no network | pytest | #13 | [x] |
+## M10 (v2): Concept tracker | planned
+Goal: concepts table, `log_concept` and `learned_this_week`, names in the prompt
+FRs: FR-23, FR-25, FR-17 · Tasks: not planned yet
 
-Spike result (M3-T1), Oct 10, 2026, google-genai 2.29.0, `client.models.generate_content`:
-- `gemini-3.8-flash`: an 8 s timeout is rejected (400 "Minimum allowed deadline is 10s"). At 10 s: plain call 504 DEADLINE_EXCEEDED; `google_search` alone or combined with a function: 429 RESOURCE_EXHAUSTED. Same on `gemini-3.7-flash`.
-- New key, project ai-glasses, `gemini-3.5-flash-lite` (free tier: 15 RPM, 500 RPD), 10 s timeout, ≥ 15 s between calls:
-  - plain "say hi": OK, 1.76 s.
-  - `google_search` only, live question: 429 RESOURCE_EXHAUSTED in 0.48 s, on the first search call. Google Search grounding has no API quota on our free tier. The combined request and the Interactions API were not tried, since both need it.
-  - one function declaration (`add_note`), no `google_search`, `VALIDATED` mode, "note that the lab is at 5 pm": function call `add_note({"text": "Lab is at 5 PM"})` with an `id` and a `thought_signature`, 2.10 s.
-- Decision: Plan B. Gemini gets a `web_search(query)` function; the server runs it against the Tavily Search API (free plan: 1,000 credits a month, no card, 100 requests per minute on a development key; [pricing](https://docs.tavily.com/documentation/api-credits), [rate limits](https://docs.tavily.com/documentation/rate-limits), [Python SDK](https://docs.tavily.com/sdk/python/reference), [terms](https://www.tavily.com/terms)).
-- SDK facts: `HttpOptions(timeout=...)` is in milliseconds; `ThinkingConfig(thinking_level="MINIMAL")`; `FunctionCallingConfig(mode="VALIDATED")`; function calls arrive as `part.function_call` with `name`, `args` and `id`; results go back as `FunctionResponse(name, id, response)` after the model's content, which is sent back unchanged.
+## M11 (v2): Quiz me | planned
+Goal: `start_quiz`, quiz state in the session, stop, grading call, score, 300 s wait
+FRs: FR-24, FR-22 · Tasks: not planned yet
 
-Notes: M3 builds the tool-call loop (FR-7) with `web_search` only; M5 adds the five notes and reminder tools to `tools.py`. `llm.ask` is wired into `/query` in M4.
+## M12 (v2): Evaluation | planned
+Goal: frozen v2 set, `record --set v2`, `run_eval_v2`, v1 regression, README, tag v0.2.0
+FRs: all v2 quality targets · Tasks: not planned yet
 
-Manual checks: before M3-T3, sign up for a free Tavily key and add `TAVILY_API_KEY` to .env. After M3-T3, run one search with the real key through a one-off command against `search` (done Oct 10: "weather in Pune today" gave 5 results in 2.38 s). After M3-T5, ask a live question with the real key (e.g. today's weather in the home city) through a one-off command against `llm`. The answer should be correct, `searched` true, under 40 words, and each Gemini call should take ≤ 10 s (FR-5). Done Oct 10: "What is the weather in Pune right now?" called `web_search("Pune weather October 10 2026")` and gave a 16-word answer, `searched` true, 5.24 s for 2 Gemini calls + 1 search (thought_signature round-trip works on the real API). Correctness of the answer is to be checked by you against a weather site. "≥ 80% of the general and live eval questions correct" and the "tomorrow at 5" → `due_at` check (FR-6) are measured in M7.
-
-## M4 (v1): TTS and full /query pipeline with server errors | done
-Goal: Piper TTS at 16 kHz; /query runs STT → LLM → TTS with 400/500 errors and one log line per query · GitHub milestone: #4
-
-| Task | FR | Files | Done when | Test | Issue | Done |
-| --- | --- | --- | --- | --- | --- | --- |
-| M4-T1 | FR-11 | docs/plan.md (spike scripts ran from the scratchpad, never committed) | Piper spike with `en_US-lessac-medium`; results recorded below: the voice downloads into `models/` (gitignored); its native sample rate, channels and licence; how the audio reaches 16 kHz mono 16-bit; the time to synthesize a 40-word answer on this laptop, first call and warm (median of 5 runs), against the ≤ 1 s target. If a warm 40-word answer takes over 1 s, stop and tell the user | manual | #17 | [x] |
-| M4-T2 | FR-11 | requirements.txt (piper-tts, pinned with ==), server/config.py (voice path), server/tts.py (+ tests/test_tts.py) | `load()` builds the voice once; `synthesize(text) -> bytes` returns a 16 kHz mono 16-bit WAV, resampled with stdlib `audioop.ratecv` (one comment: removed in Python 3.13); `load()` warms up only if the spike shows a slow first call. Tests use a fake voice with a different native rate and check the header (16000, 1 channel, 2-byte samples); no model file needed | pytest | #18 | [x] |
-| M4-T3 | FR-4 | server/stt.py, server/main.py, server/config.py (`LOG_LEVEL`) (+ tests/test_stt.py) | The `stt warm-up: <ms> ms` line goes through the `logging` module, not `print`; `main.py` calls `logging.basicConfig` with `LOG_LEVEL` so the line shows at startup; no key or token is ever logged. Test uses `caplog` and checks nothing is printed to stderr | pytest | #19 | [x] |
-| M4-T4 | FR-11 | requirements.txt (python-multipart, pinned with ==; FastAPI needs it for the file upload), server/main.py, tests/conftest.py (+ tests/test_server.py) | The lifespan calls `stt.load()` and `tts.load()` once; `main.now()` is added; `POST /query` is a plain `def`, not `async def`, so `/health` and reminder polling stay responsive during a slow query; a valid WAV runs `stt.transcribe` → `llm.ask(question, now)` → `tts.synthesize` and returns 200 `audio/wav` with the TTS bytes. conftest adds the shared fakes | pytest | #20 | [x] |
-| M4-T5 | FR-16 | server/main.py (+ tests/test_server.py) | 400 `{"error": "<reason>"}` before any stage runs, one test per case: `audio missing`, `audio empty`, `audio is not a readable WAV`, `audio must be 16 kHz mono 16-bit`. An empty transcript gives 400 `{"error": "no speech detected"}` before `llm.ask` runs. Each test checks the status and exact JSON, that later stages were not called, and that the next valid request returns 200 | pytest | #21 | [x] |
-| M4-T6 | FR-16 | server/main.py, server/config.py (`ERROR_MAX_CHARS`) (+ tests/test_server.py) | `run_stage` times each stage in ms, even on failure; a failure in `stt`, `llm` or `tts` gives 500 `{"error": "<stage>: <reason>"}` with exact JSON checked (e.g. `llm: too many tool rounds`); the error text is cut to `ERROR_MAX_CHARS` and has every configured API key value replaced by `[redacted]`: a test raises an exception whose message contains a fake key and asserts it is absent from the response body (the log-line half of this check is in M4-T7); later stages don't run; the next valid request returns 200 | pytest | #22 | [x] |
-| M4-T7 | FR-17 | server/main.py (+ tests/test_server.py) | A `finally` block writes exactly one JSONL line per `/query` with question, answer, per-stage timings, `searched`, tool calls and error, for success, 400 and 500; a failed stage still logs its timing. When the stage's exception has a `tool_calls` list attribute (set by M4-T7b), the line logs it, else an empty list; the test uses a fake llm that raises such an exception. Tests point `LOG_PATH` at `tmp_path`; one test raises from a stage an exception whose message contains a fake key and asserts the key is absent from the log line (and from the response body) | pytest | #23 | [x] |
-| M4-T7b | FR-17 | server/llm.py (+ tests/test_llm.py) | `ask` attaches the tool calls made so far (name, args, ok) to any exception it raises, as a `tool_calls` list attribute, so a failed LLM query still logs them. With the fake client: a tool call followed by `too many tool rounds`, and one followed by `deadline exceeded`, both raise with `tool_calls` set; a failure before any tool call gives an empty list | pytest | #24 | [x] |
-
-Spike result (M4-T1), Oct 10, 2026, piper-tts 1.8.0 (latest), Python 3.11.9, CPU only (no onnxruntime-gpu), this laptop:
-- Download: `python -m piper.download_voices en_US-lessac-medium --download-dir models` gave `en_US-lessac-medium.onnx` (63 MB) and its `.onnx.json` in `models/`, which is gitignored (`models/`, `*.onnx`, `*.onnx.json`).
-- Load: `PiperVoice.load(path)` took 2.8-2.9 s. Synthesis: `voice.synthesize_wav(text, wav_file)` writes a WAV.
-- Native output: 22050 Hz, 1 channel, 16-bit. Resampled to 16000 Hz with stdlib `audioop.ratecv(pcm, 2, 1, 22050, 16000, None)` in 2.7 ms; the saved file is 16000 Hz, 1 channel, 16-bit.
-- Speed, 40-word answer (11.7 s of audio): warm calls 330-403 ms, median 348 ms (5 runs), well under the 1 s target. First call after loading: 394 ms in a fresh process with the same 40-word text; 1666 ms in the very first run ever (35-word text, model file not yet cached by the OS). A one-time warm-up in `tts.load()` is cheap insurance against that cold case (M4-T2); pin `piper-tts==1.8.0`.
-- Licence: the voice is trained on the Lessac Blizzard 2013 dataset, whose licence grants "Research Purposes only" (non-exclusive, non-transferable). Fine for this personal prototype; check it again before the glasses are ever shared or sold.
-- Listening sample: `piper_spike_answer.wav` in the scratchpad (not in the repo).
-
-Manual checks: after M4-T7, start the server with the real models and POST a spoken 16 kHz WAV to `/query`. The returned WAV should play with every word understandable, and the logged `tts` time should be ≤ 1 s for a ~40-word answer (FR-11). `logs/queries.jsonl` has one line per call, a bad upload returns 400, and the server keeps serving afterwards (FR-16, FR-17). The `stt warm-up` line appears in the console at startup (M4-T3).
-
-## M5 (v1): Tools: notes and reminders | done
-Goal: SQLite store, the five notes and reminder tools in `tools.py` (the tool-call loop exists from M3), repeat-back answers and the reminder endpoints · GitHub milestone: #5
-
-| Task | FR | Files | Done when | Test | Issue | Done |
-| --- | --- | --- | --- | --- | --- | --- |
-| M5-T1 | FR-8 | server/config.py (`DB_PATH`, `DB_TIMEOUT_S` = 5), server/store.py, tests/conftest.py (+ tests/test_store.py) | `init()` creates the `data/` folder and the `notes` and `reminders` tables if missing; `add_note(text, created_at)` adds one row and returns `{id, text, created_at}`; `list_notes()` returns every note newest first, or `[]`; each call opens its own short connection with a 5 s busy timeout (`DB_TIMEOUT_S`), so the FastAPI thread pool is safe; conftest adds a `db` fixture that points `DB_PATH` at `tmp_path` | pytest | #27 | [x] |
-| M5-T2 | FR-9 | server/store.py (+ tests/test_store.py) | `add_reminder(text, due_at, created_at)` stores one `pending` row and returns `{id, text, due_at}`; `list_pending()` returns pending reminders by `due_at`, leaving out delivered and cancelled ones; `cancel(id)` sets `cancelled` and returns the reminder, or `None` if the id is unknown or not pending | pytest | #28 | [x] |
-| M5-T3 | FR-12, FR-14 | server/store.py (+ tests/test_store.py) | `list_due(now)` returns pending reminders with `due_at ≤ now`, oldest first, never future, delivered or cancelled ones, and never changes a status; `get(id)` returns a reminder or `None`; `ack(id)` sets `delivered`, can be repeated, and returns `None` only for an unknown id | pytest | #29 | [x] |
-| M5-T4 | FR-8, FR-10 | server/tools.py (+ tests/test_tools.py) | `add_note` and `list_notes` are declared in `DECLARATIONS` and run through `run()`; `add_note` returns `{id, text, created_at}`; `list_notes` returns `{notes: [...]}`; empty or non-text `text` returns `{error}`; the stored values come back in the result so Gemini can repeat them | pytest | #30 | [x] |
-| M5-T5 | FR-9, FR-10 | server/tools.py (+ tests/test_tools.py) | `add_reminder(text, due_at)` is declared and run; it converts `due_at` to the configured time zone and stores it with seconds precision; returns `{id, text, due_at}`; a `due_at` in the past (`due_at < now`), without an offset, or not ISO 8601 returns `{error}` and stores nothing; empty `text` returns `{error}` | pytest | #31 | [x] |
-| M5-T6 | FR-9, FR-10 | server/tools.py (+ tests/test_tools.py) | `list_reminders` returns `{reminders: [{id, text, due_at}]}` for pending ones only, or an empty list; `cancel_reminder(id)` returns `{id, text, due_at, status: "cancelled"}`; an unknown, non-pending or non-integer id returns `{error}`; it accepts `3` and `3.0`, and rejects `true` and `"abc"` | pytest | #32 | [x] |
-| M5-T7 | FR-13 | server/config.py (`MISSED_AFTER_S` = 60), server/tools.py (+ tests/test_tools.py) | `reminder_text(reminder, now)` returns "Reminder, 5 pm: call the lab" when due less than 60 s ago, and "Missed reminder, 5 pm: …" at 60 s or more; it adds the date ("Missed reminder, 8 October, 5 pm: …") when the due date is not today; minutes are spoken only when non-zero ("5:30 pm") | pytest | #33 | [x] |
-| M5-T8 | FR-12 | server/main.py (+ tests/test_server.py) | The lifespan calls `store.init()` once at startup; `GET /reminders/due` (plain `def`, not `async def`) returns 200 `[{id, text, due_at}]` oldest first, or 204 with an empty body when nothing is due; polling twice returns the same list; `/health` still returns 200; these endpoints write no JSONL line | pytest | #34 | [x] |
-| M5-T9 | FR-14 | server/main.py (+ tests/test_server.py) | `POST /reminders/{id}/ack` (plain `def`, not `async def`) returns 200 `{"status": "ok"}` and marks the reminder delivered; a second ack returns 200; after an ack the reminder is gone from `/reminders/due`; an unknown id returns 404 `{"error": "reminder not found"}` | pytest | #35 | [x] |
-| M5-T10 | FR-13 | server/main.py (+ tests/test_server.py) | `GET /reminders/{id}/audio` (plain `def`, not `async def`) returns 200 `audio/wav` made by `tts.synthesize(tools.reminder_text(...))`; the test checks the exact text sent to TTS for a fresh reminder, a missed one and a missed one from another day, and that the status stays `pending`; an unknown id returns 404 `{"error": "reminder not found"}` | pytest | #36 | [x] |
-| M5-T11 | FR-7, FR-10 | tests/test_llm.py | With a fake Gemini client and the real `tools` and `store` on a temporary DB: an `add_reminder` call stores the row; "cancel the lab reminder" runs `list_reminders` then `cancel_reminder` and finishes inside the 3-round limit; each function response carries the stored values | pytest | #37 | [x] |
-| M5-T12 | FR-9, FR-10, FR-6 | server/llm.py, server/tools.py (+ tests/test_llm.py, tests/test_tools.py) | (a) the system instruction's current time includes seconds (clock and ISO), so "in two minutes" lands within a few seconds of 120 s; (b) `add_reminder` and each `list_reminders` item also return a speakable time string `due_spoken` (e.g. "12:47 am", with the date when it is not today) built by the same helper `reminder_text` uses, and the system instruction tells Gemini to repeat that string and never to read an ISO timestamp aloud; (c) the system instruction tells Gemini never to say internal ids aloud; (d) pytest covers each of (a), (b) and (c), and the FR-6 and M5-T11 assertions on the time format are updated | pytest | #39 | [x] |
-
-Notes: no new package (sqlite3 and zoneinfo are stdlib, tzdata is already pinned). `due_at` values with another offset (e.g. `Z`) are converted to Asia/Kolkata before storing; `store` never reads the clock, `tools` and `main` pass `now` in; `llm.py` is unchanged by M5-T1 to T11 (the repeat-back rule is in the system instruction since M3-T2); M5-T12 changes its system instruction. M5-T12 adds a `due_spoken` field to the `add_reminder` and `list_reminders` results, which spec.md "Tool functions" does not list yet; the spec needs that one-line update (proposed in chat, not edited here).
-
-Manual checks: start the server with the real models, ask for a note and a reminder through `/query`, and check the replies repeat back the stored text and time (FR-10). After the reminder is due, `GET /reminders/due` lists it, `/reminders/{id}/audio` plays the right spoken text, and `/reminders/{id}/ack` clears it (FR-12, FR-13, FR-14). Gemini's choice of tool and the "≥ 80% correct" scores are measured in M7. Done Oct 11, 2026 (all 8 checks passed, real models). After M5-T12, repeat the `reminder_add` clip: `due_at` lands within a few seconds of 120 s after the call, and the answer says a spoken time ("12:47 am"), not an ISO timestamp or an id.
-
-## M6 (v1): PC client | done
-Goal: Push-to-talk recording, status sounds, 20 s timeout and due-reminder polling · GitHub milestone: #6
-
-| Task | FR | Files | Done when | Test | Issue | Done |
-| --- | --- | --- | --- | --- | --- | --- |
-| M6-T1 | FR-1 | docs/plan.md (spike scripts ran from the scratchpad, never committed) | Spike on this laptop: sounddevice records 16 kHz mono 16-bit and plays a WAV, and pynput sees F9 press and release; the result is recorded below (input device, quirks) | manual | #41 | [x] |
-| M6-T2 | FR-1 | requirements.txt (sounddevice, pinned with ==), client_pc/config.py (`MAX_RECORD_S` = 10, `PRE_ROLL_S` = 0.2), client_pc/client.py (+ client_pc/__init__.py, tests/test_client.py) | The recorder opens one InputStream (16 kHz mono 16-bit) at client start and keeps it open, avoiding the 0.5 s open delay measured in M6-T1; it holds a rolling pre-roll buffer of 0.2 s. A key press keeps the pre-roll plus all following frames; release or 10 s stops it and returns a 16 kHz mono 16-bit WAV. Starting and stopping the stream are explicit and safe to call twice. Tests (fake mic): audio before the pre-roll window is excluded, the pre-roll is included, the 10 s cap works, release stops, and a second press while already recording is ignored | pytest | #42 | [x] |
-| M6-T3 | FR-2 | client_pc/client.py, client_pc/config.py (+ tests/test_client.py) | `play_start()`, `play_thinking()` and `play_error()` play three distinguishable tones generated in code; `play_wav(bytes)` plays a WAV. The tones and `play_wav` use one persistent OutputStream created at client start, so there is no 0.4 s start delay; tests fake the audio output | pytest | #43 | [x] |
-| M6-T4 | FR-3 | client_pc/client.py, client_pc/config.py (`SERVER_URL`, `QUERY_TIMEOUT_S` = 20) (+ tests/test_client.py) | `send_query(wav)` posts one multipart field `audio` (content type `audio/wav`) to `/query` with httpx (already pinned) and a 20 s timeout; it returns the answer WAV on 200. A 400 or a 500 raises a client error that includes the server's error text; a timeout and a refused connection each raise their own clear error; a 200 whose content type is not `audio/wav` is a client error. Tests use `httpx.MockTransport` | pytest | #44 | [x] |
-| M6-T5 | FR-1, FR-2, FR-3 | requirements.txt (pynput, pinned with ==), client_pc/client.py, client_pc/config.py (`PTT_KEY` = F9, `MIN_RECORDING_S` = 0.3) (+ tests/test_client.py) | The client has one state (idle, recording, waiting, playing); a key press is ignored unless idle. The state lock also covers every Player call (tones and `play_wav`), so two sounds never write to the output stream at once. Press plays the start sound and records; release plays the thinking sound, sends the audio and plays the answer. Any failure, including a 20 s timeout, plays the error sound and the next key press works. A recording shorter than 0.3 s is discarded, the error tone plays and no request is sent. The time from key release to the start of the answer is logged for every query (e.g. "latency 2.9 s"). State changes are protected by a lock. Tests: key press ignored unless idle, a second key press during a state transition is ignored, short recording sends nothing, the latency line is logged | pytest | #45 | [x] |
-| M6-T6 | FR-15 | client_pc/client.py (+ tests/test_client.py) | `deliver_due()` calls `GET /reminders/due`; for each reminder it prints the text, fetches `/reminders/{id}/audio`, plays it, and only then calls `POST /reminders/{id}/ack`; a 204 or a poll error is skipped silently. Test: when the audio fetch or playback fails, no ack is sent | pytest | #46 | [x] |
-| M6-T7 | FR-15 | client_pc/client.py, client_pc/config.py (`POLL_INTERVAL_S` = 10), CLAUDE.md (+ tests/test_client.py) | `main()` calls `Recorder.open()` and `Player.open()` at start (and closes both on exit), runs the key listener and polls every 10 s, once at start so missed reminders are heard; the poll runs only when the client is idle (not recording, waiting or playing); test for that rule. Ctrl+C stops the key listener and both audio streams cleanly (tested with fakes). A failing poll logs one warning when polls start failing and one note when they recover, never one per poll (tested). CLAUDE.md gets the run command `.venv\Scripts\python -m client_pc.client` and a note that the microphone stays open while the client runs, frames are discarded unless the key is held, and nothing is stored | pytest | #47 | [x] |
-
-Spike result (M6-T1), Oct 11, 2026, Python 3.11, Windows 11, sounddevice 0.5.6, pynput 1.8.2 (pulls in six 1.17.0; T2 and T5 pin sounddevice==0.5.6 and pynput==1.8.2):
-- Devices (defaults, Windows MME): input "Microphone Array (Realtek(R) Au" (name cut at 31 characters by MME), output "Speaker (Realtek(R) Audio)". The Bluetooth headsets (realme Buds, NIRVANAA) also appear as mono 'Hands-Free' devices; the client uses the system defaults.
-- Recording: `sd.RawInputStream(samplerate=16000, channels=1, dtype="int16")` records 16 kHz mono 16-bit directly (no resampling needed); 1 s read gave 32000 bytes, no overflow. Room noise peak 629 of 32767; speech peaks 5448 and 11406, no clipping.
-- Playback: `sd.RawOutputStream(samplerate=16000, channels=1, dtype="int16")` plays 16 kHz mono PCM; a 1 s 440 Hz tone was heard clean.
-- Key: `pynput.keyboard.Listener` sees `Key.f9` press and release globally (the terminal need not have focus). Key hold of 3.67 s and 3.62 s gave 3.67 s and 3.61 s of audio; two recordings played back clear, every word understandable.
-- Quirks: (1) opening an input stream takes about 0.5 s on the first call (1.55 s for open + 1 s read) and an output stream about 0.4 s; the T2 recorder should keep one stream open and buffer only while F9 is held, or the first speech is lost. (2) The spike script ignored repeated F9 presses while held, so whether Windows sends key-repeat press events was not observed; T5's idle-only rule and lock cover it either way. (3) The WAV container needs the stdlib `wave` module (header plus PCM); no extra package.
-
-Notes: dependencies are added with the code that uses them (sounddevice in T2, pynput in T5); the T1 spike needs both in the venv, so install the pinned versions for it. HTTP uses httpx, already pinned. Status tones are generated in code (no sound files). The key is `PTT_KEY` in `client_pc/config.py`. The client logs through the `logging` module (latency line, no `print` except the reminder text in FR-15).
-
-Manual checks, with the real server and models: 20 spoken clips are clear on playback (FR-1); the start, thinking and error sounds tell the state without a screen, and the error sound plays with the server stopped (refused), on a silent recording (real 400 "no speech detected"), on a short tap (discarded locally), and on a real timeout made by temporarily setting QUERY_TIMEOUT_S = 1, restored afterwards (FR-2); after a timeout the next key press works (FR-3); a reminder due while the client runs is heard within 10 s, and one set while the client was closed is heard as "Missed reminder" within 10 s of the next start; the reminder is acked only after its audio has played (FR-15); Ctrl+C stops the key listener and the audio stream with no hanging process.
-
-## M7 (v1): Evaluation and reliability | done
-Goal: Frozen eval set, recorder, runner and report; measure, then fix only what the numbers justify · GitHub milestone: #7
-
-| Task | FR | Files | Done when | Test | Issue | Done |
-| --- | --- | --- | --- | --- | --- | --- |
-| M7-T1 | FR-4 | CLAUDE.md, docs/spec.md, docs/design.md | The structure, commands and frozen-set rule in CLAUDE.md, and spec.md and design.md, name `eval/` (questions.json, config.py, record.py, run_eval.py, live_questions.md, live_log.py, results/) and `data/eval/` instead of `tests/questions.csv` and `tests/run_eval.py`; the "how questions are spoken" decision reads: recorded once, in `data/eval/`, not in git | manual | #49 | [x] |
-| M7-T2 | FR-5, FR-8, FR-9, FR-10 | eval/questions.json, eval/__init__.py (+ tests/test_eval_questions.py) | 30 rows: 10 general/live (7 stable facts, 3 live incl. weather in Pune and a recent-news search), 10 notes, 10 reminders; each has id, group, spoken text, expected transcript and pass rule; in a group, add comes before list or cancel; no row needs a reminder to become due; test checks counts, unique ids, fields and order | pytest | #50 | [x] |
-| M7-T3 | FR-1, FR-4 | eval/config.py, eval/record.py (+ tests/test_record.py) | `python -m eval.record` shows one question at a time, waits for ENTER, records 16 kHz mono 16-bit with the client `Recorder`, plays back on request, allows redo, saves `data/eval/<id>.wav`; stopping and restarting skips clips already saved; tests use a fake recorder and fake input | pytest | #51 | [x] |
-| M7-T4 | FR-16, FR-17 | eval/run_eval.py, eval/config.py (+ tests/test_run_eval.py) | Checks `/health` and that all 30 clips exist; writes a restore-pending marker, backs up the DB with `sqlite3.Connection.backup` to `data/eval/`, then clears the notes and reminders rows (tables stay); a marker found at start restores first; posts the clips in order, one at a time, sleeping 4 s per Gemini call used (tool calls + 1) to stay under 15 per minute; reads the new `logs/queries.jsonl` lines by byte offset; a 500 is recorded and the run continues; restores the DB at the end and on Ctrl+C, then removes the marker; warns, without stopping, if a `client_pc.client` process runs (found with PowerShell through subprocess, no new dependency); tests use a temp DB, fake server and fake process list | pytest | #52 | [x] |
-| M7-T5 | FR-5, FR-8, FR-9, FR-10 | eval/run_eval.py (+ tests/test_run_eval.py) | Per question: transcript, answer, tools used, stt/llm/tts/total seconds, pass or fail and the reason; general passes on expected keywords; live also needs the sought kind of fact (e.g. a temperature) and `searched` true; notes and reminders pass on the real DB rows and the logged tool call, and the answer repeats the action back; relative times such as "tomorrow 17:00" resolve at run time | pytest | #53 | [x] |
-| M7-T6 | FR-4, FR-17 | eval/run_eval.py (+ tests/test_run_eval.py) | Compares transcript and expected after lowercasing and removing punctuation, and treats spoken numbers and digits as equal on both texts (five = 5, ten = 10, etc.; a test covers it), per question and overall; writes `eval/results/<date>.md` and `.json`; verdict on: ≥ 80% per group, median total ≤ 15 s, no 500 in the 30, transcription ≥ 90%; secrets check: no configured key value in `logs/`, and `.env`, `data/` and `*.db` untracked | pytest | #54 | [x] |
-| M7-T7 | FR-2, FR-15 | eval/live_questions.md, eval/live_log.py (+ tests/test_live_log.py) | 10 fixed questions to speak with F9 (4 general, 3 notes, 3 reminders), none equal to the 30 recorded ones (a test compares the texts); `python -m eval.live_log` prints question, answer and latency of the last 10 log lines as a table | pytest | #55 | [x] |
-| M7-T8 | FR-4, FR-5, FR-8, FR-9 | docs/plan.md | You record the 30 clips and run the first eval; numbers and a cause per failure (STT, tool choice, deadline, other) are recorded below; `eval/questions.json` is frozen from now on | manual | #56 | [x] |
-| M7-T9 | FR-4 | server/stt.py, server/config.py (+ tests/test_stt.py) | Only if T8 shows failures caused by #38: `transcribe` passes an `initial_prompt` vocabulary hint (remind, reminder, notes, cancel; text in config); only the failing questions are re-run | pytest | #38 | [x] |
-| M7-T10b | FR-3 | client_pc/client.py, client_pc/config.py, eval/config.py (+ tests/test_client.py, tests/test_run_eval.py) | Do first. `QUERY_TIMEOUT_S` = 25 s for `/query`; new `POLL_TIMEOUT_S` = 20 s used by the reminder poll, audio fetch and ack; the eval sets its own request timeout of 30 s in `eval/config.py` (no longer taken from the client config, which is 25 s); tests check each timeout reaches its request | pytest | #25 (client part) | [x] |
-| M7-T10a | FR-5, FR-7 | server/llm.py, server/config.py (+ tests/test_llm.py) | After T10b; the spec decision is committed (ecb08f2). `LLM_FINAL_DEADLINE_S` = 18 and `LLM_FINAL_START_MAX_S` = 8 in config. The first search always runs; a later tool round runs only if elapsed + tool timeout (0 s local tools, 5 s `web_search`) + 10 <= 18, else its calls get an error result; when the deadline stops the model and elapsed <= 8 s, one last Gemini call with function calling mode NONE answers; otherwise the 500 `llm: deadline exceeded`; tests include list-then-cancel running both rounds and a refused second search | pytest | #25 | [x] |
-| M7-T11 | all quality targets | docs/plan.md | Full re-run on the final code; every target met; the final report in `eval/results/` is committed with `git add -f` (the folder is gitignored for exploratory runs); numbers recorded below | manual | #57 | [x] |
-| M7-T12 | — | README.md | What it does, the pipeline, setup, how to run server, client and eval, the final numbers; docs only, after T11 | manual | #58 | [x] |
-
-Notes: no new dependency. Pacing counts Gemini calls from the log line (tool calls + 1), 4 s each. The runner never deletes the DB file: the backup uses `sqlite3.Connection.backup` and the marker makes a crash recoverable. After T8, `eval/questions.json` changes only for an obvious error in a question, logged here with the reason. T9 and T10 are skipped if T8 does not show their failures. Reliability: the 30 clips in a row cover the 20-in-a-row target.
-
-### M7-T8: first measurement (2026-10-11, `eval/results/2026-10-11_1402.json`)
-
-| Target | Result | Met |
-| --- | --- | --- |
-| General >= 80% | 7/10 | no |
-| Notes >= 80% | 4/10 | no |
-| Reminders >= 80% | 10/10 | yes |
-| Transcription >= 90% | 22/30 (73%) | no |
-| Median total <= 15 s | 3.5 s (worst 9.1 s) | yes |
-| No 500 in the 30 | 2 errors (g05, g10) | no |
-| Secrets check | ok | yes |
-
-Targets not met. Cause per failure:
-
-| Id | Cause |
-| --- | --- |
-| g05 | STT ("Rings of Fire"), then two searches ran into the deadline (500) |
-| g09 | STT ("Israel" for "ISRO") |
-| g10 | Deadline: two searches, LLM stage over 15 s (500); heard "dollar 2 rupee" |
-| n03 | STT ("safe or not" for "save a note"), so no note was added |
-| n06-n10 | Knock-on of n03: 4 notes stored, 5 expected; answers were correct for 4 |
-| n09 | Also STT ("nodes" for "notes") |
-
-Other transcript misses that still passed: n01 ("by" for "buy"), n04 ("4 cell packed").
-n10 was also cut off ("What was my latest").
-
-T9 (#38, STT hint) and T10 (#25, deadline) are triggered. `eval/questions.json` is
-frozen from now on; it was not changed.
-
-Rule for T9: the `initial_prompt` hint may contain only the assistant's own command
-words (remind, reminder, notes, cancel and similar), never words taken from the eval
-questions (no "Wings of Fire", "ISRO", "rupee" and so on).
-
-T9 result (speech only, 30 clips, same matching as the runner): transcript mismatches 8
-without the hint, 4 with it. Left: g09 (Israel), g10 (rent), n01 (by), n02 (drivers need).
-They are not command words, so the hint cannot fix them; accepted for now.
-
-### M7-T11: final measurement (2026-10-11, `eval/results/2026-10-11_1555.json`)
-
-Run on the final code (T9 hint, T10a last call, T10b timeouts); the report files
-`eval/results/2026-10-11_1555.md` and `.json` are committed with `git add -f`.
-
-| Target | Result | Met |
-| --- | --- | --- |
-| General >= 80% | 8/10 | yes |
-| Notes >= 80% | 10/10 | yes |
-| Reminders >= 80% | 10/10 | yes |
-| Median total <= 15 s | 3.1 s (worst 6.7 s) | yes |
-| No 500 in the 30 | 0 errors | yes |
-| Secrets check | ok | yes |
-| Transcription >= 90% | 26/30 (87%) | no |
-
-Transcription missed the target by one clip and is accepted as a known gap. Failures:
-
-| Id | Cause |
-| --- | --- |
-| g09 | STT: "Israel" for "ISRO", so the answer was about Israel |
-| g10 | STT: "rent" for "rate"; then an honest "could not fetch" answer |
-
-For g10 the second search failed or was refused; the log cannot tell which.
-
-The other two transcript misses still passed: n01 ("by" for "buy"; its pass rule needs
-only "soldering" and "wire" in the note), n02 ("drivers need").
-
-Decision: `small.en` stays. `medium.en` with the same hint was tested (speech only, throwaway
-script over the 30 clips, 2026-10-11, not committed) and rejected: 27/30 transcripts, but +1.1 s per query (1.91 s against 0.79 s per clip) and
-about 2.6 GB of GPU memory in use, which blocks v3 (a local text model must fit 4 GB VRAM).
-Remaining misses (ISRO, rate/rent, buy/by) are noted on #38, which stays open (Refs, not
-Closes). Follow-up after v0.1.0: log whether the last call ran or a tool was refused.
-
-Manual checks: record the 30 clips in a quiet room and play a few back (T3); speak the 10 live questions with F9 and read the table (T7); after T11, check the targets in the report (done, see T11 above).
+Notes: FR-2, FR-4, FR-6 to FR-15 and FR-18 are unchanged from v1; the v1 regression run
+in M12 checks them. Issue #38 stays open for v6.
