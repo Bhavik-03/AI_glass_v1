@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import uvicorn
 from fastapi import FastAPI, File, Response, UploadFile
 from fastapi.responses import JSONResponse
+from PIL import Image
 
 from server import config, llm, logger, session, store, stt, tools, tts
 
@@ -76,13 +77,30 @@ def _audio_problem(data: bytes | None) -> str | None:
     return None
 
 
+def _image_problem(data: bytes) -> str | None:
+    """Return why the image can't be used, or None if it is a JPEG or PNG within the limit."""
+    if len(data) > config.IMAGE_MAX_BYTES:
+        return "image too large"
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            # load() decodes every pixel, so a truncated file fails here, not in Gemini.
+            img.load()
+            if img.format in ("JPEG", "PNG"):  # the formats the API contract allows
+                return None
+    except (OSError, SyntaxError, ValueError, Image.DecompressionBombError):
+        pass
+    return "image is not a readable image"
+
+
 def _error(status_code: int, message: str, record: dict) -> JSONResponse:
     record["error"] = message
     return JSONResponse(status_code=status_code, content={"error": message})
 
 
-def _answer(data: bytes | None, record: dict) -> Response:
+def _answer(data: bytes | None, image: bytes | None, record: dict) -> Response:
     if problem := _audio_problem(data):
+        return _error(400, problem, record)
+    if image is not None and (problem := _image_problem(image)):
         return _error(400, problem, record)
     timings = record["timings_ms"]
     try:
@@ -157,7 +175,10 @@ def reminder_audio(reminder_id: str) -> Response:
 
 # Plain def, not async: FastAPI runs it in a thread pool, so a slow query doesn't block other endpoints.
 @app.post("/query")
-def query(audio: Annotated[UploadFile | None, File()] = None) -> Response:
+def query(
+    audio: Annotated[UploadFile | None, File()] = None,
+    image: Annotated[UploadFile | None, File()] = None,
+) -> Response:
     record = {
         "question": None,
         "answer": None,
@@ -168,7 +189,11 @@ def query(audio: Annotated[UploadFile | None, File()] = None) -> Response:
         "session_continued": False,
     }
     try:
-        return _answer(audio.file.read() if audio else None, record)
+        return _answer(
+            audio.file.read() if audio else None,
+            image.file.read() if image else None,
+            record,
+        )
     finally:
         logger.log_query(record)
 

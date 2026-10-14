@@ -1025,3 +1025,143 @@ def test_fr13_audio_handler_is_plain_def():
     ]
     assert len(routes) == 1
     assert not inspect.iscoroutinefunction(routes[0].endpoint)
+
+
+def _image_bytes(fmt: str) -> bytes:
+    """Tiny valid image in the given PIL format, built in code."""
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (10, 10), (200, 30, 30)).save(buf, format=fmt)
+    return buf.getvalue()
+
+
+def _gif_bytes() -> bytes:
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("P", (10, 10)).save(buf, format="GIF")
+    return buf.getvalue()
+
+
+def _post_with_image(silent_wav, data: bytes, name="s.jpg", mime="image/jpeg"):
+    return client.post(
+        "/query",
+        files={
+            "audio": ("q.wav", silent_wav, "audio/wav"),
+            "image": (name, data, mime),
+        },
+    )
+
+
+def _assert_image_rejected(response, error, calls):
+    assert response.status_code == 400
+    assert response.json() == {"error": error}
+    assert calls["order"] == []
+    assert calls["stt"] == [] and calls["llm"] == [] and calls["tts"] == []
+
+
+def test_fr20_valid_jpeg_returns_200_and_runs_stages(fake_stages, silent_wav):
+    """FR-20: a valid JPEG in the optional `image` field -> 200 audio, all stages run."""
+    response = _post_with_image(silent_wav, _image_bytes("JPEG"))
+    assert response.status_code == 200
+    assert response.content == FAKE_TTS_WAV
+    assert fake_stages["order"] == ["stt", "llm", "tts"]
+
+
+def test_fr20_valid_png_returns_200_and_runs_stages(fake_stages, silent_wav):
+    """FR-20: a valid PNG in the `image` field -> 200 audio, all stages run."""
+    response = _post_with_image(silent_wav, _image_bytes("PNG"), "s.png", "image/png")
+    assert response.status_code == 200
+    assert response.content == FAKE_TTS_WAV
+    assert fake_stages["order"] == ["stt", "llm", "tts"]
+
+
+def test_fr20_no_image_works_as_before(fake_stages, silent_wav):
+    """FR-20: without an `image` field /query returns 200 as before."""
+    response = _post_query(silent_wav)
+    assert response.status_code == 200
+    assert response.content == FAKE_TTS_WAV
+    assert fake_stages["order"] == ["stt", "llm", "tts"]
+
+
+def test_fr20_default_image_limit_is_two_million_bytes():
+    """FR-20: config.IMAGE_MAX_BYTES is 2_000_000."""
+    assert config.IMAGE_MAX_BYTES == 2_000_000
+
+
+def test_fr20_image_over_limit_returns_400_too_large(
+    fake_stages, silent_wav, monkeypatch
+):
+    """FR-20: image over config.IMAGE_MAX_BYTES -> 400 {"error": "image too large"},
+    no stage runs."""
+    data = _image_bytes("JPEG")
+    monkeypatch.setattr(config, "IMAGE_MAX_BYTES", 100)
+    assert len(data) > 100
+    response = _post_with_image(silent_wav, data)
+    _assert_image_rejected(response, "image too large", fake_stages)
+
+
+def test_fr20_image_one_byte_over_limit_returns_400(
+    fake_stages, silent_wav, monkeypatch
+):
+    """FR-20: an image of IMAGE_MAX_BYTES + 1 bytes -> 400 "image too large"."""
+    data = _image_bytes("JPEG")
+    monkeypatch.setattr(config, "IMAGE_MAX_BYTES", len(data) - 1)
+    response = _post_with_image(silent_wav, data)
+    _assert_image_rejected(response, "image too large", fake_stages)
+
+
+def test_fr20_image_exactly_at_limit_is_accepted(fake_stages, silent_wav, monkeypatch):
+    """FR-20: an image of exactly IMAGE_MAX_BYTES bytes is not too large -> 200."""
+    data = _image_bytes("JPEG")
+    monkeypatch.setattr(config, "IMAGE_MAX_BYTES", len(data))
+    response = _post_with_image(silent_wav, data)
+    assert response.status_code == 200
+    assert fake_stages["order"] == ["stt", "llm", "tts"]
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        b"not an image",
+        _gif_bytes(),
+        b"",
+        _image_bytes("JPEG")[: len(_image_bytes("JPEG")) // 2],
+    ],
+    ids=["text", "gif", "empty", "truncated-jpeg"],
+)
+def test_fr20_unreadable_image_returns_400(fake_stages, silent_wav, data):
+    """FR-20: non-image bytes, a GIF, an empty field or a truncated JPEG ->
+    400 {"error": "image is not a readable image"}, no stage runs."""
+    response = _post_with_image(silent_wav, data)
+    _assert_image_rejected(response, "image is not a readable image", fake_stages)
+
+
+def test_fr20_bad_image_with_valid_audio_skips_stt(fake_stages, silent_wav):
+    """FR-20: image checks run before any stage: bad image + valid audio -> no
+    stt call."""
+    response = _post_with_image(silent_wav, b"not an image")
+    assert response.status_code == 400
+    assert response.json() == {"error": "image is not a readable image"}
+    assert fake_stages["stt"] == []
+
+
+def test_fr17_image_unreadable_400_writes_one_line(fake_stages, silent_wav, log_path):
+    """FR-17/FR-20: a rejected image writes exactly one log line with that error."""
+    _post_with_image(silent_wav, b"not an image")
+    lines = _log_lines(log_path)
+    assert len(lines) == 1
+    assert lines[0]["error"] == "image is not a readable image"
+    assert lines[0]["answer"] is None
+
+
+def test_fr17_image_too_large_400_writes_one_line(
+    fake_stages, silent_wav, log_path, monkeypatch
+):
+    """FR-17/FR-20: an oversized image writes exactly one log line with the error."""
+    monkeypatch.setattr(config, "IMAGE_MAX_BYTES", 100)
+    _post_with_image(silent_wav, _image_bytes("JPEG"))
+    lines = _log_lines(log_path)
+    assert len(lines) == 1
+    assert lines[0]["error"] == "image too large"
