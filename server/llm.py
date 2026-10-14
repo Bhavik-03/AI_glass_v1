@@ -98,13 +98,16 @@ def _final_answer(
 
 
 def ask(
-    question: str, now: datetime, turns: Sequence[dict] = ()
+    question: str,
+    now: datetime,
+    turns: Sequence[dict] = (),
+    image: tuple[bytes, str] | None = None,
 ) -> tuple[str, bool, list[dict]]:
-    """Answer one question after the session's earlier turns, running Gemini's tool calls
-    (FR-5, FR-7, FR-21)."""
+    """Answer one question after the session's earlier turns, with an optional image as
+    (bytes, MIME type), running Gemini's tool calls (FR-5, FR-7, FR-20, FR-21)."""
     tool_calls: list[dict] = []
     try:
-        answer, searched = _ask(question, now, turns, tool_calls)
+        answer, searched = _ask(question, now, turns, image, tool_calls)
     except Exception as e:
         # The caller logs the calls made before the failure (FR-17).
         e.tool_calls = tool_calls
@@ -125,8 +128,21 @@ def _history(turns: Sequence[dict]) -> list[types.Content]:
     return contents
 
 
+def _question(question: str, image: tuple[bytes, str] | None) -> types.Content:
+    """The question as user content, with the image part first when there is one (FR-20)."""
+    parts = [types.Part(text=question)]
+    if image is not None:
+        data, mime_type = image
+        parts.insert(0, types.Part.from_bytes(data=data, mime_type=mime_type))
+    return types.Content(role="user", parts=parts)
+
+
 def _ask(
-    question: str, now: datetime, turns: Sequence[dict], tool_calls: list[dict]
+    question: str,
+    now: datetime,
+    turns: Sequence[dict],
+    image: tuple[bytes, str] | None,
+    tool_calls: list[dict],
 ) -> tuple[str, bool]:
     start = _clock()
     request = types.GenerateContentConfig(
@@ -137,9 +153,7 @@ def _ask(
         ),
         thinking_config=types.ThinkingConfig(thinking_level=config.LLM_THINKING_LEVEL),
     )
-    contents = _history(turns) + [
-        types.Content(role="user", parts=[types.Part(text=question)])
-    ]
+    contents = _history(turns) + [_question(question, image)]
     searched = False
     refused = False
     for round_ in range(config.MAX_TOOL_ROUNDS + 1):

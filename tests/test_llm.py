@@ -1050,6 +1050,99 @@ def test_fr21_turns_list_not_mutated(monkeypatch) -> None:
     assert turns == TURNS
 
 
+JPEG_BYTES = b"\xff\xd8\xff\xe0fake-jpeg-bytes"
+PNG_BYTES = b"\x89PNG\r\n\x1a\nfake-png-bytes"
+
+
+def has_inline_data(content) -> bool:
+    return any(p.inline_data is not None for p in content.parts)
+
+
+def test_fr20_image_part_next_to_question(monkeypatch) -> None:
+    """With an image the question content is user role with an image part, then the text part."""
+    fake = install_fake(monkeypatch, [text_response("answer")])
+    llm.ask("what is this?", fixed_now(), image=(JPEG_BYTES, "image/jpeg"))
+    last = fake.models.calls[0]["contents"][-1]
+    assert last.role == "user"
+    assert len(last.parts) == 2
+    assert last.parts[0].inline_data.data == JPEG_BYTES
+    assert last.parts[0].inline_data.mime_type == "image/jpeg"
+    assert last.parts[1].text == "what is this?"
+
+
+def test_fr20_image_as_fourth_positional_arg(monkeypatch) -> None:
+    """The image may be passed as the 4th positional argument."""
+    fake = install_fake(monkeypatch, [text_response("answer")])
+    llm.ask("what is this?", fixed_now(), (), (JPEG_BYTES, "image/jpeg"))
+    last = fake.models.calls[0]["contents"][-1]
+    assert last.parts[0].inline_data.data == JPEG_BYTES
+    assert last.parts[1].text == "what is this?"
+
+
+def test_fr20_png_mime_type_passes_through(monkeypatch) -> None:
+    """A PNG image is sent with its image/png MIME type and unchanged bytes."""
+    fake = install_fake(monkeypatch, [text_response("answer")])
+    llm.ask("read this", fixed_now(), image=(PNG_BYTES, "image/png"))
+    part = fake.models.calls[0]["contents"][-1].parts[0]
+    assert part.inline_data.data == PNG_BYTES
+    assert part.inline_data.mime_type == "image/png"
+
+
+def test_fr20_image_only_in_question_content_with_turns(monkeypatch) -> None:
+    """With turns and an image, the turns come first and are text-only; the image is only
+    in the question content."""
+    fake = install_fake(monkeypatch, [text_response("answer")])
+    llm.ask("now?", fixed_now(), TURNS, image=(JPEG_BYTES, "image/jpeg"))
+    contents = fake.models.calls[0]["contents"]
+    assert len(contents) == 5
+    assert role_text(contents[:4]) == [
+        ("user", "q1"),
+        ("model", "a1"),
+        ("user", "q2"),
+        ("model", "a2"),
+    ]
+    assert all(len(c.parts) == 1 and not has_inline_data(c) for c in contents[:4])
+    assert contents[4].role == "user"
+    assert contents[4].parts[0].inline_data.data == JPEG_BYTES
+    assert contents[4].parts[1].text == "now?"
+
+
+@pytest.mark.parametrize("omit", [True, False], ids=["omitted", "none"])
+def test_fr20_no_image_request_unchanged(monkeypatch, omit) -> None:
+    """Without an image (omitted or None) the question content is one text part and no
+    request content has inline_data."""
+    fake = install_fake(monkeypatch, [text_response("answer")])
+    if omit:
+        llm.ask("hi", fixed_now(), TURNS)
+    else:
+        llm.ask("hi", fixed_now(), TURNS, image=None)
+    contents = fake.models.calls[0]["contents"]
+    assert not any(has_inline_data(c) for c in contents)
+    assert len(contents[-1].parts) == 1
+    assert contents[-1].parts[0].text == "hi"
+    assert role_text(contents)[-1] == ("user", "hi")
+
+
+def test_fr20_image_stays_in_question_content_in_tool_round(monkeypatch) -> None:
+    """In a tool round the image is sent once, in the question content of every request,
+    and is not duplicated in the function call or response contents."""
+    first = call_response("call-1")
+    fake = install_fake(monkeypatch, [first, text_response("answer")])
+    install_run(monkeypatch, SEARCH_RESULT)
+    llm.ask("what is this?", fixed_now(), image=(JPEG_BYTES, "image/jpeg"))
+    assert len(fake.models.calls) == 2
+    for call in fake.models.calls:
+        contents = call["contents"]
+        assert contents[0].role == "user"
+        assert contents[0].parts[0].inline_data.data == JPEG_BYTES
+        assert contents[0].parts[1].text == "what is this?"
+        assert sum(has_inline_data(c) for c in contents) == 1
+    second = fake.models.calls[1]["contents"]
+    assert len(second) == 3
+    assert second[1] == first.candidates[0].content
+    assert second[2].parts[0].function_response.id == "call-1"
+
+
 def test_fr5_api_failure_propagates(monkeypatch) -> None:
     """An exception from generate_content propagates out of ask."""
     install_fake(monkeypatch, [ConnectionError("boom")])
