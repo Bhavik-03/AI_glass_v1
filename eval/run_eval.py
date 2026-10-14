@@ -264,6 +264,8 @@ def run_one(
     offset = log_offset()
     start = clock()
     try:
+        # A fresh session per clip, so no row answers from an earlier row's turns (FR-22).
+        client.post("/session/reset").raise_for_status()
         response = client.post("/query", files={"audio": ("q.wav", wav, "audio/wav")})
     except httpx.HTTPError as e:
         result["error"] = str(e) or type(e).__name__

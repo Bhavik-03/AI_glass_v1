@@ -246,20 +246,40 @@ def test_fr17_log_absent_gives_zero_and_empty(env):
 
 
 class FakeServer:
-    """MockTransport handler for /query that also writes the server's log line."""
+    """MockTransport handler for /query (and /session/reset); /query also writes the log line."""
 
-    def __init__(self, tool_calls=None, status=None, fail=None):
-        self.requests: list[httpx.Request] = []
+    def __init__(
+        self,
+        tool_calls=None,
+        status=None,
+        fail=None,
+        reset_status=None,
+        reset_fail=None,
+    ):
+        self.requests: list[httpx.Request] = []  # /query requests only
+        self.resets: list[httpx.Request] = []  # /session/reset requests only
+        self.paths: list[str] = []  # every request path, in order
         self.in_flight = 0
         self.max_in_flight = 0
         self.tool_calls = tool_calls or {}
         self.status = status or {}  # question index (1-based) -> status code
         self.fail = fail or set()  # indices that raise a connection error
+        self.reset_status = reset_status or {}  # reset index (1-based) -> status code
+        self.reset_fail = reset_fail or set()  # reset indices that raise
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.in_flight += 1
         self.max_in_flight = max(self.max_in_flight, self.in_flight)
         try:
+            self.paths.append(request.url.path)
+            if request.url.path == "/session/reset":
+                self.resets.append(request)
+                r = len(self.resets)
+                if r in self.reset_fail:
+                    raise httpx.ConnectError("reset boom")
+                return httpx.Response(
+                    self.reset_status.get(r, 200), json={"status": "ok"}
+                )
             self.requests.append(request)
             n = len(self.requests)
             if n in self.fail:
@@ -372,6 +392,52 @@ def test_fr16_replay_in_order_one_at_a_time_with_pacing(env):
     calls = [1, 3, 1]
     expected = [per * c - r["wall_s"] for c, r in zip(calls, results)]
     assert slept == [pytest.approx(e) for e in expected]
+
+
+def test_fr22_replay_resets_session_before_each_question(env):
+    """The eval calls /session/reset before each question: reset, query, reset, query, ..."""
+    qs = questions(3)
+    write_clips(qs)
+    server = FakeServer()
+    with make_client(server) as client:
+        run_eval.replay(qs, client, sleep=lambda s: None, clock=Clock())
+    assert server.paths == ["/session/reset", "/query"] * 3
+
+
+def test_fr22_run_one_posts_reset_before_query(env):
+    """run_one POSTs /session/reset first, then the clip to /query."""
+    write_clips(questions(1))
+    server = FakeServer()
+    with make_client(server) as client:
+        run_eval.run_one(client, {"id": "q01", "group": "general"}, clock=Clock())
+    assert server.paths == ["/session/reset", "/query"]
+    assert server.resets[0].method == "POST"
+    assert len(server.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "server",
+    [FakeServer(reset_status={1: 500}), FakeServer(reset_fail={1})],
+    ids=["non200", "connection-error"],
+)
+def test_fr22_failed_reset_records_error_and_skips_query(env, server):
+    """A failed reset (non-200 or connection error) records an error, sends no /query, and the next question runs."""
+    qs = questions(3)
+    write_clips(qs)
+    with make_client(server) as client:
+        results = run_eval.replay(qs, client, sleep=lambda s: None, clock=Clock())
+    assert [r["id"] for r in results] == ["q01", "q02", "q03"]
+    assert results[0]["status"] is None
+    assert results[0]["error"]
+    assert [r["status"] for r in results[1:]] == [200, 200]
+    assert server.paths == [
+        "/session/reset",
+        "/session/reset",
+        "/query",
+        "/session/reset",
+        "/query",
+    ]
+    assert len(server.requests) == 2
 
 
 # ---------- main ----------
@@ -963,7 +1029,8 @@ class WritingServer(FakeServer):
     """FakeServer that also adds a note while handling the request."""
 
     def __call__(self, request):
-        store.add_note("added during post", CREATED)
+        if request.url.path == "/query":
+            store.add_note("added during post", CREATED)
         return super().__call__(request)
 
 
