@@ -23,7 +23,7 @@ Goal: Right Alt voice, Right Ctrl voice + screenshot; image to Gemini and in the
 
 | Task | FR | Files | Done when | Test | Issue | Done |
 | --- | --- | --- | --- | --- | --- | --- |
-| M9-T1 | FR-19, FR-1 | docs/plan.md (spike scripts not committed) | Spike results recorded here: ImageGrab capture time; what it captures with two monitors (main screen only by default); size and look of a 1280 px JPEG at a few qualities and the chosen `SCREENSHOT_JPEG_QUALITY`; whether pynput reports Right Alt as `alt_r` or `alt_gr`, and Right Ctrl as `ctrl_r`. Pillow is installed in `.venv` for the spike only | manual | #74 | [ ] |
+| M9-T1 | FR-19, FR-1 | docs/plan.md (spike scripts not committed) | Spike results recorded here: ImageGrab capture time; what it captures with two monitors (main screen only by default); size and look of a 1280 px JPEG at a few qualities and the chosen `SCREENSHOT_JPEG_QUALITY`; whether pynput reports Right Alt as `alt_r` or `alt_gr`, and Right Ctrl as `ctrl_r`. Pillow is installed in `.venv` for the spike only | manual | #74 | [x] |
 | M9-T2 | FR-1 | client_pc/config.py, client_pc/client.py (+ tests/test_client.py) | `VOICE_KEY` (value from M9-T1) replaces `PTT_KEY = "f9"`; Right Alt starts and stops recording as F9 did; F9 no longer does | pytest | #75 | [ ] |
 | M9-T3 | FR-20, FR-16 | requirements.txt, server/config.py, server/main.py (+ tests/test_server.py) | `/query` takes an optional `image`; over `IMAGE_MAX_BYTES` gives 400 `{"error": "image too large"}`; not JPEG or PNG gives 400 `{"error": "image is not a readable image"}`; both before any stage; without an image, `/query` works as before. Pillow goes into requirements.txt after approval | pytest | #76 | [ ] |
 | M9-T4 | FR-20 | server/llm.py, .claude/skills/server-conventions/SKILL.md (+ tests/test_llm.py) | `ask(question, now, turns=(), image=None)`, image as bytes plus MIME type; with an image the Gemini request has an image part next to the question (fake client); without one the request is unchanged | pytest | #77 | [ ] |
@@ -31,6 +31,17 @@ Goal: Right Alt voice, Right Ctrl voice + screenshot; image to Gemini and in the
 | M9-T6 | FR-20, FR-21, FR-17 | server/main.py (+ tests/test_server.py) | `/query` sends the new image to `llm.ask`, else the saved one; the image is saved only after a 200; the log has `image_sent` (true only for a new image), never the image | pytest | #79 | [ ] |
 | M9-T7 | FR-3 | client_pc/client.py (+ tests/test_client.py) | `send_query(wav, image=None)` adds an `image` field (JPEG) only when given; the 25 s timeout and error sound behave as before | pytest | #80 | [ ] |
 | M9-T8 | FR-19 | client_pc/config.py, client_pc/client.py (+ tests/test_client.py) | Right Ctrl (`LOOK_KEY`) records like Right Alt and takes one screenshot at press, not release; shrunk to `SCREENSHOT_MAX_SIDE_PX` (1280), JPEG in memory; Right Alt sends no image; releasing the other key does not stop the recording; no image file is written (fake screen grab) | pytest | #81 | [ ] |
+
+M9-T1 spike results (Oct 14, 2026; Pillow 12.3.0, pynput 1.8.2):
+- `ImageGrab.grab()` of the 1920x1080 screen: median 29 ms, max 49 ms (10 grabs).
+- Two monitors: only one was connected; `all_screens=True` gave the same 1920x1080. By
+  default `grab()` takes the primary screen only. Not measured with a second monitor.
+- `thumbnail((1280, 1280))` to 1280x720: 39 ms. JPEG of a code editor screen: quality 50 =
+  59 KB, 60 = 66 KB, 70 = 76 KB, 80 = 92 KB, 90 = 128 KB; encode about 5 ms. Small text is
+  readable at 60 and 80; 60 is slightly softer. Chosen: `SCREENSHOT_JPEG_QUALITY = 70`.
+- Keys: `Key.alt_r`, `Key.alt_gr` and `Key.ctrl_r` all exist in pynput, but which one Right
+  Alt reports on this laptop was not checked (needs a key press). M9-T2 uses `alt_r` (design)
+  and its manual check confirms it; if Right Alt reports `alt_gr`, M9-T2 sets that instead.
 
 Manual checks: Right Alt speech clear on playback in 20 of 20 tests (FR-1); Right Ctrl on a
 graph, ask "what is this graph?" and hear an answer about it (FR-19); a follow-up within 120 s
