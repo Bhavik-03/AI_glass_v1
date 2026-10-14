@@ -14,7 +14,9 @@ PLAYBACK_TAIL_S = 0.2
 START_TONE = ((660, 0.08), (880, 0.08))
 THINKING_TONE = ((440, 0.15),)
 ERROR_TONE = ((300, 0.2), (200, 0.3))
-PTT_KEY = "f9"  # name of a pynput.keyboard.Key member
+# Name of a pynput.keyboard.Key member. Right Alt reports alt_gr on this laptop (after an
+# extra ctrl_l press, which is ignored).
+VOICE_KEY = "alt_gr"
 MIN_RECORDING_S = 0.3
 ERROR_MAX_CHARS = 200
 POLL_INTERVAL_S = 10

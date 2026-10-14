@@ -756,7 +756,7 @@ def test_fr3_error_classes_inherit_from_query_error():
 
 # ---- FR-1/FR-2/FR-3: Client state machine (M6-T5). All collaborators are fakes. ----
 
-PTT = keyboard.Key.f9
+PTT = keyboard.Key.alt_gr
 OTHER = keyboard.Key.space
 REC_WAV = b"RECORDED-WAV"
 REPLY_WAV = b"ANSWER-WAV"
@@ -953,14 +953,75 @@ def test_fr1_non_ptt_keys_are_ignored(rig):
     assert rig.count("stop_recording") == 0
 
 
-def test_fr1_ptt_key_comes_from_config(monkeypatch, rig):
-    """The PTT key is read from config.PTT_KEY at call time."""
-    assert config.PTT_KEY == "f9"
-    monkeypatch.setattr(config, "PTT_KEY", "f8")
+def test_fr1_voice_key_comes_from_config(monkeypatch, rig):
+    """The voice key is read from config.VOICE_KEY at call time."""
+    monkeypatch.setattr(config, "VOICE_KEY", "f8")
     rig.press(PTT)
     assert rig.log == []
     rig.press(keyboard.Key.f8)
     assert rig.client.state == "recording"
+
+
+def test_fr1_voice_key_is_alt_gr_and_ptt_key_is_gone():
+    """The voice key is Right Alt (alt_gr) set in client_pc/config.py; PTT_KEY no longer exists."""
+    assert config.VOICE_KEY == "alt_gr"
+    assert not hasattr(config, "PTT_KEY")
+
+
+def test_fr1_alt_gr_press_starts_and_release_stops_and_sends(rig):
+    """Pressing Right Alt starts recording; releasing it stops and sends the query."""
+    rig.press(keyboard.Key.alt_gr)
+    assert rig.client.state == "recording"
+    assert rig.count("start_recording") == 1
+    rig.clock.t += 1.0
+    rig.release(keyboard.Key.alt_gr)
+    assert rig.count("stop_recording") == 1
+    assert ("send", REC_WAV) in rig.log
+    assert rig.client.state == "idle"
+
+
+@pytest.mark.parametrize("ctrl_released_first", [False, True])
+def test_fr1_real_right_alt_sequence_records_once_and_sends_once(
+    rig, ctrl_released_first
+):
+    """Right Alt sends ctrl_l then alt_gr; the extra ctrl_l starts nothing: one recording, one send."""
+    ctrl, alt = keyboard.Key.ctrl_l, keyboard.Key.alt_gr
+    rig.press(ctrl)
+    assert rig.log == []
+    assert rig.client.state == "idle"
+    rig.press(alt)
+    assert rig.client.state == "recording"
+    rig.clock.t += 1.0
+    if ctrl_released_first:
+        rig.release(ctrl)
+        assert rig.client.state == "recording"
+        rig.release(alt)
+    else:
+        rig.release(alt)
+        rig.release(ctrl)
+    assert rig.count("start_recording") == 1
+    assert rig.count("stop_recording") == 1
+    assert rig.count(("send", REC_WAV)) == 1
+    assert rig.client.state == "idle"
+
+
+def test_fr1_ctrl_l_alone_starts_nothing(rig):
+    """Pressing or releasing ctrl_l alone starts no recording and the state stays idle."""
+    rig.press(keyboard.Key.ctrl_l)
+    assert rig.client.state == "idle"
+    rig.release(keyboard.Key.ctrl_l)
+    assert rig.client.state == "idle"
+    assert rig.log == []
+    assert rig.timers == []
+
+
+def test_fr1_f9_no_longer_starts_recording(rig):
+    """F9 no longer starts recording."""
+    rig.press(keyboard.Key.f9)
+    rig.release(keyboard.Key.f9)
+    assert rig.log == []
+    assert rig.client.state == "idle"
+    assert rig.timers == []
 
 
 def test_fr1_press_starts_recording_and_plays_start_sound_once(rig):

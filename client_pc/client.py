@@ -422,7 +422,7 @@ class Client:
 
     @staticmethod
     def _is_ptt(key) -> bool:
-        return key == getattr(keyboard.Key, config.PTT_KEY)
+        return key == getattr(keyboard.Key, config.VOICE_KEY)
 
 
 def run(
