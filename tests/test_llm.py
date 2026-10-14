@@ -69,12 +69,55 @@ def test_fr6_instruction_reads_home_city_per_call(monkeypatch) -> None:
 
 
 def test_fr6_instruction_has_design_rules() -> None:
-    """The instruction states the length, web_search, ISO 8601 and repeat-back rules."""
+    """The instruction states the web_search, ISO 8601 and repeat-back rules."""
     text = llm.system_instruction(fixed_now())
-    assert "40 words" in text
     assert "web_search" in text
     assert "ISO 8601" in text
     assert "repeat" in text.lower()
+
+
+def test_fr5_instruction_limits_3_sentences_60_words() -> None:
+    """The instruction says at most 3 sentences and 60 words, not the old 2 sentences / 40 words."""
+    text = llm.system_instruction(fixed_now())
+    assert "3 sentences" in text
+    assert "60 words" in text
+    assert "2 short sentences" not in text
+    assert "40 words" not in text
+
+
+def test_fr5_instruction_list_rule_count_and_first_5() -> None:
+    """A list answer says the total count and the first 5 items (newest notes, soonest reminders)."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "total count" in text or "total number" in text
+    assert "first 5" in text
+    assert "newest" in text
+    assert "soonest" in text
+
+
+def test_fr5_instruction_tell_me_more_gives_next_5() -> None:
+    """'Tell me more' gives the next 5 (or one more short layer) within the same limit."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "tell me more" in text
+    assert "next 5" in text
+    assert "same limit" in text
+
+
+def test_fr5_instruction_numbers_follow_config(monkeypatch) -> None:
+    """The limits come from config.ANSWER_MAX_SENTENCES, ANSWER_MAX_WORDS and LIST_MAX_ITEMS."""
+    assert config.ANSWER_MAX_SENTENCES == 3
+    assert config.ANSWER_MAX_WORDS == 60
+    assert config.LIST_MAX_ITEMS == 5
+    monkeypatch.setattr(config, "ANSWER_MAX_SENTENCES", 2)
+    monkeypatch.setattr(config, "ANSWER_MAX_WORDS", 45)
+    monkeypatch.setattr(config, "LIST_MAX_ITEMS", 4)
+    text = llm.system_instruction(fixed_now())
+    assert "2 sentences" in text
+    assert "45 words" in text
+    assert "first 4" in text
+    assert "next 4" in text
+    assert "3 sentences" not in text
+    assert "60 words" not in text
+    assert "first 5" not in text
 
 
 def test_fr6_instruction_has_privacy_rule() -> None:
