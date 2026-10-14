@@ -163,7 +163,7 @@ def _tool_failures(rule: dict, log: dict) -> list[str]:
         made = [c for c in calls if c["name"] == tool]
         if not made:
             failures.append(f"tool {tool} not called")
-        elif not any(c["ok"] for c in made):
+        elif not any(c["status"] == "ok" for c in made):
             failures.append(f"tool {tool} returned an error")
     if rule.get("searched") and not log["searched"]:
         failures.append("searched was false")
@@ -264,6 +264,8 @@ def run_one(
     offset = log_offset()
     start = clock()
     try:
+        # A fresh session per clip, so no row answers from an earlier row's turns (FR-22).
+        client.post("/session/reset").raise_for_status()
         response = client.post("/query", files={"audio": ("q.wav", wav, "audio/wav")})
     except httpx.HTTPError as e:
         result["error"] = str(e) or type(e).__name__

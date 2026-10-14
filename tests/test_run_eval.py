@@ -246,20 +246,40 @@ def test_fr17_log_absent_gives_zero_and_empty(env):
 
 
 class FakeServer:
-    """MockTransport handler for /query that also writes the server's log line."""
+    """MockTransport handler for /query (and /session/reset); /query also writes the log line."""
 
-    def __init__(self, tool_calls=None, status=None, fail=None):
-        self.requests: list[httpx.Request] = []
+    def __init__(
+        self,
+        tool_calls=None,
+        status=None,
+        fail=None,
+        reset_status=None,
+        reset_fail=None,
+    ):
+        self.requests: list[httpx.Request] = []  # /query requests only
+        self.resets: list[httpx.Request] = []  # /session/reset requests only
+        self.paths: list[str] = []  # every request path, in order
         self.in_flight = 0
         self.max_in_flight = 0
         self.tool_calls = tool_calls or {}
         self.status = status or {}  # question index (1-based) -> status code
         self.fail = fail or set()  # indices that raise a connection error
+        self.reset_status = reset_status or {}  # reset index (1-based) -> status code
+        self.reset_fail = reset_fail or set()  # reset indices that raise
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.in_flight += 1
         self.max_in_flight = max(self.max_in_flight, self.in_flight)
         try:
+            self.paths.append(request.url.path)
+            if request.url.path == "/session/reset":
+                self.resets.append(request)
+                r = len(self.resets)
+                if r in self.reset_fail:
+                    raise httpx.ConnectError("reset boom")
+                return httpx.Response(
+                    self.reset_status.get(r, 200), json={"status": "ok"}
+                )
             self.requests.append(request)
             n = len(self.requests)
             if n in self.fail:
@@ -301,7 +321,7 @@ def test_fr17_run_one_posts_audio_field_and_returns_log_line(env):
     qs = questions(1)
     write_clips(qs)
     server = FakeServer(
-        tool_calls={1: [{"name": "web_search", "args": {}, "ok": True}]}
+        tool_calls={1: [{"name": "web_search", "args": {}, "status": "ok"}]}
     )
     with make_client(server) as client:
         result = run_eval.run_one(
@@ -372,6 +392,52 @@ def test_fr16_replay_in_order_one_at_a_time_with_pacing(env):
     calls = [1, 3, 1]
     expected = [per * c - r["wall_s"] for c, r in zip(calls, results)]
     assert slept == [pytest.approx(e) for e in expected]
+
+
+def test_fr22_replay_resets_session_before_each_question(env):
+    """The eval calls /session/reset before each question: reset, query, reset, query, ..."""
+    qs = questions(3)
+    write_clips(qs)
+    server = FakeServer()
+    with make_client(server) as client:
+        run_eval.replay(qs, client, sleep=lambda s: None, clock=Clock())
+    assert server.paths == ["/session/reset", "/query"] * 3
+
+
+def test_fr22_run_one_posts_reset_before_query(env):
+    """run_one POSTs /session/reset first, then the clip to /query."""
+    write_clips(questions(1))
+    server = FakeServer()
+    with make_client(server) as client:
+        run_eval.run_one(client, {"id": "q01", "group": "general"}, clock=Clock())
+    assert server.paths == ["/session/reset", "/query"]
+    assert server.resets[0].method == "POST"
+    assert len(server.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "server",
+    [FakeServer(reset_status={1: 500}), FakeServer(reset_fail={1})],
+    ids=["non200", "connection-error"],
+)
+def test_fr22_failed_reset_records_error_and_skips_query(env, server):
+    """A failed reset (non-200 or connection error) records an error, sends no /query, and the next question runs."""
+    qs = questions(3)
+    write_clips(qs)
+    with make_client(server) as client:
+        results = run_eval.replay(qs, client, sleep=lambda s: None, clock=Clock())
+    assert [r["id"] for r in results] == ["q01", "q02", "q03"]
+    assert results[0]["status"] is None
+    assert results[0]["error"]
+    assert [r["status"] for r in results[1:]] == [200, 200]
+    assert server.paths == [
+        "/session/reset",
+        "/session/reset",
+        "/query",
+        "/session/reset",
+        "/query",
+    ]
+    assert len(server.requests) == 2
 
 
 # ---------- main ----------
@@ -556,7 +622,7 @@ def make_result(
             "question": "q",
             "answer": answer,
             "searched": searched,
-            "tool_calls": [{"name": t, "args": {}, "ok": True} for t in tools],
+            "tool_calls": [{"name": t, "args": {}, "status": "ok"} for t in tools],
             "error": None,
             "timings_ms": {"stt": 1, "llm": 2, "tts": 3},
         }
@@ -623,7 +689,7 @@ def test_fr5_grade_no_log_line_fails_even_without_pass_rule():
 
 
 def test_fr5_grade_tools_all_required_present_passes():
-    """Every required tool in tool_calls with ok true passes; extra tools are fine."""
+    """Every required tool in tool_calls with status ok passes; extra tools are fine."""
     ok, _ = run_grade({"tools": ["add_note"]}, tools=["list_notes", "add_note"])
     assert ok is True
 
@@ -640,17 +706,46 @@ def test_fr5_grade_tool_missing_fails_naming_tool():
     assert "tool add_note not called" in reason
 
 
-def test_fr5_grade_tool_with_ok_false_fails():
-    """A required tool whose logged call has ok false does not count."""
-    log = {
+def tool_log(*statuses, name="add_note"):
+    return {
         "answer": "done",
         "searched": False,
-        "tool_calls": [{"name": "add_note", "args": {}, "ok": False}],
+        "tool_calls": [{"name": name, "args": {}, "status": s} for s in statuses],
         "error": None,
     }
-    ok, reason = run_grade({"tools": ["add_note"]}, log=log)
+
+
+def test_fr5_grade_tool_with_failed_status_fails():
+    """A required tool whose logged call has status failed does not count."""
+    ok, reason = run_grade({"tools": ["add_note"]}, log=tool_log("failed"))
     assert ok is False
     assert "add_note" in reason
+
+
+def test_fr17_grade_tool_status_ok_counts_as_made():
+    """A required tool counts as made when its logged status is ok."""
+    ok, _ = run_grade({"tools": ["add_note"]}, log=tool_log("ok"))
+    assert ok is True
+
+
+def test_fr17_grade_tool_only_failed_fails():
+    """A required tool with only failed calls does not count as made."""
+    ok, reason = run_grade({"tools": ["add_note"]}, log=tool_log("failed", "failed"))
+    assert ok is False
+    assert "add_note" in reason
+
+
+def test_fr17_grade_tool_only_refused_fails():
+    """A required tool with only refused calls does not count as made."""
+    ok, reason = run_grade({"tools": ["add_note"]}, log=tool_log("refused"))
+    assert ok is False
+    assert "add_note" in reason
+
+
+def test_fr17_grade_tool_refused_then_ok_passes():
+    """A refused call followed by an ok call of the same tool counts as made."""
+    ok, _ = run_grade({"tools": ["add_note"]}, log=tool_log("refused", "ok"))
+    assert ok is True
 
 
 def test_fr8_grade_searched_true_passes_and_false_fails():
@@ -934,7 +1029,8 @@ class WritingServer(FakeServer):
     """FakeServer that also adds a note while handling the request."""
 
     def __call__(self, request):
-        store.add_note("added during post", CREATED)
+        if request.url.path == "/query":
+            store.add_note("added during post", CREATED)
         return super().__call__(request)
 
 
@@ -947,7 +1043,9 @@ def fixed_now(monkeypatch):
 def test_fr9_run_one_sets_asked_at_db_passed_reason(env, fixed_now):
     """run_one adds asked_at (ISO with offset), db snapshot, passed and reason."""
     write_clips(questions(1))
-    server = FakeServer(tool_calls={1: [{"name": "add_note", "args": {}, "ok": True}]})
+    server = FakeServer(
+        tool_calls={1: [{"name": "add_note", "args": {}, "status": "ok"}]}
+    )
     q = {
         "id": "q01",
         "group": "notes",
@@ -1150,7 +1248,7 @@ def spec(
             "question": heard,
             "answer": answer,
             "searched": bool(tools),
-            "tool_calls": [{"name": t, "args": {}, "ok": True} for t in tools],
+            "tool_calls": [{"name": t, "args": {}, "status": "ok"} for t in tools],
             "error": None,
             "timings_ms": {"stt": ms[0], "llm": ms[1], "tts": ms[2]},
         }

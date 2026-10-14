@@ -1,4 +1,4 @@
-"""LLM tests: system instruction (FR-6), Gemini call and tool loop (FR-5, FR-7). Fake client, no network."""
+"""LLM tests: system instruction (FR-6), Gemini call and tool loop (FR-5, FR-7), session turns (FR-21). Fake client, no network."""
 
 import copy
 from datetime import datetime
@@ -69,12 +69,55 @@ def test_fr6_instruction_reads_home_city_per_call(monkeypatch) -> None:
 
 
 def test_fr6_instruction_has_design_rules() -> None:
-    """The instruction states the length, web_search, ISO 8601 and repeat-back rules."""
+    """The instruction states the web_search, ISO 8601 and repeat-back rules."""
     text = llm.system_instruction(fixed_now())
-    assert "40 words" in text
     assert "web_search" in text
     assert "ISO 8601" in text
     assert "repeat" in text.lower()
+
+
+def test_fr5_instruction_limits_3_sentences_60_words() -> None:
+    """The instruction says at most 3 sentences and 60 words, not the old 2 sentences / 40 words."""
+    text = llm.system_instruction(fixed_now())
+    assert "3 sentences" in text
+    assert "60 words" in text
+    assert "2 short sentences" not in text
+    assert "40 words" not in text
+
+
+def test_fr5_instruction_list_rule_count_and_first_5() -> None:
+    """A list answer says the total count and the first 5 items (newest notes, soonest reminders)."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "total count" in text or "total number" in text
+    assert "first 5" in text
+    assert "newest" in text
+    assert "soonest" in text
+
+
+def test_fr5_instruction_tell_me_more_gives_next_5() -> None:
+    """'Tell me more' gives the next 5 (or one more short layer) within the same limit."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "tell me more" in text
+    assert "next 5" in text
+    assert "same limit" in text
+
+
+def test_fr5_instruction_numbers_follow_config(monkeypatch) -> None:
+    """The limits come from config.ANSWER_MAX_SENTENCES, ANSWER_MAX_WORDS and LIST_MAX_ITEMS."""
+    assert config.ANSWER_MAX_SENTENCES == 3
+    assert config.ANSWER_MAX_WORDS == 60
+    assert config.LIST_MAX_ITEMS == 5
+    monkeypatch.setattr(config, "ANSWER_MAX_SENTENCES", 2)
+    monkeypatch.setattr(config, "ANSWER_MAX_WORDS", 45)
+    monkeypatch.setattr(config, "LIST_MAX_ITEMS", 4)
+    text = llm.system_instruction(fixed_now())
+    assert "2 sentences" in text
+    assert "45 words" in text
+    assert "first 4" in text
+    assert "next 4" in text
+    assert "3 sentences" not in text
+    assert "60 words" not in text
+    assert "first 5" not in text
 
 
 def test_fr6_instruction_has_privacy_rule() -> None:
@@ -219,7 +262,9 @@ def test_fr7_call_then_text_runs_tool_once(monkeypatch) -> None:
     assert answer == "answer"
     assert seen == [("web_search", {"query": "q"}, now)]
     assert searched is True
-    assert tool_calls == [{"name": "web_search", "args": {"query": "q"}, "ok": True}]
+    assert tool_calls == [
+        {"name": "web_search", "args": {"query": "q"}, "status": "ok"}
+    ]
 
 
 def test_fr7_thought_signature_round_trip(monkeypatch) -> None:
@@ -243,14 +288,16 @@ def test_fr7_thought_signature_round_trip(monkeypatch) -> None:
     assert fr.response == SEARCH_RESULT
 
 
-def test_fr7_tool_error_marks_not_ok(monkeypatch) -> None:
-    """A tool error gives ok False and searched False; the answer is still returned."""
+def test_fr7_tool_error_marks_failed(monkeypatch) -> None:
+    """A tool error gives status "failed" and searched False; the answer is still returned."""
     install_fake(monkeypatch, [call_response(), text_response("sorry")])
     install_run(monkeypatch, {"error": "x"})
     answer, searched, tool_calls = llm.ask("q?", fixed_now())
     assert answer == "sorry"
     assert searched is False
-    assert tool_calls == [{"name": "web_search", "args": {"query": "q"}, "ok": False}]
+    assert tool_calls == [
+        {"name": "web_search", "args": {"query": "q"}, "status": "failed"}
+    ]
 
 
 def test_fr7_too_many_tool_rounds(monkeypatch) -> None:
@@ -318,7 +365,7 @@ def test_fr5_first_round_search_runs_even_late(monkeypatch) -> None:
         llm.ask("q?", fixed_now())
     assert len(seen) == 1
     assert exc.value.tool_calls == [
-        {"name": "web_search", "args": {"query": "q"}, "ok": True}
+        {"name": "web_search", "args": {"query": "q"}, "status": "ok"}
     ]
     assert len(fake.models.calls) == 1
 
@@ -335,7 +382,9 @@ def test_fr5_first_round_local_tool_runs_even_late(monkeypatch) -> None:
     with pytest.raises(RuntimeError, match="deadline exceeded") as exc:
         llm.ask("what reminders?", fixed_now())
     assert seen == [("list_reminders", {})]
-    assert exc.value.tool_calls == [{"name": "list_reminders", "args": {}, "ok": True}]
+    assert exc.value.tool_calls == [
+        {"name": "list_reminders", "args": {}, "status": "ok"}
+    ]
 
 
 def test_fr5_deadline_before_second_gemini_call_makes_final_call(monkeypatch) -> None:
@@ -351,7 +400,9 @@ def test_fr5_deadline_before_second_gemini_call_makes_final_call(monkeypatch) ->
     answer, searched, tool_calls = llm.ask("q?", fixed_now())
     assert answer == "final answer"
     assert searched is True
-    assert tool_calls == [{"name": "web_search", "args": {"query": "q"}, "ok": True}]
+    assert tool_calls == [
+        {"name": "web_search", "args": {"query": "q"}, "status": "ok"}
+    ]
     assert len(fake.models.calls) == 2
     final = fake.models.calls[1]
     assert mode_of(final) == types.FunctionCallingConfigMode.NONE.value
@@ -378,7 +429,7 @@ def test_fr5_deadline_after_late_tool_raises_without_final_call(monkeypatch) -> 
 
 def test_fr5_later_round_search_refused_when_it_does_not_fit(monkeypatch) -> None:
     """A round-1 web_search at elapsed 4 s (4 + 5 + 10 > 18) is not run: it gets an error
-    function response, is logged ok False, and the next request is the FINAL call."""
+    function response, is logged as refused, and the next request is the FINAL call."""
     clock, on_model = scripted_clock(monkeypatch)
     seen: list = []
 
@@ -399,8 +450,8 @@ def test_fr5_later_round_search_refused_when_it_does_not_fit(monkeypatch) -> Non
     assert len(seen) == 1
     assert len(fake.models.calls) == 3
     assert tool_calls == [
-        {"name": "web_search", "args": {"query": "q"}, "ok": True},
-        {"name": "web_search", "args": {"query": "q"}, "ok": False},
+        {"name": "web_search", "args": {"query": "q"}, "status": "ok"},
+        {"name": "web_search", "args": {"query": "q"}, "status": "refused"},
     ]
     final = fake.models.calls[2]
     assert mode_of(final) == types.FunctionCallingConfigMode.NONE.value
@@ -430,7 +481,7 @@ def test_fr5_later_round_search_runs_when_it_fits(monkeypatch) -> None:
     answer, searched, tool_calls = llm.ask("q?", fixed_now())
     assert answer == "done"
     assert seen == ["web_search", "web_search"]
-    assert [c["ok"] for c in tool_calls] == [True, True]
+    assert [c["status"] for c in tool_calls] == ["ok", "ok"]
     assert searched is True
     assert (
         mode_of(fake.models.calls[2]) == types.FunctionCallingConfigMode.VALIDATED.value
@@ -459,8 +510,8 @@ def test_fr7_list_then_cancel_both_run_then_text(monkeypatch) -> None:
     assert searched is False
     assert [s[0] for s in seen] == ["list_reminders", "cancel_reminder"]
     assert tool_calls == [
-        {"name": "list_reminders", "args": {}, "ok": True},
-        {"name": "cancel_reminder", "args": {"id": 4}, "ok": True},
+        {"name": "list_reminders", "args": {}, "status": "ok"},
+        {"name": "cancel_reminder", "args": {"id": 4}, "status": "ok"},
     ]
     assert (
         mode_of(fake.models.calls[2]) == types.FunctionCallingConfigMode.VALIDATED.value
@@ -486,12 +537,12 @@ def test_fr7_later_round_local_tool_runs_at_8s(monkeypatch) -> None:
     answer, _, tool_calls = llm.ask("cancel it", fixed_now())
     assert answer == "Cancelled."
     assert [s[0] for s in seen] == ["list_reminders", "cancel_reminder"]
-    assert [c["ok"] for c in tool_calls] == [True, True]
+    assert [c["status"] for c in tool_calls] == ["ok", "ok"]
 
 
 def test_fr7_later_round_local_tool_refused_at_8_5s(monkeypatch) -> None:
     """A round-1 local tool at elapsed 8.5 s (8.5 + 10 > 18) is not run; the FINAL call is
-    then not allowed (8.5 > 8), so 'deadline exceeded' with the refused call logged ok False."""
+    then not allowed (8.5 > 8), so 'deadline exceeded' with the refused call logged as refused."""
     _, on_model = scripted_clock(monkeypatch, [1.0, 8.5, 8.5])
     fake = install_fake(
         monkeypatch,
@@ -510,8 +561,8 @@ def test_fr7_later_round_local_tool_refused_at_8_5s(monkeypatch) -> None:
         llm.ask("cancel it", fixed_now())
     assert [s[0] for s in seen] == ["list_reminders"]
     assert exc.value.tool_calls == [
-        {"name": "list_reminders", "args": {}, "ok": True},
-        {"name": "cancel_reminder", "args": {"id": 4}, "ok": False},
+        {"name": "list_reminders", "args": {}, "status": "ok"},
+        {"name": "cancel_reminder", "args": {"id": 4}, "status": "refused"},
     ]
     assert len(fake.models.calls) == 2
 
@@ -539,7 +590,7 @@ def test_fr5_final_call_failure_is_deadline_exceeded(monkeypatch, bad_final) -> 
         llm.ask("q?", fixed_now())
     assert len(fake.models.calls) == 2  # the FINAL call was really made
     assert exc.value.tool_calls == [
-        {"name": "web_search", "args": {"query": "q"}, "ok": True}
+        {"name": "web_search", "args": {"query": "q"}, "status": "ok"}
     ]
 
 
@@ -580,8 +631,8 @@ def test_fr7_refused_only_search_is_not_searched(monkeypatch) -> None:
     assert searched is False
     assert [s[0] for s in seen] == ["list_reminders"]
     assert tool_calls == [
-        {"name": "list_reminders", "args": {}, "ok": True},
-        {"name": "web_search", "args": {"query": "q"}, "ok": False},
+        {"name": "list_reminders", "args": {}, "status": "ok"},
+        {"name": "web_search", "args": {"query": "q"}, "status": "refused"},
     ]
     assert mode_of(fake.models.calls[2]) == types.FunctionCallingConfigMode.NONE.value
 
@@ -593,7 +644,7 @@ def test_fr17_too_many_rounds_error_carries_tool_calls(monkeypatch) -> None:
     install_run(monkeypatch, SEARCH_RESULT)
     with pytest.raises(RuntimeError, match="too many tool rounds") as exc:
         llm.ask("q?", fixed_now())
-    expected = {"name": "web_search", "args": {"query": "q"}, "ok": True}
+    expected = {"name": "web_search", "args": {"query": "q"}, "status": "ok"}
     assert exc.value.tool_calls == [expected] * rounds
 
 
@@ -611,19 +662,94 @@ def test_fr17_deadline_error_carries_tool_calls(monkeypatch) -> None:
     with pytest.raises(RuntimeError, match="deadline exceeded") as exc:
         llm.ask("q?", fixed_now())
     assert exc.value.tool_calls == [
-        {"name": "web_search", "args": {"query": "q"}, "ok": True}
+        {"name": "web_search", "args": {"query": "q"}, "status": "ok"}
     ]
 
 
 def test_fr17_failed_tool_call_is_recorded_on_error(monkeypatch) -> None:
-    """A tool call that returned an error is carried with ok False when the query then fails."""
+    """A tool call that returned an error is carried with status "failed" when the query then fails."""
     rounds = config.MAX_TOOL_ROUNDS
     install_fake(monkeypatch, [call_response() for _ in range(rounds + 1)])
     install_run(monkeypatch, {"error": "x"})
     with pytest.raises(RuntimeError, match="too many tool rounds") as exc:
         llm.ask("q?", fixed_now())
-    expected = {"name": "web_search", "args": {"query": "q"}, "ok": False}
+    expected = {"name": "web_search", "args": {"query": "q"}, "status": "failed"}
     assert exc.value.tool_calls == [expected] * rounds
+
+
+def test_fr17_tool_call_status_ok_has_no_ok_key(monkeypatch) -> None:
+    """A tool that ran without an "error" key is recorded as exactly {"name", "args", "status": "ok"}."""
+    install_fake(monkeypatch, [call_response(), text_response("answer")])
+    install_run(monkeypatch, SEARCH_RESULT)
+    _, _, tool_calls = llm.ask("q?", fixed_now())
+    assert tool_calls == [
+        {"name": "web_search", "args": {"query": "q"}, "status": "ok"}
+    ]
+    assert set(tool_calls[0]) == {"name", "args", "status"}
+    assert "ok" not in tool_calls[0]
+
+
+def test_fr17_tool_call_status_failed_when_result_has_error(monkeypatch) -> None:
+    """A tool whose result has an "error" key is recorded with status "failed" and no "ok" key."""
+    install_fake(monkeypatch, [call_response(), text_response("sorry")])
+    install_run(monkeypatch, {"error": "search down"})
+    _, _, tool_calls = llm.ask("q?", fixed_now())
+    assert tool_calls == [
+        {"name": "web_search", "args": {"query": "q"}, "status": "failed"}
+    ]
+    assert "ok" not in tool_calls[0]
+
+
+def test_fr17_tool_call_status_refused_when_skipped_for_time(monkeypatch) -> None:
+    """A later-round tool skipped for lack of time (llm.SKIPPED_RESULT sent, tool not run) is
+    recorded with status "refused" and no "ok" key; the earlier call that ran stays "ok"."""
+    clock, on_model = scripted_clock(monkeypatch)
+    seen: list = []
+
+    def fake_run(name, args, now):
+        seen.append(name)
+        clock.t = 4.0
+        return SEARCH_RESULT
+
+    monkeypatch.setattr(tools, "run", fake_run)
+    fake = install_fake(
+        monkeypatch,
+        [search_round("c1"), search_round("c2"), text_response("no luck")],
+        on_call=on_model,
+    )
+    _, _, tool_calls = llm.ask("q?", fixed_now())
+    assert seen == ["web_search"]
+    assert [c["status"] for c in tool_calls] == ["ok", "refused"]
+    assert all("ok" not in c for c in tool_calls)
+    assert response_of(fake.models.calls[2]["contents"][4]) == llm.SKIPPED_RESULT
+
+
+def test_fr17_refused_status_is_carried_on_error(monkeypatch) -> None:
+    """When the query then fails ('deadline exceeded'), e.tool_calls holds the refused call
+    with status "refused" and the shape {"name", "args", "status"}."""
+    _, on_model = scripted_clock(monkeypatch, [1.0, 8.5, 8.5])
+    install_fake(
+        monkeypatch,
+        [
+            named_call_response("list_reminders", {}, "c1", b"s1"),
+            named_call_response("cancel_reminder", {"id": 4}, "c2", b"s2"),
+            text_response("unused"),
+        ],
+        on_call=on_model,
+    )
+    install_named_run(
+        monkeypatch,
+        {"list_reminders": {"reminders": []}, "cancel_reminder": {"id": 4}},
+    )
+    with pytest.raises(RuntimeError, match="deadline exceeded") as exc:
+        llm.ask("cancel it", fixed_now())
+    refused = exc.value.tool_calls[1]
+    assert refused == {
+        "name": "cancel_reminder",
+        "args": {"id": 4},
+        "status": "refused",
+    }
+    assert set(refused) == {"name", "args", "status"}
 
 
 def test_fr17_first_call_failure_has_empty_tool_calls(monkeypatch) -> None:
@@ -706,7 +832,7 @@ def test_fr6_fr9_fr10_add_reminder_stores_row_and_repeats_values(
     assert result == (
         "Reminder set for 5 pm tomorrow: call the lab",
         False,
-        [{"name": "add_reminder", "args": args, "ok": True}],
+        [{"name": "add_reminder", "args": args, "status": "ok"}],
     )
 
 
@@ -731,7 +857,7 @@ def test_fr6_fr9_add_reminder_utc_is_stored_in_kolkata_offset(monkeypatch, db) -
         response_of(fake.models.calls[1]["contents"][2])["due_at"] == DUE_TOMORROW_5PM
     )
     assert answer == "done"
-    assert tool_calls == [{"name": "add_reminder", "args": args, "ok": True}]
+    assert tool_calls == [{"name": "add_reminder", "args": args, "status": "ok"}]
 
 
 def cancel_by_description_setup(monkeypatch):
@@ -763,8 +889,8 @@ def test_fr9_fr10_cancel_by_description_within_round_limit(monkeypatch, db) -> N
     assert answer == "Cancelled the reminder: call the lab"
     assert searched is False
     assert tool_calls == [
-        {"name": "list_reminders", "args": {}, "ok": True},
-        {"name": "cancel_reminder", "args": {"id": lab["id"]}, "ok": True},
+        {"name": "list_reminders", "args": {}, "status": "ok"},
+        {"name": "cancel_reminder", "args": {"id": lab["id"]}, "status": "ok"},
     ]
     assert store.list_pending() == [other]
 
@@ -856,8 +982,72 @@ def test_fr7_fourth_tool_round_fails_cleanly(monkeypatch, db) -> None:
     assert len(fake.models.responses) == len(all_args) - (rounds + 1)
     assert len(store.list_pending()) == rounds
     assert exc.value.tool_calls == [
-        {"name": "add_reminder", "args": a, "ok": True} for a in all_args[:rounds]
+        {"name": "add_reminder", "args": a, "status": "ok"} for a in all_args[:rounds]
     ]
+
+
+TURNS = [
+    {"question": "q1", "answer": "a1"},
+    {"question": "q2", "answer": "a2"},
+]
+
+
+def role_text(contents: list) -> list[tuple[str, str]]:
+    return [(c.role, c.parts[0].text) for c in contents]
+
+
+def test_fr21_turns_sent_before_question(monkeypatch) -> None:
+    """ask sends earlier turns as user and model text, oldest first, then the new question."""
+    fake = install_fake(monkeypatch, [text_response("answer")])
+    llm.ask("now?", fixed_now(), TURNS)
+    assert role_text(fake.models.calls[0]["contents"]) == [
+        ("user", "q1"),
+        ("model", "a1"),
+        ("user", "q2"),
+        ("model", "a2"),
+        ("user", "now?"),
+    ]
+
+
+@pytest.mark.parametrize("empty", [None, []], ids=["two-args", "empty-list"])
+def test_fr21_no_turns_sends_only_question(monkeypatch, empty) -> None:
+    """With no turns (2-arg call or turns=[]) contents is just the user question."""
+    fake = install_fake(monkeypatch, [text_response("answer")])
+    if empty is None:
+        llm.ask("hi", fixed_now())
+    else:
+        llm.ask("hi", fixed_now(), empty)
+    assert role_text(fake.models.calls[0]["contents"]) == [("user", "hi")]
+
+
+def test_fr21_turns_stay_at_start_in_tool_round(monkeypatch) -> None:
+    """In a tool round the turns stay at the start of later requests, then the question,
+    then the function call and response."""
+    first = call_response("call-1")
+    fake = install_fake(monkeypatch, [first, text_response("answer")])
+    install_run(monkeypatch, SEARCH_RESULT)
+    llm.ask("now?", fixed_now(), TURNS)
+    assert len(fake.models.calls) == 2
+    contents = fake.models.calls[1]["contents"]
+    assert len(contents) == 7
+    assert role_text(contents[:5]) == [
+        ("user", "q1"),
+        ("model", "a1"),
+        ("user", "q2"),
+        ("model", "a2"),
+        ("user", "now?"),
+    ]
+    assert contents[5] == first.candidates[0].content
+    assert contents[6].role == "user"
+    assert contents[6].parts[0].function_response.id == "call-1"
+
+
+def test_fr21_turns_list_not_mutated(monkeypatch) -> None:
+    """The turns list passed to ask is not changed."""
+    install_fake(monkeypatch, [text_response("answer")])
+    turns = copy.deepcopy(TURNS)
+    llm.ask("now?", fixed_now(), turns)
+    assert turns == TURNS
 
 
 def test_fr5_api_failure_propagates(monkeypatch) -> None:

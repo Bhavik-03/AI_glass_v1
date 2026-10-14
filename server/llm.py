@@ -1,4 +1,5 @@
 import time
+from collections.abc import Sequence
 from datetime import datetime
 
 from google import genai
@@ -11,8 +12,11 @@ You are a voice assistant. Your answers are spoken aloud.
 Now: {weekday} {day} {month_year}, {time} ({iso}), time zone {timezone}.
 Home city (for weather and local questions): {home_city}.
 Rules:
-- Answer in at most 2 short sentences, under 40 words. Lists of notes or reminders may be longer; \
-give each reminder's date and time.
+- Answer in at most {max_sentences} sentences and at most {max_words} words.
+- For a list, say the total count and the first {list_items} items (newest notes first, \
+soonest reminders first); give each reminder's date and time.
+- When the user says "tell me more", give the next {list_items} items or one more short \
+layer, within the same limit.
 - Call web_search when a question needs live information. Put the date or the home city in the \
 query when the question depends on them. Never put note or reminder content in a query.
 - Use the tools for notes and reminders. Turn relative times into an exact ISO 8601 time with \
@@ -39,6 +43,9 @@ def system_instruction(now: datetime) -> str:
         iso=now.isoformat(timespec="seconds"),
         timezone=config.TIMEZONE,
         home_city=config.HOME_CITY,
+        max_sentences=config.ANSWER_MAX_SENTENCES,
+        max_words=config.ANSWER_MAX_WORDS,
+        list_items=config.LIST_MAX_ITEMS,
     )
 
 
@@ -90,11 +97,14 @@ def _final_answer(
     return text, searched
 
 
-def ask(question: str, now: datetime) -> tuple[str, bool, list[dict]]:
-    """Answer one question, running Gemini's tool calls (FR-5, FR-7)."""
+def ask(
+    question: str, now: datetime, turns: Sequence[dict] = ()
+) -> tuple[str, bool, list[dict]]:
+    """Answer one question after the session's earlier turns, running Gemini's tool calls
+    (FR-5, FR-7, FR-21)."""
     tool_calls: list[dict] = []
     try:
-        answer, searched = _ask(question, now, tool_calls)
+        answer, searched = _ask(question, now, turns, tool_calls)
     except Exception as e:
         # The caller logs the calls made before the failure (FR-17).
         e.tool_calls = tool_calls
@@ -102,7 +112,22 @@ def ask(question: str, now: datetime) -> tuple[str, bool, list[dict]]:
     return answer, searched, tool_calls
 
 
-def _ask(question: str, now: datetime, tool_calls: list[dict]) -> tuple[str, bool]:
+def _history(turns: Sequence[dict]) -> list[types.Content]:
+    """Earlier turns as user and model text, oldest first (FR-21)."""
+    contents = []
+    for turn in turns:
+        contents.append(
+            types.Content(role="user", parts=[types.Part(text=turn["question"])])
+        )
+        contents.append(
+            types.Content(role="model", parts=[types.Part(text=turn["answer"])])
+        )
+    return contents
+
+
+def _ask(
+    question: str, now: datetime, turns: Sequence[dict], tool_calls: list[dict]
+) -> tuple[str, bool]:
     start = _clock()
     request = types.GenerateContentConfig(
         system_instruction=system_instruction(now),
@@ -112,7 +137,9 @@ def _ask(question: str, now: datetime, tool_calls: list[dict]) -> tuple[str, boo
         ),
         thinking_config=types.ThinkingConfig(thinking_level=config.LLM_THINKING_LEVEL),
     )
-    contents = [types.Content(role="user", parts=[types.Part(text=question)])]
+    contents = _history(turns) + [
+        types.Content(role="user", parts=[types.Part(text=question)])
+    ]
     searched = False
     refused = False
     for round_ in range(config.MAX_TOOL_ROUNDS + 1):
@@ -136,14 +163,14 @@ def _ask(question: str, now: datetime, tool_calls: list[dict]) -> tuple[str, boo
             if round_ > 0 and not _tool_fits(start, call.name):
                 refused = True
                 result = SKIPPED_RESULT
+                status = "refused"
             else:
                 result = tools.run(call.name, call.args, now)
+                status = "failed" if "error" in result else "ok"
             searched = searched or (
                 call.name == "web_search" and bool(result.get("results"))
             )
-            tool_calls.append(
-                {"name": call.name, "args": call.args, "ok": "error" not in result}
-            )
+            tool_calls.append({"name": call.name, "args": call.args, "status": status})
             replies.append(
                 types.Part(
                     function_response=types.FunctionResponse(

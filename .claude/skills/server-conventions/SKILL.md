@@ -11,7 +11,7 @@ paths:
 ## Stage modules (server/stt.py, llm.py, tts.py, logger.py)
 - Signatures are fixed; main.py and tests depend on them:
   - `stt.load() -> None`, `stt.transcribe(wav: bytes) -> str`
-  - `llm.ask(question: str, now: datetime) -> tuple[str, bool, list[dict]]` → (answer, searched, tool_calls); each tool call is `{"name", "args", "ok"}`
+  - `llm.ask(question: str, now: datetime, turns: Sequence[dict] = ()) -> tuple[str, bool, list[dict]]` → (answer, searched, tool_calls); `turns` are the session's `{"question", "answer"}` dicts, oldest first, sent as user and model text before the question; each tool call is `{"name", "args", "status"}`, status "ok", "failed" (error result) or "refused" (skipped for lack of time)
   - `tts.load() -> None`, `tts.synthesize(text: str) -> bytes` (16 kHz mono 16-bit WAV)
   - `logger.log_query(record: dict) -> None`
 - `load()` keeps the model in a module-level variable; it's called once from the FastAPI lifespan in main.py, never on import.

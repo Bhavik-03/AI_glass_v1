@@ -22,6 +22,16 @@ def make_wav(seconds: int = 1) -> bytes:
     return buf.getvalue()
 
 
+@pytest.fixture(autouse=True)
+def _clean_session():
+    """No test leaks session turns into another."""
+    from server import session
+
+    session.reset()
+    yield
+    session.reset()
+
+
 @pytest.fixture
 def silent_wav() -> bytes:
     return make_wav()
@@ -55,6 +65,7 @@ def fake_stages(monkeypatch, fixed_now) -> dict:
         "order": [],
         "stt": [],
         "llm": [],
+        "llm_turns": [],
         "tts": [],
         "stt_load": [],
         "tts_load": [],
@@ -65,9 +76,10 @@ def fake_stages(monkeypatch, fixed_now) -> dict:
         calls["stt"].append(wav)
         return FAKE_TRANSCRIPT
 
-    def ask(question, now):
+    def ask(question, now, turns=()):
         calls["order"].append("llm")
         calls["llm"].append((question, now))
+        calls["llm_turns"].append(list(turns))
         return FAKE_ANSWER, False, []
 
     def synthesize(text):
