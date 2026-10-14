@@ -109,6 +109,12 @@ def health() -> dict:
     return {"status": "ok", "model": config.LLM_MODEL}
 
 
+@app.post("/session/reset")
+def session_reset() -> dict:
+    session.reset()
+    return {"status": "ok"}
+
+
 @app.get("/reminders/due")
 def reminders_due() -> Response:
     due = store.list_due(now().isoformat(timespec="seconds"))

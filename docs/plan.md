@@ -11,7 +11,7 @@ Goal: follow-ups and "tell me more" for 120 s, new answer limits, tool status in
 | M8-T4 | FR-21 | server/config.py, server/session.py (+ tests/test_session.py) | `add_turn`, `turns(now)` and `reset()` behind a lock; keeps the last 5 question and answer texts; no turns 120 s after the last answer; values from `SESSION_TTL_S`, `SESSION_MAX_TURNS` | pytest | #68 | [x] |
 | M8-T5 | FR-21 | server/llm.py, .claude/skills/server-conventions/SKILL.md (+ tests/test_llm.py) | `ask(question, now, turns)` sends the earlier turns as user and model text before the question; a fake-client test checks the request contents | pytest | #69 | [x] |
 | M8-T6 | FR-21, FR-17 | server/main.py, tests/conftest.py (+ tests/test_server.py) | `/query` passes the session turns to `llm.ask` and adds a turn only after a 200; a failed query adds no turn and does not extend the 120 s; the log line has `session_continued` | pytest | #70 | [x] |
-| M8-T7 | FR-22 | server/main.py (+ tests/test_server.py) | `POST /session/reset` returns 200 `{"status": "ok"}` and clears the session; 200 also with no session | pytest | #71 | [ ] |
+| M8-T7 | FR-22 | server/main.py (+ tests/test_server.py) | `POST /session/reset` returns 200 `{"status": "ok"}` and clears the session; 200 also with no session | pytest | #71 | [x] |
 | M8-T8 | FR-22 | eval/run_eval.py (+ tests/test_run_eval.py) | The v1 eval calls `POST /session/reset` before each clip, so rows do not share context | pytest | #72 | [ ] |
 
 Manual checks: with the real model, ask "what is LoRA?", then "what is it used for?" and hear an

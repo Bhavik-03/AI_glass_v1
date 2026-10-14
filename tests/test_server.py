@@ -640,6 +640,37 @@ def test_fr17_failed_continued_query_logs_session_continued_true(
     assert _log_lines(log_path)[1]["session_continued"] is True
 
 
+def test_fr22_reset_with_no_session_returns_ok():
+    """FR-22: POST /session/reset with no session returns 200 {"status": "ok"}."""
+    response = client.post("/session/reset")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_fr22_reset_clears_session_for_next_query(
+    fake_stages, silent_wav, log_path, clock
+):
+    """FR-22: after a query, reset returns 200 {"status": "ok"}; the next query
+    within 120 s gets no turns and logs session_continued false."""
+    _post_query(silent_wav)
+    clock.at(30)
+    response = client.post("/session/reset")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    clock.at(60)
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["llm_turns"][-1] == []
+    assert _log_lines(log_path)[-1]["session_continued"] is False
+
+
+def test_fr22_reset_twice_returns_ok_both_times():
+    """FR-22: calling POST /session/reset twice returns 200 {"status": "ok"} both times."""
+    for _ in range(2):
+        response = client.post("/session/reset")
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
+
+
 PAST = "2026-10-09T13:00:00+05:30"
 EQUAL = "2026-10-09T14:00:00+05:30"
 FUTURE = "2026-10-09T15:00:00+05:30"
