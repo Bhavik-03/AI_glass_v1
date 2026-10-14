@@ -25,19 +25,19 @@ Shell is PowerShell: one command per line, never `&&`.
 ## GitHub (gh CLI only)
 - gh works on the repo of the current folder (the `origin` remote). Never type an owner or repo name; use the literal `{owner}/{repo}` placeholders in `gh api` paths.
 - Milestone = one plan.md milestone, titled `M<N> (v<V>): <name>`. IDs continue across versions (v2 starts at M8).
-  - create: `gh api "repos/{owner}/{repo}/milestones" -f title="M1 (v1): Server skeleton" -f description="<goal>"`
+  - create: `gh api "repos/{owner}/{repo}/milestones" -f title="M<N> (v<V>): <name>" -f description="<goal>"`
   - find its number: `gh api "repos/{owner}/{repo}/milestones" --jq '.[] | [.number, .title] | @tsv'`
   - close: `gh api -X PATCH "repos/{owner}/{repo}/milestones/<number>" -f state=closed`
 - Issue = one plan.md task:
-  `gh issue create --title "[M1-T1] /health endpoint (FR-18)" --body "<done when>" --milestone "M1 (v1): Server skeleton"`
+  `gh issue create --title "[M<N>-T<k>] <task> (FR-<n>)" --body "<done when>" --milestone "M<N> (v<V>): <name>"`
 - PR = one milestone:
   `git push -u origin feature/m<N>-<slug>`
-  `gh pr create --base main --title "M1 (v1): Server skeleton" --milestone "M1 (v1): Server skeleton" --body "<body>"`
+  `gh pr create --base main --title "M<N> (v<V>): <name>" --milestone "M<N> (v<V>): <name>" --body "<body>"`
   - body: what the milestone delivers, a table of task → FR → tests, one `Closes #<issue>` line per task, last test-runner summary.
 - Merge: `gh pr merge --merge --delete-branch`, then `git switch main`, then `git pull`.
 
 ## Version tags
-- One annotated tag per version, from roadmap.md: v1 = v0.1.0, v2 = v0.2.0, v3 = v0.3.0, v4 = v0.4.0, v5 = v1.0.0.
+- One annotated tag per version, from roadmap.md: v1 = v0.1.0, v2 = v0.2.0, v3 = v0.3.0, v4 = v0.4.0, v5 = v0.5.0, v6 = v0.6.0, v7 = v1.0.0.
 - /ship-milestone creates and pushes it on main after the version's last milestone is merged:
-  `git tag -a v0.1.0 -m "v1: Voice assistant"`, then `git push origin v0.1.0`.
-- A GitHub release only when I ask: `gh release create v0.1.0 --verify-tag --title "v0.1.0: Voice assistant" --notes "<what works, eval results>"`
+  `git tag -a v0.<V>.0 -m "v<V>: <name>"`, then `git push origin v0.<V>.0`.
+- A GitHub release only when I ask: `gh release create v0.<V>.0 --verify-tag --title "v0.<V>.0: <name>" --notes "<what works, eval results>"`
