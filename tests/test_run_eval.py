@@ -301,7 +301,7 @@ def test_fr17_run_one_posts_audio_field_and_returns_log_line(env):
     qs = questions(1)
     write_clips(qs)
     server = FakeServer(
-        tool_calls={1: [{"name": "web_search", "args": {}, "ok": True}]}
+        tool_calls={1: [{"name": "web_search", "args": {}, "status": "ok"}]}
     )
     with make_client(server) as client:
         result = run_eval.run_one(
@@ -556,7 +556,7 @@ def make_result(
             "question": "q",
             "answer": answer,
             "searched": searched,
-            "tool_calls": [{"name": t, "args": {}, "ok": True} for t in tools],
+            "tool_calls": [{"name": t, "args": {}, "status": "ok"} for t in tools],
             "error": None,
             "timings_ms": {"stt": 1, "llm": 2, "tts": 3},
         }
@@ -623,7 +623,7 @@ def test_fr5_grade_no_log_line_fails_even_without_pass_rule():
 
 
 def test_fr5_grade_tools_all_required_present_passes():
-    """Every required tool in tool_calls with ok true passes; extra tools are fine."""
+    """Every required tool in tool_calls with status ok passes; extra tools are fine."""
     ok, _ = run_grade({"tools": ["add_note"]}, tools=["list_notes", "add_note"])
     assert ok is True
 
@@ -640,17 +640,46 @@ def test_fr5_grade_tool_missing_fails_naming_tool():
     assert "tool add_note not called" in reason
 
 
-def test_fr5_grade_tool_with_ok_false_fails():
-    """A required tool whose logged call has ok false does not count."""
-    log = {
+def tool_log(*statuses, name="add_note"):
+    return {
         "answer": "done",
         "searched": False,
-        "tool_calls": [{"name": "add_note", "args": {}, "ok": False}],
+        "tool_calls": [{"name": name, "args": {}, "status": s} for s in statuses],
         "error": None,
     }
-    ok, reason = run_grade({"tools": ["add_note"]}, log=log)
+
+
+def test_fr5_grade_tool_with_failed_status_fails():
+    """A required tool whose logged call has status failed does not count."""
+    ok, reason = run_grade({"tools": ["add_note"]}, log=tool_log("failed"))
     assert ok is False
     assert "add_note" in reason
+
+
+def test_fr17_grade_tool_status_ok_counts_as_made():
+    """A required tool counts as made when its logged status is ok."""
+    ok, _ = run_grade({"tools": ["add_note"]}, log=tool_log("ok"))
+    assert ok is True
+
+
+def test_fr17_grade_tool_only_failed_fails():
+    """A required tool with only failed calls does not count as made."""
+    ok, reason = run_grade({"tools": ["add_note"]}, log=tool_log("failed", "failed"))
+    assert ok is False
+    assert "add_note" in reason
+
+
+def test_fr17_grade_tool_only_refused_fails():
+    """A required tool with only refused calls does not count as made."""
+    ok, reason = run_grade({"tools": ["add_note"]}, log=tool_log("refused"))
+    assert ok is False
+    assert "add_note" in reason
+
+
+def test_fr17_grade_tool_refused_then_ok_passes():
+    """A refused call followed by an ok call of the same tool counts as made."""
+    ok, _ = run_grade({"tools": ["add_note"]}, log=tool_log("refused", "ok"))
+    assert ok is True
 
 
 def test_fr8_grade_searched_true_passes_and_false_fails():
@@ -947,7 +976,9 @@ def fixed_now(monkeypatch):
 def test_fr9_run_one_sets_asked_at_db_passed_reason(env, fixed_now):
     """run_one adds asked_at (ISO with offset), db snapshot, passed and reason."""
     write_clips(questions(1))
-    server = FakeServer(tool_calls={1: [{"name": "add_note", "args": {}, "ok": True}]})
+    server = FakeServer(
+        tool_calls={1: [{"name": "add_note", "args": {}, "status": "ok"}]}
+    )
     q = {
         "id": "q01",
         "group": "notes",
@@ -1150,7 +1181,7 @@ def spec(
             "question": heard,
             "answer": answer,
             "searched": bool(tools),
-            "tool_calls": [{"name": t, "args": {}, "ok": True} for t in tools],
+            "tool_calls": [{"name": t, "args": {}, "status": "ok"} for t in tools],
             "error": None,
             "timings_ms": {"stt": ms[0], "llm": ms[1], "tts": ms[2]},
         }

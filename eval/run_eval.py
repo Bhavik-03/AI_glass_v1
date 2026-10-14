@@ -163,7 +163,7 @@ def _tool_failures(rule: dict, log: dict) -> list[str]:
         made = [c for c in calls if c["name"] == tool]
         if not made:
             failures.append(f"tool {tool} not called")
-        elif not any(c["ok"] for c in made):
+        elif not any(c["status"] == "ok" for c in made):
             failures.append(f"tool {tool} returned an error")
     if rule.get("searched") and not log["searched"]:
         failures.append("searched was false")
