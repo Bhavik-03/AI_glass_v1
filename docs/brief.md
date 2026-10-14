@@ -1,92 +1,81 @@
-Version 1. See roadmap.md.
+Version 2. See roadmap.md.
 
-# AI Assistant v1 Brief: Voice assistant
+# AI Assistant v2 Brief: Teacher
 
-Updated Oct 9, 2026 · Bhavik Fulfagar
+Updated Oct 14, 2026 · Bhavik Fulfagar · tag v0.2.0
 
 ## 1. One-liner
 
-A push-to-talk voice assistant on my laptop: hold one key, ask a question or give a command, and hear a short spoken answer. It answers with live information, keeps my notes and sets reminders that it speaks when they are due.
+A study companion on my laptop: hold a key, ask by voice, optionally about what is on my
+screen, and hear a short spoken answer. It logs the concepts I ask about and quizzes me
+when I ask.
 
 ## 2. Problem
 
-Quick tasks break focus. Looking something up, writing a note or setting a reminder means picking up the phone, unlocking it, opening an app and typing, often with both hands busy at the lab bench.
-
-Commercial assistants are closed: I can't change the model, the prompts or where my data is stored. v1 builds the open base the later versions grow from (roadmap.md).
+While self-studying (for example, a self-annotation project) I keep meeting terms I don't
+know. Each time I switch to my phone or browser and lose focus. I forget what I looked up,
+and nothing checks that I understood it.
 
 ## 3. User
 
-Me, the builder: a robotics and AI engineering student working at a laptop or lab bench. I want to ask "what's the weather today?", say "note: the motor driver needs 12 V", "remind me tomorrow at 5 to call the lab", or "what are my reminders?", and hear the answer without typing.
+Me, an engineering student studying at my laptop. I want to hold a key and ask "what is
+this graph?", say "tell me more", ask "what is LoRA?", say "quiz me" or ask "what did I
+learn this week?", and hear the answer without leaving what I am reading.
 
-## 4. Why us
+## 4. v2 scope (in)
 
-The edge is control, not polish: an open pipeline where every part can be swapped and studied.
+v2 runs on the laptop only, like v1. Answers are 1 to 3 short sentences, by voice only;
+nothing is shown on screen.
 
-| Existing option | Gap | What v1 does |
-| --- | --- | --- |
-| Phone assistants | Closed model and prompts; data in the vendor's cloud | Own prompts and models; notes and reminders in a local SQLite file |
-| Notes and reminder apps | Need hands and several taps | One key, one spoken sentence |
-| Chat apps with search | Typing, reading, no reminders | Voice in, voice out, live answers and reminders |
+- **Right Alt:** ask by voice, as in v1 (questions, notes, reminders). It replaces F9.
+- **Right Ctrl ("Look"):** ask by voice about what is on my screen; a screenshot is sent
+  with the question.
+- **Follow-ups:** follow-up questions and "tell me more" work for about 2 minutes after a
+  question.
+- **Concepts:** learning questions are logged as concepts.
+- **Quiz me:** asks about 2 to 3 logged concepts, grades each answer in one line, and does
+  not ask them again unless I got them wrong.
+- **What did I learn this week?:** a short spoken list.
+- **Logging:** issue #59, the log records whether a tool was refused or failed.
 
-## 5. v1 scope (in)
+## 5. Out of scope
 
-v1 runs on the laptop only. One FastAPI server and one Python client, both on the same machine.
+- Long-term memory, embeddings
+- Proactive quiz offers
+- Habits, schedule
+- Cloud
+- Open-source models
+- A spoken "look" word
 
-- **Client:** one push-to-talk key, start, thinking and error sounds, plays the answer. Polls the server every 10 s for due reminders and plays them.
-- **Speech to text:** faster-whisper `small.en`, local.
-- **Answers:** Gemini (`gemini-3.5-flash-lite`) with function calling; live information through a `web_search` tool that the server runs against a web search API.
-- **Tools:** `add_note`, `list_notes`, `add_reminder`, `list_reminders`, `cancel_reminder`, stored in a local SQLite database.
-- **Time:** the system prompt includes the current date and time in Asia/Kolkata, so "tomorrow at 5" becomes an exact time.
-- **Confirmation:** every action is repeated back ("Reminder set for 5 pm tomorrow: call the lab").
-- **Due reminders:** spoken when due; a reminder missed while the client was off is spoken at the next poll as a missed reminder.
-- **Text to speech:** Piper, local.
-- **Network:** the server binds to 127.0.0.1; only the laptop can reach it.
+## 6. Privacy
 
-The loop:
-
-1. Hold the key; the start sound plays. Speak.
-2. Release; the thinking sound plays and the question audio goes to the server.
-3. The server transcribes it, asks Gemini (which may search the web or call a tool), runs any tool calls, and turns the answer into speech.
-4. The client plays the answer.
-
-Single question, single answer, English only.
-
-## 6. Out of scope
-
-- Camera, photos, Look button, any vision (v5)
-- Glasses or any other hardware (v4)
-- Phone app, calls, SMS, contacts, Google Calendar (v2)
-- Reminders as phone notifications (v2)
-- Memory of past questions and answers, recording, local text model (v3)
-- Access from other devices on the network, auth tokens (v2)
-- Wake word, streaming audio, multi-turn conversation
-- Editing notes or reminders, repeating reminders
-- Languages other than English
+- Questions and screenshots go to the Gemini free tier.
+- Screenshots are not saved to disk; the log only records that an image was sent.
+- The eval keeps its own saved screenshots.
+- Never use Look on a private screen (bank, chats, passwords).
 
 ## 7. Success criteria and constraints
 
-Measured on 30 spoken questions: 10 general and live, 10 notes commands, 10 reminder commands.
+Proposed targets; the final ones are in spec.md.
 
 | Metric | Target |
 | --- | --- |
-| Correctness | ≥ 80% per group; a tool question passes when the right tool is called with the right arguments and the result is stored |
-| Latency (key release to first answer audio) | ≤ 15 s median |
-| Transcription | ≥ 90% of questions keep their meaning |
-| Reliability | 20 queries in a row without a crash |
-| Due reminders | Spoken within one poll interval (10 s) of the due time while the client runs; never lost when the client is closed |
-| Secrets | API key, `.env` and the database never in git; keys never logged |
-
-Exact thresholds and the test plan are in spec.md.
+| Look | ≥ 80% correct on 20 saved screenshots |
+| Follow-ups | ≥ 8 of 10 |
+| Concept logging | Logged or skipped correctly in ≥ 90% of 20 questions |
+| Quiz grading | Agrees with me in ≥ 8 of 10 |
+| Latency with an image | ≤ 8 s median |
+| v1 regression | A re-run of the v1 eval still meets every v1 target |
 
 Constraints:
 
-- Team: one person.
-- Compute: HP Omen laptop, RTX 3050 Laptop GPU (4 GB VRAM); Gemini API for answers.
-- Network: internet for the Gemini API; everything else local.
-- Timeline: no fixed deadline.
+- Gemini free tier: 15 requests per minute, 500 per day.
+- Compute: RTX 3050 Laptop GPU (4 GB VRAM).
+- Laptop only; no screen output.
+- No new dependency without my approval.
 
 ## 8. Deliverables
 
-- GitHub repo with README: what it does, architecture diagram, setup steps
-- Tag v0.1.0 with the evaluation results
-- 1–2 min demo video: a live question, a note, and a reminder that is spoken when due
+- Tag v0.2.0 on main with the v2 evaluation results.
+- A new frozen v2 eval set and its final report in eval/results/.
+- README updated for v2 (keys, Look, quiz me).

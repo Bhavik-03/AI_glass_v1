@@ -6,7 +6,7 @@ paths:
   - "server/**"
   - "tests/**"
 ---
-# Server conventions (v1 voice assistant)
+# Server conventions
 
 ## Stage modules (server/stt.py, llm.py, tts.py, logger.py)
 - Signatures are fixed; main.py and tests depend on them:
@@ -21,7 +21,6 @@ paths:
 
 ## tools.py and store.py (serve the llm stage and the reminder endpoints)
 - `tools.DECLARATIONS`: the function declarations for the tools listed in spec.md "Tool functions".
-  In M3 only web_search is implemented; the notes and reminder tools arrive in M5.
 - `tools.run(name: str, args: dict, now: datetime) -> dict` runs one call against `store` and never raises: unknown names, bad arguments and rule failures (a `due_at` in the past, an unknown or non-pending id) return `{"error": "<reason>"}`.
 - `tools.reminder_text(reminder: dict, now: datetime) -> str` builds "Reminder, 5 pm: …" / "Missed reminder, …" (FR-13), using `config.MISSED_AFTER_S`.
 - `store.init() -> None` creates the tables in `config.DB_PATH`; called once from the lifespan. Store functions take and return plain dicts with ISO 8601 times; they hold no business rules.
