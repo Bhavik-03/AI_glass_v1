@@ -13,6 +13,7 @@ import httpx
 from eval import config
 from eval.record import v2_items
 from eval.run_eval import (
+    _answer_failures,
     _copy_db,
     _error_text,
     _server_ok,
@@ -21,6 +22,7 @@ from eval.run_eval import (
     log_offset,
     pace,
     read_log_since,
+    timings_s,
 )
 from server import config as server_config
 
@@ -133,13 +135,34 @@ def _turn(
     return turn
 
 
-def _grade(turns: list[dict]) -> tuple[bool, str]:
+def _grade(row: dict, turns: list[dict]) -> tuple[bool, str]:
     for turn in turns:
         if turn["status"] != 200:
             return False, f"http {turn['status']}: {turn['error']}"
         if turn["log"] is None:
             return False, "no log line"
-    return True, "ok"
+    log = turns[-1]["log"]
+    failures = _answer_failures(row.get("pass", {}), log["answer"])
+    if row["group"] == "look" and not log["image_sent"]:
+        failures.append("image_sent was false")
+    if row["group"] == "followup" and not log["session_continued"]:
+        failures.append("session was not continued")
+    return (not failures, "; ".join(failures) or "ok")
+
+
+def _last_turn_fields(turn: dict) -> dict:
+    """Transcript, answer, tools and stage seconds of the graded turn."""
+    log = turn["log"]
+    seconds = timings_s(log)
+    return {
+        "transcript": log["question"] if log else None,
+        "answer": log["answer"] if log else "",
+        "tools": [c["name"] for c in log["tool_calls"]] if log else [],
+        "stt_s": seconds["stt"],
+        "llm_s": seconds["llm"],
+        "tts_s": seconds["tts"],
+        "total_s": seconds["total"] if log else turn["wall_s"],
+    }
 
 
 def run_case(
@@ -160,13 +183,14 @@ def run_case(
         pace(turn["wall_s"], gemini_calls(turn["log"]), sleep)
         if turn["status"] != 200:
             break
-    passed, reason = _grade(turns)
+    passed, reason = _grade(row, turns)
     return {
         "id": row["id"],
         "group": row["group"],
         "turns": turns,
         "passed": passed,
         "reason": reason,
+        **_last_turn_fields(turns[-1]),
     }
 
 

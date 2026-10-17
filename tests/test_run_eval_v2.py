@@ -115,7 +115,19 @@ class Clock:
 class FakeServer:
     """MockTransport handler: /health, /session/reset, /query (appends a log line)."""
 
-    def __init__(self, tool_calls=None, status=None, fail=None, health=200):
+    def __init__(
+        self,
+        tool_calls=None,
+        status=None,
+        fail=None,
+        health=200,
+        answers=None,
+        continued=None,
+        timings=None,
+    ):
+        self.answers = answers or {}  # query index (1-based) -> logged answer
+        self.continued = continued or {}  # query index -> session_continued
+        self.timings = timings or {}  # query index -> timings_ms
         self.paths: list[str] = []
         self.queries: list[httpx.Request] = []
         self.resets = 0
@@ -139,13 +151,13 @@ class FakeServer:
         code = self.status.get(n, 200)
         entry = {
             "question": f"asked {n}",
-            "answer": "fake answer",
+            "answer": self.answers.get(n, "fake answer"),
             "searched": False,
             "tool_calls": self.tool_calls.get(n, []),
             "image_sent": b'name="image"' in request.content,
-            "session_continued": False,
+            "session_continued": self.continued.get(n, False),
             "concept": None,
-            "timings_ms": {"stt": 1, "llm": 2, "tts": 3},
+            "timings_ms": self.timings.get(n, {"stt": 1, "llm": 2, "tts": 3}),
         }
         if code != 200:
             entry["error"] = "llm: broke"
@@ -320,7 +332,7 @@ def test_fr22_followup_two_turns_in_one_session(env):
     """A follow-up case sends its two clips in order after one single reset; no image."""
     data = data_v2()
     write_files(data)
-    server = FakeServer()
+    server = FakeServer(continued={2: True})
     result = run(data, "fu01", server)
     assert server.paths == ["/session/reset", "/query", "/query"]
     assert server.resets == 1
@@ -438,6 +450,209 @@ def test_fr17_run_case_without_log_line_fails(env, monkeypatch):
     assert result["turns"][0]["log"] is None
     assert result["passed"] is False
     assert result["reason"] == "no log line"
+
+
+# ---------- grading (T4: FR-19, FR-20, FR-21) ----------
+
+
+def look_row(words=(("apple",),)) -> dict:
+    row = dict(row_of(data_v2(), "look01"))
+    row["pass"] = {"answer_all": [list(alts) for alts in words]}
+    return row
+
+
+def followup_row(words=(("1603", "sixteen"),)) -> dict:
+    row = dict(row_of(data_v2(), "fu01"))
+    row["pass"] = {"answer_all": [list(alts) for alts in words]}
+    return row
+
+
+def run_row(row, server):
+    write_files(data_v2())
+    with make_client(server) as client:
+        return ev2.run_case(client, row, sleep=lambda s: None, clock=Clock())
+
+
+def test_fr19_look_passes_when_answer_has_words_and_image_sent(env):
+    """Look passes when the logged answer holds the expected words and image_sent is true."""
+    result = run_row(look_row(), FakeServer(answers={1: "It is a red Apple."}))
+    assert result["passed"] is True and result["reason"] == "ok"
+
+
+def test_fr19_look_fails_when_answer_lacks_expected_word(env):
+    """Look fails with 'answer lacks one of [...]' when no alternative is in the answer."""
+    result = run_row(look_row(), FakeServer(answers={1: "It is a pear."}))
+    assert result["passed"] is False
+    assert result["reason"] == "answer lacks one of ['apple']"
+
+
+def test_fr19_look_alternatives_any_one_is_enough(env):
+    """Each inner list is alternatives: one match satisfies it; all inner lists must be satisfied."""
+    row = look_row((("apple", "fruit"), ("red", "green")))
+    assert run_row(row, FakeServer(answers={1: "A fruit, green."}))["passed"] is True
+    result = run_row(row, FakeServer(answers={1: "A fruit."}))
+    assert result["passed"] is False
+    assert result["reason"] == "answer lacks one of ['red', 'green']"
+
+
+def test_fr19_look_match_is_case_insensitive_whole_word(env):
+    """'pineapple' does not satisfy 'apple'; 'APPLE' does."""
+    assert (
+        run_row(look_row(), FakeServer(answers={1: "A pineapple."}))["passed"] is False
+    )
+    assert run_row(look_row(), FakeServer(answers={1: "APPLE!"}))["passed"] is True
+
+
+def test_fr19_look_fails_when_log_says_image_not_sent(env):
+    """Look fails with 'image_sent was false' when the log line says the image was not sent."""
+    server = FakeServer(answers={1: "An apple."})
+
+    def no_image(request):
+        resp = server(request)
+        if request.url.path != "/query":
+            return resp
+        lines = eval_config.LOG_PATH.read_text(encoding="utf-8").splitlines()
+        entry = json.loads(lines[-1])
+        entry["image_sent"] = False
+        eval_config.LOG_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+        return resp
+
+    write_files(data_v2())
+    with make_client(no_image) as client:
+        result = ev2.run_case(client, look_row(), sleep=lambda s: None, clock=Clock())
+    assert result["passed"] is False
+    assert result["reason"] == "image_sent was false"
+
+
+def test_fr19_look_both_failures_joined_with_semicolon(env):
+    """Several failure reasons are joined with '; '."""
+    server = FakeServer(answers={1: "A pear."})
+
+    def no_image(request):
+        resp = server(request)
+        if request.url.path != "/query":
+            return resp
+        entry = json.loads(
+            eval_config.LOG_PATH.read_text(encoding="utf-8").splitlines()[-1]
+        )
+        entry["image_sent"] = False
+        eval_config.LOG_PATH.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+        return resp
+
+    write_files(data_v2())
+    with make_client(no_image) as client:
+        result = ev2.run_case(client, look_row(), sleep=lambda s: None, clock=Clock())
+    assert result["reason"] == "answer lacks one of ['apple']; image_sent was false"
+
+
+def test_fr19_look_http_failure_keeps_http_reason(env):
+    """A 500 on a Look case still fails with the 'http 500: ...' reason."""
+    result = run_row(look_row(), FakeServer(status={1: 500}))
+    assert result["passed"] is False
+    assert result["reason"] == "http 500: llm: broke"
+
+
+def test_fr20_followup_passes_on_second_answer_and_session_continued(env):
+    """A follow-up passes when the second answer has the words and the log shows session_continued."""
+    server = FakeServer(
+        answers={1: "A playwright.", 2: "Around 1603."}, continued={2: True}
+    )
+    result = run_row(followup_row(), server)
+    assert result["passed"] is True and result["reason"] == "ok"
+
+
+def test_fr20_followup_fails_when_session_not_continued(env):
+    """A follow-up fails with 'session was not continued' when the second log has session_continued false."""
+    server = FakeServer(answers={2: "Around 1603."}, continued={2: False})
+    result = run_row(followup_row(), server)
+    assert result["passed"] is False
+    assert result["reason"] == "session was not continued"
+
+
+def test_fr20_followup_fails_when_second_answer_lacks_words(env):
+    """A follow-up fails when the second answer lacks the expected words."""
+    server = FakeServer(answers={2: "I do not know."}, continued={2: True})
+    result = run_row(followup_row(), server)
+    assert result["passed"] is False
+    assert result["reason"] == "answer lacks one of ['1603', 'sixteen']"
+
+
+def test_fr20_followup_first_answer_is_not_graded(env):
+    """Only the last turn is graded: a first answer without the words, and session_continued false on turn 1, do not fail."""
+    server = FakeServer(
+        answers={1: "nothing relevant", 2: "Sixteen hundred."},
+        continued={1: False, 2: True},
+    )
+    assert run_row(followup_row(), server)["passed"] is True
+
+
+def test_fr20_followup_first_turn_500_fails_with_http_reason(env):
+    """A 500 on the first turn fails the case with that http reason."""
+    result = run_row(followup_row(), FakeServer(status={1: 500}))
+    assert result["passed"] is False
+    assert result["reason"].startswith("http 500")
+
+
+def test_fr21_result_has_transcript_answer_tools_and_timings_of_last_turn(env):
+    """The case result carries the graded (last) turn's transcript, answer, tool names and stt/llm/tts/total seconds."""
+    server = FakeServer(
+        answers={1: "first", 2: "Around 1603."},
+        continued={2: True},
+        tool_calls={2: [{"name": "web_search"}, {"name": "log_concept"}]},
+        timings={
+            1: {"stt": 9000, "llm": 9000, "tts": 9000},
+            2: {"stt": 500, "llm": 2000, "tts": 250},
+        },
+    )
+    result = run_row(followup_row(), server)
+    assert result["transcript"] == "asked 2"
+    assert result["answer"] == "Around 1603."
+    assert result["tools"] == ["web_search", "log_concept"]
+    assert result["stt_s"] == pytest.approx(0.5)
+    assert result["llm_s"] == pytest.approx(2.0)
+    assert result["tts_s"] == pytest.approx(0.25)
+    assert result["total_s"] == pytest.approx(2.75)
+
+
+def test_fr21_look_result_fields_from_single_turn(env):
+    """A single-turn case reports its own turn's fields."""
+    server = FakeServer(
+        answers={1: "An apple."}, timings={1: {"stt": 1000, "llm": 3000, "tts": 500}}
+    )
+    result = run_row(look_row(), server)
+    assert result["transcript"] == "asked 1"
+    assert result["answer"] == "An apple."
+    assert result["tools"] == []
+    assert result["total_s"] == pytest.approx(4.5)
+
+
+def test_fr21_result_without_log_has_empty_fields_and_wall_total(env):
+    """Without a log line: transcript None, answer '', tools [], stage times 0.0, total_s is the turn's wall_s."""
+    result = run_row(look_row(), FakeServer(fail={1}))
+    turn = result["turns"][0]
+    assert result["transcript"] is None
+    assert result["answer"] == ""
+    assert result["tools"] == []
+    assert result["stt_s"] == 0.0
+    assert result["llm_s"] == 0.0
+    assert result["tts_s"] == 0.0
+    assert result["total_s"] == pytest.approx(turn["wall_s"])
+
+
+def test_fr21_failed_followup_second_turn_reports_that_turn(env):
+    """When the second turn fails, the result fields come from the last turn run (wall_s total if no log)."""
+    result = run_row(followup_row(), FakeServer(fail={2}))
+    assert result["transcript"] is None
+    assert result["total_s"] == pytest.approx(result["turns"][1]["wall_s"])
+
+
+def test_fr21_result_is_saved_in_progress_with_new_fields(main_env):
+    """main saves the new per-case fields in progress.json."""
+    assert ev2.main(["--group", "concept"]) == 0
+    saved = ev2.load_progress()["c01"]
+    for key in ("transcript", "answer", "tools", "stt_s", "llm_s", "tts_s", "total_s"):
+        assert key in saved
+    assert saved["transcript"] == "asked 1"
 
 
 # ---------- main ----------
