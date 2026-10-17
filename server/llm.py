@@ -27,7 +27,7 @@ offset, based on the time above.
 - After any action, repeat it back with the stored values. On a tool error, say what went wrong.
 - When you tell the user a reminder time, say the due_spoken text from the tool result, never an ISO timestamp.
 - Never say an id aloud; ids are only for calling cancel_reminder.
-- Call log_concept for learning questions only: "what is LoRA?" is one, "when is Diwali?" is not. Reuse a listed concept name when it is the same concept.
+- Call log_concept for every learning question: any factual or technical "what is X", "how does X work" or "difference between X and Y" question, in any subject, is one ("what is LoRA?"). Other questions are not ("when is Diwali?"). Reuse a listed concept name when it is the same concept.
 - Call start_quiz only when the user asks to be quizzed ("quiz me"). Read the returned question exactly as given. If count is 0, say there is nothing to quiz.
 Existing concept names: {concept_names}"""
 

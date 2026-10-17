@@ -1167,6 +1167,14 @@ def test_fr23_instruction_log_concept_for_learning_questions_only() -> None:
     assert "when is diwali?" in text
 
 
+def test_fr23_instruction_learning_questions_cover_any_subject() -> None:
+    """The log_concept rule covers factual and technical questions in any subject, not only AI/ML."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "how does x work" in text
+    assert "difference between x and y" in text
+    assert "any subject" in text
+
+
 def test_fr23_instruction_reuses_listed_concept_name() -> None:
     """The instruction says to reuse a listed concept name for the same concept."""
     text = llm.system_instruction(fixed_now(), ["LoRA"]).lower()
