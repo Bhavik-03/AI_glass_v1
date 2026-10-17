@@ -84,9 +84,29 @@ in one sentence.", each spoken answer gets one line of right or wrong plus a cor
 the end speaks the score; with no concepts it says there is nothing to quiz; ordinary
 questions never start a quiz (FR-24). Grading agreement (≥ 8 of 10) is checked in the M12 eval.
 
-## M12 (v2): Evaluation | planned
-Goal: frozen v2 set, `record --set v2`, `run_eval_v2`, v1 regression, README, tag v0.2.0
-FRs: all v2 quality targets · Tasks: not planned yet
+## M12 (v2): Evaluation | in progress
+Goal: frozen v2 set, `record --set v2`, `run_eval_v2`, v1 regression, README, tag v0.2.0 · GitHub milestone: #12
 
-Notes: FR-2, FR-4, FR-6 to FR-15 and FR-18 are unchanged from v1; the v1 regression run
-in M12 checks them. Issue #38 stays open for v6.
+| Task | FR | Files | Done when | Test | Issue | Done |
+| --- | --- | --- | --- | --- | --- | --- |
+| M12-T1 | FR-19, FR-21, FR-23, FR-24 | eval/questions_v2.json (+ tests/test_eval_questions_v2.py) | 20 Look rows (each names its screenshot file), 10 follow-up cases of 2 turns, 20 concept rows (about 10 learning questions, 10 not), 10 quiz rows (seed concept with summary, spoken answer, judged right or wrong; 5 each); each row has id, group, spoken text and pass rule; one shared "quiz me" start text; test checks counts, unique ids, fields and order | pytest | #99 | [ ] |
+| M12-T2 | FR-1, FR-21 | eval/config.py, eval/record.py (+ tests/test_record.py) | `python -m eval.record --set v2` uses `eval/questions_v2.json` and saves clips to `data/eval_v2/` (both turns of a follow-up case, the quiz start clip once); restart skips saved clips; no `--set` behaves as in v1; tests use a fake recorder and fake input | pytest | #100 | [ ] |
+| M12-T3 | FR-22, FR-16, FR-17 | eval/run_eval_v2.py, eval/config.py (+ tests/test_run_eval_v2.py) | Checks `/health`, the clips and the screenshots; restore-pending marker and DB backup with notes, reminders and concepts cleared, restored at the end and on Ctrl+C as in v1; `POST /session/reset` before each case, the 2 turns of a follow-up case in one session; 4 s per Gemini call used (15 per minute); `--group look\|followup\|concept\|quiz` runs one group, and finished cases are kept in `data/eval_v2/progress.json` and skipped on the next run (`--fresh` clears it); a 500 is recorded and the run continues; tests use a temp DB and a fake server | pytest | #101 | [ ] |
+| M12-T4 | FR-19, FR-20, FR-21 | eval/run_eval_v2.py (+ tests/test_run_eval_v2.py) | Look sends the saved screenshot and passes on the expected content words in the answer and `image` true in the log line; a follow-up case passes when the second answer holds its expected words and the log shows the session continued; per case: transcript, answer, tools, stt/llm/tts/total seconds, pass or fail and the reason | pytest | #102 | [ ] |
+| M12-T5 | FR-23, FR-24 | eval/run_eval_v2.py (+ tests/test_run_eval_v2.py) | Concept row passes when a concept row is added (or not) as expected, no duplicate name, and the log `concept` matches; quiz row seeds its concept as status new, sends the start clip, then the answer clip, and passes when the stored status (right or wrong) equals the judged one | pytest | #103 | [ ] |
+| M12-T6 | FR-19, FR-21, FR-23, FR-24 | eval/run_eval_v2.py, eval/config.py (+ tests/test_run_eval_v2.py) | Merges the progress file into `eval/results/<date>_v2.md` and `.json`: accuracy per group, Look median and worst total latency; verdict on Look ≥ 80%, follow-ups ≥ 8 of 10, concepts ≥ 90%, quiz ≥ 8 of 10, Look median ≤ 8 s (`LOOK_MEDIAN_MAX_S`); secrets check as in v1; a partial run says which groups are missing | pytest | #104 | [ ] |
+| M12-T7 | FR-19, FR-24 | docs/plan.md | You save the 20 screenshots (JPEG, longest side ≤ 1280 px, ≤ 2 MB) in `data/eval_v2/screenshots/`, fit the Look pass rules to what they show, judge the 10 quiz answers, and record all clips with `eval.record --set v2`; all before the first run | manual | #105 | [ ] |
+| M12-T8 | FR-19, FR-21, FR-23, FR-24 | docs/plan.md | First run, one group at a time (free tier: 500 requests a day); numbers and a cause per failure (STT, tool choice, prompt, deadline, other) recorded below; `eval/questions_v2.json` frozen from now on (only an obvious error, logged here) | manual | #106 | [ ] |
+| M12-T9 | per failure | files per T8 cause (+ tests) | Only where T8 numbers justify it: one fix per cause, no hint words taken from the test questions; only the failing rows re-run; skipped if every v2 target is met | pytest | #107 | [ ] |
+| M12-T10 | FR-4, FR-5, FR-8, FR-9 | docs/plan.md | `run_eval` re-run unchanged on the final code: every v1 target met except transcription, which must be ≥ 26 of 30; numbers recorded below | manual | #108 | [ ] |
+| M12-T11 | all v2 quality targets | docs/plan.md | Full v2 run on the final code; every target met; the final `_v2` report and the v1 regression report are committed with `git add -f`; numbers recorded below | manual | #109 | [ ] |
+| M12-T12 | — | README.md | What v2 does, keys, setup, how to run server, client and both evals, the final numbers; docs only, after T11 | manual | #110 | [ ] |
+
+Notes: no new dependency. T1 to T6 are tool tasks (no hint or prompt change); T7 onward need
+the real models and you. Pacing counts Gemini calls from the log line (tool calls + 1), 4 s
+each. The runner never deletes the DB file (backup and marker as in v1). FR-2, FR-4, FR-6 to
+FR-15 and FR-18 are unchanged from v1; T10 checks them. Issue #38 stays open for v6. Tag
+v0.2.0 comes from /ship-milestone.
+
+Manual checks: after T3, run one group with the real server and check the progress file
+survives Ctrl+C and the DB is restored (FR-22).
