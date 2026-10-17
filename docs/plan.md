@@ -47,12 +47,23 @@ Manual checks: Right Alt speech clear on playback in 20 of 20 tests (FR-1); Righ
 graph, ask "what is this graph?" and hear an answer about it (FR-19); a follow-up within 120 s
 uses the same screenshot (FR-21). The 8 s median with an image is checked in the M12 eval.
 
-## M10 (v2): Concept tracker | planned
-Goal: concepts table, `log_concept` and `learned_this_week`, names in the prompt
-FRs: FR-23, FR-25, FR-17 · Tasks: not planned yet
-Add to the system instruction that the user is an engineering student learning AI/ML, so
-ambiguous terms take the AI/ML meaning (found in the M8 manual check: 'Lora' was answered as
-LoRa radio).
+## M10 (v2): Concept tracker | in progress
+Goal: concepts table, `log_concept` and `learned_this_week`, names in the prompt · GitHub milestone: #10
+
+| Task | FR | Files | Done when | Test | Issue | Done |
+| --- | --- | --- | --- | --- | --- | --- |
+| M10-T1 | FR-5 | server/llm.py (+ tests/test_llm.py) | The system instruction says the user is an engineering student learning AI/ML, so ambiguous terms take the AI/ML meaning (M8 manual check: 'Lora' was answered as LoRa radio); a test checks `system_instruction()` contains it | pytest | #83 | [ ] |
+| M10-T2 | FR-23 | server/store.py (+ tests/test_store.py) | A `concepts` table (id, name unique case-insensitive, summary, first_asked, last_asked, status new/right/wrong, last_quizzed empty); `log_concept(name, summary, now)` adds a row with status new and first and last asked set, or for a name matching case-insensitively updates `last_asked` and the summary and adds no row; returns `{name, summary, status, new}`; `concept_names()` lists the names; temp DB | pytest | #84 | [ ] |
+| M10-T3 | FR-23 | server/tools.py (+ tests/test_tools.py) | Declaration `log_concept(name, summary)`; dispatch returns `{name, summary, status, new}`; a missing or empty name or summary returns `{error}` and stores nothing | pytest | #85 | [ ] |
+| M10-T4 | FR-25 | server/config.py, server/store.py, server/tools.py (+ tests/test_store.py, tests/test_tools.py) | Declaration `learned_this_week()` returns `{count, names}`; with 7 concepts first asked in the last `LEARNED_DAYS` (7) days and 2 older, count 7 and the `LEARNED_MAX_NAMES` (5) most recent names; with none, count 0 and no names | pytest | #86 | [ ] |
+| M10-T5 | FR-23, FR-5 | server/llm.py (+ tests/test_llm.py) | The system instruction says to call `log_concept` for learning questions only ("what is LoRA?" is one, "when is Diwali?" is not), to reuse a listed name for the same concept, and never to put concepts in a `web_search` query; it lists the existing concept names from `store` (temp DB, fake client) | pytest | #87 | [ ] |
+| M10-T6 | FR-17 | server/main.py (+ tests/test_server.py) | Every `/query` log line has `concept`: the name from an ok `log_concept` call in that query, else null; failed queries included | pytest | #88 | [ ] |
+
+Manual checks: with the real model, "what is LoRA?" adds one concept row with status new and
+the answer is about the fine-tuning method; asking "what is lora used for?" later updates that
+row and adds none; "when is Diwali?" adds none; "what did I learn this week?" gives the count
+and names within the FR-5 limit (FR-23, FR-25). The 20-question concept target is checked in
+the M12 eval.
 
 ## M11 (v2): Quiz me | planned
 Goal: `start_quiz`, quiz state in the session, stop, grading call, score, 300 s wait
