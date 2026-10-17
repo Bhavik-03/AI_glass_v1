@@ -97,7 +97,7 @@ Goal: frozen v2 set, `record --set v2`, `run_eval_v2`, v1 regression, README, ta
 | M12-T6 | FR-19, FR-21, FR-23, FR-24 | eval/run_eval_v2.py, eval/config.py (+ tests/test_run_eval_v2.py) | Merges the progress file into `eval/results/<date>_v2.md` and `.json`: accuracy per group, Look median and worst total latency; verdict on Look ≥ 80%, follow-ups ≥ 8 of 10, concepts ≥ 90%, quiz ≥ 8 of 10, Look median ≤ 8 s (`LOOK_MEDIAN_MAX_S`); secrets check as in v1; a partial run says which groups are missing | pytest | #104 | [x] |
 | M12-T7 | FR-19, FR-24 | docs/plan.md | You save the 20 screenshots (JPEG, longest side ≤ 1280 px, ≤ 2 MB) in `data/eval_v2/screenshots/`, fit the Look pass rules to what they show, judge the 10 quiz answers, and record all clips with `eval.record --set v2`; all before the first run | manual | #105 | [ ] |
 | M12-T8 | FR-19, FR-21, FR-23, FR-24 | docs/plan.md | First run, one group at a time (free tier: 500 requests a day); numbers and a cause per failure (STT, tool choice, prompt, deadline, other) recorded below; `eval/questions_v2.json` frozen from now on (only an obvious error, logged here) | manual | #106 | [ ] |
-| M12-T9 | per failure | files per T8 cause (+ tests) | Only where T8 numbers justify it: one fix per cause, no hint words taken from the test questions; only the failing rows re-run; skipped if every v2 target is met | pytest | #107 | [ ] |
+| M12-T9 | per failure | files per T8 cause (+ tests) | Only where T8 numbers justify it: one fix per cause, no hint words taken from the test questions; only the failing rows re-run; skipped if every v2 target is met | pytest | #107 | [x] |
 | M12-T10 | FR-4, FR-5, FR-8, FR-9 | docs/plan.md | `run_eval` re-run unchanged on the final code: every v1 target met except transcription, which must be ≥ 26 of 30; numbers recorded below | manual | #108 | [ ] |
 | M12-T11 | all v2 quality targets | docs/plan.md | Full v2 run on the final code; every target met; the final `_v2` report and the v1 regression report are committed with `git add -f`; numbers recorded below | manual | #109 | [ ] |
 | M12-T12 | — | README.md | What v2 does, keys, setup, how to run server, client and both evals, the final numbers; docs only, after T11 | manual | #110 | [ ] |
@@ -107,6 +107,17 @@ the real models and you. Pacing counts Gemini calls from the log line (tool call
 each. The runner never deletes the DB file (backup and marker as in v1). FR-2, FR-4, FR-6 to
 FR-15 and FR-18 are unchanged from v1; T10 checks them. Issue #38 stays open for v6. Tag
 v0.2.0 comes from /ship-milestone.
+
+T8 results (first run): look 17/20, followup 7/10, concept 15/20, quiz 0/10; Look median
+4.0 s, worst 7.5 s. Causes, traced through logs/queries.jsonl and the code:
+- quiz: the quiz start clip was heard as "Who is me?"; clip re-recorded, no code fix.
+- f03, f10, l06, l19, l20: checker word-form false negatives ("stops" for "stop"); fixed in
+  `eval/run_eval.py` (`_has_word` accepts s, es, ing), shared by v1 and v2.
+- c02, c04, c07, c10: log_concept prompt gap (plain factual questions skipped); fixed in
+  `server/llm.py`.
+- f05: "tell me more" routing gap (called list_notes after an unrelated topic); fixed in
+  `server/llm.py`.
+- c09: Fourier-transform STT mis-hear; left as is, same class as issue #38.
 
 Manual checks: after T3, run one group with the real server and check the progress file
 survives Ctrl+C and the DB is restored (FR-22).
