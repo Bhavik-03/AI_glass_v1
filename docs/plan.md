@@ -98,7 +98,7 @@ Goal: frozen v2 set, `record --set v2`, `run_eval_v2`, v1 regression, README, ta
 | M12-T7 | FR-19, FR-24 | docs/plan.md | You save the 20 screenshots (JPEG, longest side ≤ 1280 px, ≤ 2 MB) in `data/eval_v2/screenshots/`, fit the Look pass rules to what they show, judge the 10 quiz answers, and record all clips with `eval.record --set v2`; all before the first run | manual | #105 | [ ] |
 | M12-T8 | FR-19, FR-21, FR-23, FR-24 | docs/plan.md | First run, one group at a time (free tier: 500 requests a day); numbers and a cause per failure (STT, tool choice, prompt, deadline, other) recorded below; `eval/questions_v2.json` frozen from now on (only an obvious error, logged here) | manual | #106 | [ ] |
 | M12-T9 | per failure | files per T8 cause (+ tests) | Only where T8 numbers justify it: one fix per cause, no hint words taken from the test questions; only the failing rows re-run; skipped if every v2 target is met | pytest | #107 | [x] |
-| M12-T10 | FR-4, FR-5, FR-8, FR-9 | docs/plan.md | `run_eval` re-run unchanged on the final code: every v1 target met except transcription, which must be ≥ 26 of 30; numbers recorded below | manual | #108 | [ ] |
+| M12-T10 | FR-4, FR-5, FR-8, FR-9 | docs/plan.md | `run_eval` re-run unchanged on the final code: every v1 target met except transcription, which must be ≥ 26 of 30; numbers recorded below | manual | #108 | [x] |
 | M12-T11 | all v2 quality targets | docs/plan.md | Full v2 run on the final code; every target met; the final `_v2` report and the v1 regression report are committed with `git add -f`; numbers recorded below | manual | #109 | [ ] |
 | M12-T12 | — | README.md | What v2 does, keys, setup, how to run server, client and both evals, the final numbers; docs only, after T11 | manual | #110 | [ ] |
 
@@ -119,6 +119,11 @@ T8 results (first run): look 17/20, followup 7/10, concept 15/20, quiz 0/10; Loo
   `server/llm.py`.
 - c09: Fourier-transform STT mis-hear; left as is, same class as issue #38.
 - quiz_start reworded to 'Please quiz me.' after two short-phrase mis-transcriptions blocked the quiz group entirely.
+
+T10 result (v1 regression, `eval/results/2026-10-17_1611.md`): general 8/10, notes 10/10,
+reminders 10/10 (every group >= 80%); median total 3.4 s, worst 9.6 s (target <= 15 s);
+0 errors; transcription 26/30 (87%), which meets the T10 bar of >= 26/30 (below the v1
+90% target, as documented in spec.md); secrets ok.
 
 Manual checks: after T3, run one group with the real server and check the progress file
 survives Ctrl+C and the DB is restored (FR-22).
