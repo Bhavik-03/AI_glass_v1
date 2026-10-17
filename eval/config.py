@@ -28,3 +28,7 @@ RESULTS_DIR = ROOT / "eval" / "results"
 GROUP_PASS_MIN = 0.8
 MEDIAN_TOTAL_MAX_S = 15
 TRANSCRIPTION_MIN = 0.9
+SCREENSHOT_DIR_V2 = CLIP_DIR_V2 / "screenshots"
+MARKER_PATH_V2 = CLIP_DIR_V2 / "restore-pending"
+PROGRESS_PATH_V2 = CLIP_DIR_V2 / "progress.json"
+GROUPS_V2 = ("look", "followup", "concept", "quiz")
