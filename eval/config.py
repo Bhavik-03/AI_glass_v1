@@ -6,6 +6,8 @@ from server import config as server_config
 ROOT = Path(__file__).resolve().parent.parent
 QUESTIONS_PATH = ROOT / "eval" / "questions.json"
 CLIP_DIR = ROOT / "data" / "eval"
+QUESTIONS_V2_PATH = ROOT / "eval" / "questions_v2.json"
+CLIP_DIR_V2 = ROOT / "data" / "eval_v2"
 MARKER_PATH = CLIP_DIR / "restore-pending"
 DB_PATH = server_config.DB_PATH
 LOG_PATH = server_config.LOG_PATH
