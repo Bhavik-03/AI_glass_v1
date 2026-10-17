@@ -1,5 +1,6 @@
 import io
 import logging
+import re
 import time
 import wave
 from contextlib import asynccontextmanager
@@ -105,10 +106,21 @@ def _error(status_code: int, message: str, record: dict) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"error": message})
 
 
+def _is_stop(transcript: str) -> bool:
+    """Whether the transcript says the stop phrase, ignoring case and punctuation (FR-24)."""
+    words = re.sub(r"[^\w\s]", "", transcript.lower()).split()
+    return config.QUIZ_STOP_PHRASE in " ".join(words)
+
+
 def _quiz_answer(record: dict, quiz: dict, asked_at: datetime) -> Response:
     """Grade the transcript as the answer to the current quiz question and speak the
     feedback plus the next question or the score (FR-24)."""
     timings = record["timings_ms"]
+    if _is_stop(record["question"]):
+        record["answer"] = "Quiz stopped."
+        wav = run_stage("tts", timings, tts.synthesize, record["answer"])
+        session.end_quiz()
+        return Response(content=wav, media_type="audio/wav")
     concepts, index = quiz["concepts"], quiz["index"]
     concept = concepts[index]
     graded = run_stage(
