@@ -18,7 +18,7 @@ Manual checks: with the real model, ask "what is LoRA?", then "what is it used f
 answer about LoRA (FR-21); the same follow-up after 120 s is answered as a new question; with 7
 notes, the list says the count and 5 notes, and "tell me more" gives the rest (FR-5).
 
-## M9 (v2): Look | in progress
+## M9 (v2): Look | done
 Goal: Right Alt voice, Right Ctrl voice + screenshot; image to Gemini and in the session · GitHub milestone: #9
 
 | Task | FR | Files | Done when | Test | Issue | Done |
