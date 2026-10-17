@@ -105,6 +105,35 @@ def _error(status_code: int, message: str, record: dict) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"error": message})
 
 
+def _quiz_answer(record: dict, quiz: dict, asked_at: datetime) -> Response:
+    """Grade the transcript as the answer to the current quiz question and speak the
+    feedback plus the next question or the score (FR-24)."""
+    timings = record["timings_ms"]
+    concepts, index = quiz["concepts"], quiz["index"]
+    concept = concepts[index]
+    graded = run_stage(
+        "llm",
+        timings,
+        llm.grade,
+        concept["name"],
+        concept["summary"],
+        record["question"],
+    )
+    if index + 1 < len(concepts):
+        follow = tools.quiz_question(concepts[index + 1]["name"])
+    else:
+        right = quiz["right"] + graded["correct"]
+        follow = tools.quiz_score_text(right, len(concepts))
+    record["answer"] = f"{graded['feedback']} {follow}"
+    wav = run_stage("tts", timings, tts.synthesize, record["answer"])
+    # The quiz moves on only after the answer is spoken, so a failure repeats the question.
+    store.set_quiz_result(
+        concept["name"], graded["correct"], asked_at.isoformat(timespec="seconds")
+    )
+    session.answer_quiz(graded["correct"], asked_at)
+    return Response(content=wav, media_type="audio/wav")
+
+
 def _answer(data: bytes | None, image: bytes | None, record: dict) -> Response:
     if problem := _audio_problem(data):
         return _error(400, problem, record)
@@ -122,6 +151,8 @@ def _answer(data: bytes | None, image: bytes | None, record: dict) -> Response:
         if not record["question"].strip():
             return _error(400, "no speech detected", record)
         asked_at = now()
+        if quiz := session.quiz(asked_at):
+            return _quiz_answer(record, quiz, asked_at)
         turns = session.turns(asked_at)
         record["session_continued"] = bool(turns)
         # A text follow-up is about the screenshot saved with an earlier turn (FR-21).
