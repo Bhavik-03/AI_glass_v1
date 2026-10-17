@@ -223,3 +223,126 @@ def test_fr21_concurrent_add_turn_keeps_max_turns():
         t.join()
     assert errors == []
     assert len(session.turns(T0 + secs(1))) == config.SESSION_MAX_TURNS
+
+
+CONCEPTS = [
+    {"name": "LoRA", "summary": "Low-rank fine-tuning.", "status": "new"},
+    {"name": "Attention", "summary": "Weights tokens.", "status": "learning"},
+    {"name": "Softmax", "summary": "Makes probabilities.", "status": "new"},
+]
+
+
+def test_fr24_answer_wait_is_300_seconds():
+    """The wait for a quiz answer is config.QUIZ_ANSWER_WAIT_S = 300 s."""
+    assert config.QUIZ_ANSWER_WAIT_S == 300
+
+
+def test_fr24_no_quiz_by_default():
+    """With no quiz started, quiz() returns None."""
+    assert session.quiz(T0) is None
+
+
+def test_fr24_start_quiz_and_read():
+    """start_quiz begins at index 0 with 0 right and the given concepts."""
+    session.start_quiz(CONCEPTS, T0)
+    assert session.quiz(T0 + secs(1)) == {
+        "concepts": CONCEPTS,
+        "index": 0,
+        "right": 0,
+    }
+
+
+def test_fr24_answer_quiz_advances_and_counts_right_and_wrong():
+    """answer_quiz moves to the next concept and counts only right answers."""
+    session.start_quiz(CONCEPTS, T0)
+    res = session.answer_quiz(True, T0 + secs(10))
+    assert res == {"right": 1, "total": 3, "next": CONCEPTS[1]}
+    assert session.quiz(T0 + secs(11))["index"] == 1
+    res = session.answer_quiz(False, T0 + secs(20))
+    assert res == {"right": 1, "total": 3, "next": CONCEPTS[2]}
+    state = session.quiz(T0 + secs(21))
+    assert state["index"] == 2
+    assert state["right"] == 1
+
+
+def test_fr24_last_answer_returns_score_and_clears_quiz():
+    """After the last concept, next is None with the score, and the quiz ends."""
+    session.start_quiz(CONCEPTS[:2], T0)
+    session.answer_quiz(True, T0 + secs(5))
+    res = session.answer_quiz(True, T0 + secs(10))
+    assert res == {"right": 2, "total": 2, "next": None}
+    assert session.quiz(T0 + secs(11)) is None
+
+
+def test_fr22_session_expiry_does_not_end_quiz():
+    """The 120 s session expiry clears turns but not a running quiz."""
+    session.add_turn("q", "a", T0)
+    session.start_quiz(CONCEPTS, T0)
+    later = T0 + secs(200)
+    assert session.quiz(later) is not None
+    assert session.turns(later) == []
+
+
+def test_fr24_quiz_running_at_299_s():
+    """299 s after the last question the quiz is still running."""
+    session.start_quiz(CONCEPTS, T0)
+    assert session.quiz(T0 + secs(299)) is not None
+
+
+def test_fr24_quiz_ends_at_300_s():
+    """300 s after the last question the quiz ends quietly."""
+    session.start_quiz(CONCEPTS, T0)
+    assert session.quiz(T0 + secs(300)) is None
+    assert session.quiz(T0 + secs(301)) is None
+
+
+def test_fr24_answering_restarts_the_wait():
+    """A graded answer restarts the 300 s wait from that moment."""
+    session.start_quiz(CONCEPTS, T0)
+    session.answer_quiz(True, T0 + secs(250))
+    assert session.quiz(T0 + secs(250 + 299)) is not None
+    assert session.quiz(T0 + secs(250 + 300)) is None
+
+
+def test_fr24_reset_clears_quiz():
+    """reset() also clears a running quiz."""
+    session.start_quiz(CONCEPTS, T0)
+    session.reset()
+    assert session.quiz(T0 + secs(1)) is None
+
+
+def test_fr24_end_quiz_keeps_turns_and_image():
+    """end_quiz clears only the quiz; turns and image stay."""
+    session.add_turn("q", "a", T0, image=IMG)
+    session.start_quiz(CONCEPTS, T0)
+    session.end_quiz()
+    assert session.quiz(T0 + secs(1)) is None
+    assert session.turns(T0 + secs(1)) == [{"question": "q", "answer": "a"}]
+    assert session.image(T0 + secs(1)) == IMG
+
+
+def test_fr24_answer_quiz_without_quiz_raises():
+    """answer_quiz with no running quiz raises RuntimeError."""
+    with pytest.raises(RuntimeError):
+        session.answer_quiz(True, T0)
+
+
+def test_fr24_answer_quiz_after_wait_expired_raises():
+    """After the 300 s wait ended the quiz, answer_quiz raises RuntimeError."""
+    session.start_quiz(CONCEPTS, T0)
+    session.quiz(T0 + secs(300))
+    with pytest.raises(RuntimeError):
+        session.answer_quiz(True, T0 + secs(301))
+
+
+def test_fr24_quiz_returns_a_copy():
+    """Mutating the dict from quiz() does not change the stored quiz."""
+    session.start_quiz(CONCEPTS, T0)
+    got = session.quiz(T0 + secs(1))
+    got["index"] = 2
+    got["right"] = 9
+    got["concepts"].clear()
+    again = session.quiz(T0 + secs(2))
+    assert again["index"] == 0
+    assert again["right"] == 0
+    assert len(again["concepts"]) == 3
