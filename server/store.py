@@ -152,3 +152,17 @@ def concept_names() -> list[str]:
     with _connect() as con:
         rows = con.execute("SELECT name FROM concepts ORDER BY id").fetchall()
     return [row["name"] for row in rows]
+
+
+def learned_since(since: str, limit: int) -> dict:
+    """Count concepts first asked at or after `since`; names of the `limit` newest."""
+    with _connect() as con:
+        count = con.execute(
+            "SELECT COUNT(*) FROM concepts WHERE first_asked >= ?", (since,)
+        ).fetchone()[0]
+        rows = con.execute(
+            "SELECT name FROM concepts WHERE first_asked >= ?"
+            " ORDER BY first_asked DESC, id DESC LIMIT ?",
+            (since, limit),
+        ).fetchall()
+    return {"count": count, "names": [row["name"] for row in rows]}

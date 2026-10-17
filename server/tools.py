@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from server import config, search, store
@@ -88,6 +88,14 @@ DECLARATIONS = [
             "required": ["name", "summary"],
         },
     },
+    {
+        "name": "learned_this_week",
+        "description": (
+            f"Count the concepts first asked in the last {config.LEARNED_DAYS} days"
+            " and name the most recent ones."
+        ),
+        "parameters_json_schema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -150,6 +158,13 @@ def _log_concept(args: dict, now: datetime) -> dict:
     )
 
 
+def _learned_this_week(args: dict, now: datetime) -> dict:
+    since = now - timedelta(days=config.LEARNED_DAYS)
+    return store.learned_since(
+        since.isoformat(timespec="seconds"), config.LEARNED_MAX_NAMES
+    )
+
+
 def _reminder_id(value: object) -> int | None:
     # Gemini may send 3.0 for 3; bool is an int subclass but never an id.
     if isinstance(value, bool):
@@ -179,6 +194,7 @@ _HANDLERS = {
     "cancel_reminder": _cancel_reminder,
     "list_notes": _list_notes,
     "log_concept": _log_concept,
+    "learned_this_week": _learned_this_week,
 }
 
 

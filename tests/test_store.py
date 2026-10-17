@@ -408,6 +408,36 @@ def test_fr23_init_creates_concepts_table(monkeypatch, tmp_path):
     assert "concepts" in table_names(path)
 
 
+def test_fr25_learned_since_counts_all_and_limits_names_newest_first(db):
+    """learned_since counts every concept first asked at or after since, and lists the `limit` newest names, newest first."""
+    for day in (3, 1, 5, 2, 4, 6):
+        store.log_concept(f"c{day}", "s", f"2026-10-0{day}T10:00:00+05:30")
+    store.log_concept("old", "s", "2026-09-01T10:00:00+05:30")
+
+    result = store.learned_since("2026-10-02T10:00:00+05:30", 3)
+
+    assert result == {"count": 5, "names": ["c6", "c5", "c4"]}
+
+
+def test_fr25_learned_since_ignores_last_asked(db):
+    """The window uses first_asked: a concept asked again recently but first asked before since is not counted."""
+    store.log_concept("LoRA", "s", "2026-09-01T10:00:00+05:30")
+    store.log_concept("lora", "s2", "2026-10-09T10:00:00+05:30")
+
+    assert store.learned_since("2026-10-03T10:00:00+05:30", 5) == {
+        "count": 0,
+        "names": [],
+    }
+
+
+def test_fr25_learned_since_empty(db):
+    """With no concepts, learned_since returns count 0 and no names."""
+    assert store.learned_since("2026-10-03T10:00:00+05:30", 5) == {
+        "count": 0,
+        "names": [],
+    }
+
+
 def traced_statements(monkeypatch, call) -> list[str]:
     statements: list[str] = []
 
