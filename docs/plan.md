@@ -47,7 +47,7 @@ Manual checks: Right Alt speech clear on playback in 20 of 20 tests (FR-1); Righ
 graph, ask "what is this graph?" and hear an answer about it (FR-19); a follow-up within 120 s
 uses the same screenshot (FR-21). The 8 s median with an image is checked in the M12 eval.
 
-## M10 (v2): Concept tracker | in progress
+## M10 (v2): Concept tracker | done
 Goal: concepts table, `log_concept` and `learned_this_week`, names in the prompt · GitHub milestone: #10
 
 | Task | FR | Files | Done when | Test | Issue | Done |
