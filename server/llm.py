@@ -5,7 +5,7 @@ from datetime import datetime
 from google import genai
 from google.genai import types
 
-from server import config, tools
+from server import config, store, tools
 
 SYSTEM_INSTRUCTION = """\
 You are a voice assistant. Your answers are spoken aloud.
@@ -20,12 +20,14 @@ soonest reminders first); give each reminder's date and time.
 - When the user says "tell me more", give the next {list_items} items or one more short \
 layer, within the same limit.
 - Call web_search when a question needs live information. Put the date or the home city in the \
-query when the question depends on them. Never put note or reminder content in a query.
+query when the question depends on them. Never put note, reminder, concept or screen content in a query.
 - Use the tools for notes and reminders. Turn relative times into an exact ISO 8601 time with \
 offset, based on the time above.
 - After any action, repeat it back with the stored values. On a tool error, say what went wrong.
 - When you tell the user a reminder time, say the due_spoken text from the tool result, never an ISO timestamp.
-- Never say an id aloud; ids are only for calling cancel_reminder."""
+- Never say an id aloud; ids are only for calling cancel_reminder.
+- Call log_concept for learning questions only: "what is LoRA?" is one, "when is Diwali?" is not. Reuse a listed concept name when it is the same concept.
+Existing concept names: {concept_names}"""
 
 SKIPPED_RESULT = {
     "error": "skipped: no time left; tell the user you could not look it up, do not guess"
@@ -35,8 +37,9 @@ _client: genai.Client | None = None
 _clock = time.monotonic
 
 
-def system_instruction(now: datetime) -> str:
-    """Fill the system instruction with the current time and the home city (FR-6)."""
+def system_instruction(now: datetime, concept_names: Sequence[str] = ()) -> str:
+    """Fill the system instruction with the current time, the home city (FR-6) and the
+    existing concept names, so Gemini reuses them (FR-23)."""
     return SYSTEM_INSTRUCTION.format(
         weekday=now.strftime("%A"),
         day=now.day,
@@ -48,6 +51,7 @@ def system_instruction(now: datetime) -> str:
         max_sentences=config.ANSWER_MAX_SENTENCES,
         max_words=config.ANSWER_MAX_WORDS,
         list_items=config.LIST_MAX_ITEMS,
+        concept_names=", ".join(concept_names) or "none yet",
     )
 
 
@@ -148,7 +152,7 @@ def _ask(
 ) -> tuple[str, bool]:
     start = _clock()
     request = types.GenerateContentConfig(
-        system_instruction=system_instruction(now),
+        system_instruction=system_instruction(now, store.concept_names()),
         tools=[types.Tool(function_declarations=tools.DECLARATIONS)],
         tool_config=types.ToolConfig(
             function_calling_config=types.FunctionCallingConfig(mode="VALIDATED")

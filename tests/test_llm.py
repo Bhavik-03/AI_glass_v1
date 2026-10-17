@@ -129,9 +129,9 @@ def test_fr5_instruction_says_user_learns_ai_ml() -> None:
 
 
 def test_fr6_instruction_has_privacy_rule() -> None:
-    """The instruction says never to put note or reminder content in a search."""
+    """The instruction says never to put note, reminder, concept or screen content in a search."""
     text = llm.system_instruction(fixed_now()).lower()
-    assert "never put note or reminder content in a query" in text
+    assert "never put note, reminder, concept or screen content in a query" in text
 
 
 # --- ask(): Gemini call, tool loop, deadline (FR-5, FR-7). Fake client, no network. ---
@@ -1149,6 +1149,53 @@ def test_fr20_image_stays_in_question_content_in_tool_round(monkeypatch) -> None
     assert len(second) == 3
     assert second[1] == first.candidates[0].content
     assert second[2].parts[0].function_response.id == "call-1"
+
+
+@pytest.fixture(autouse=True)
+def _temp_db(db) -> None:
+    """ask() reads store.concept_names(): every test in this file uses the temp DB."""
+
+
+def test_fr23_instruction_log_concept_for_learning_questions_only() -> None:
+    """The instruction says to call log_concept for learning questions only: 'what is LoRA?'
+    is one, 'when is Diwali?' is not."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "log_concept" in text
+    assert "learning question" in text
+    assert "what is lora?" in text
+    assert "when is diwali?" in text
+
+
+def test_fr23_instruction_reuses_listed_concept_name() -> None:
+    """The instruction says to reuse a listed concept name for the same concept."""
+    text = llm.system_instruction(fixed_now(), ["LoRA"]).lower()
+    assert "reuse" in text
+
+
+def test_fr5_instruction_never_puts_concepts_in_web_search_query() -> None:
+    """The instruction says never to put concepts in a web_search query."""
+    lines = llm.system_instruction(fixed_now()).lower().splitlines()
+    assert any(
+        "web_search" in line and "concept" in line and "never" in line for line in lines
+    )
+
+
+def test_fr23_instruction_lists_given_concept_names() -> None:
+    """system_instruction lists the existing concept names it is given."""
+    text = llm.system_instruction(fixed_now(), ["LoRA", "Transformers"])
+    assert "LoRA" in text
+    assert "Transformers" in text
+
+
+def test_fr23_ask_puts_stored_concept_names_in_instruction(monkeypatch) -> None:
+    """ask reads the concept names from the store on each request and the Gemini request's
+    system_instruction lists them."""
+    from server import store
+
+    store.log_concept("Backpropagation", "summary", "2026-10-09T09:00:00+05:30")
+    fake = install_fake(monkeypatch, [text_response("answer")])
+    llm.ask("what is it?", fixed_now())
+    assert "Backpropagation" in fake.models.calls[0]["config"].system_instruction
 
 
 def test_fr5_api_failure_propagates(monkeypatch) -> None:
