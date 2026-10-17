@@ -91,6 +91,14 @@ def declaration(name):
     return matches[0]
 
 
+def test_fr5_web_search_declaration_forbids_private_content():
+    """The web_search declaration says the query must never contain note, reminder, concept or screen content."""
+    description = declaration("web_search")["description"].lower()
+    assert "never" in description
+    for word in ("note", "reminder", "concept", "screen"):
+        assert word in description
+
+
 def test_fr8_declares_add_note_with_required_text():
     """DECLARATIONS has one add_note entry whose schema requires a string 'text'."""
     decl = declaration("add_note")
