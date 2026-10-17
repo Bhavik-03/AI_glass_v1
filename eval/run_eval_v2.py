@@ -1,6 +1,7 @@
 import argparse
 import json
 import sqlite3
+import statistics
 import time
 from collections.abc import Callable, Sequence
 from contextlib import closing
@@ -10,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from eval import config
+from eval import config, run_eval
 from eval.record import v2_items
 from eval.run_eval import (
     _answer_failures,
@@ -22,6 +23,7 @@ from eval.run_eval import (
     log_offset,
     pace,
     read_log_since,
+    secrets_problems,
     timings_s,
 )
 from server import config as server_config
@@ -253,6 +255,118 @@ def run_case(
     }
 
 
+def _case_errors(progress: dict) -> int:
+    return sum(
+        any(turn["status"] != 200 for turn in case["turns"])
+        for case in progress.values()
+    )
+
+
+def summarize(data: dict, progress: dict) -> dict:
+    """Accuracy per group and Look latency; cases not run yet count as not passed."""
+    groups = {}
+    for name in config.GROUPS_V2:
+        total = sum(row["group"] == name for row in data["rows"])
+        cases = [c for c in progress.values() if c["group"] == name]
+        passed = sum(c["passed"] for c in cases)
+        rate = passed / total if total else 0.0
+        target = config.GROUP_TARGETS_V2[name]
+        groups[name] = {
+            "passed": passed,
+            "total": total,
+            "finished": len(cases),
+            "rate": rate,
+            "target": target,
+            "met": rate >= target,
+        }
+    look_totals = [c["total_s"] for c in progress.values() if c["group"] == "look"]
+    look_latency = {
+        "median_total_s": statistics.median(look_totals) if look_totals else 0.0,
+        "worst_total_s": max(look_totals, default=0.0),
+    }
+    missing = [n for n, g in groups.items() if g["finished"] < g["total"]]
+    verdict = {
+        "groups": all(g["met"] for g in groups.values()),
+        "look_latency": look_latency["median_total_s"] <= config.LOOK_MEDIAN_MAX_S,
+        "complete": not missing,
+    }
+    verdict["all_met"] = all(verdict.values())
+    return {
+        "groups": groups,
+        "look_latency": look_latency,
+        "errors": _case_errors(progress),
+        "missing_groups": missing,
+        "verdict": verdict,
+        "cases": [
+            {k: v for k, v in c.items() if k != "turns"} for c in progress.values()
+        ],
+    }
+
+
+def _met(ok: bool) -> str:
+    return "met" if ok else "NOT met"
+
+
+def render_markdown(summary: dict, secrets: list[str]) -> str:
+    lat = summary["look_latency"]
+    lines = ["# Eval report v2", "", "## Targets", ""]
+    for name, g in summary["groups"].items():
+        lines.append(
+            f"- {name}: {g['passed']}/{g['total']} passed ({g['rate']:.0%}), "
+            f"target >= {g['target']:.0%}: {_met(g['met'])}"
+        )
+    lines += [
+        (
+            f"- Look median total {lat['median_total_s']:.1f} s, "
+            f"worst {lat['worst_total_s']:.1f} s "
+            f"(target <= {config.LOOK_MEDIAN_MAX_S} s): "
+            f"{_met(summary['verdict']['look_latency'])}"
+        ),
+        f"- errors (non-200): {summary['errors']}",
+        f"- secrets: {'; '.join(secrets) if secrets else 'ok'}",
+        f"- missing groups: {', '.join(summary['missing_groups']) or 'none'}",
+        "",
+        "## Cases",
+        "",
+        "| id | group | result | tools | stt s | llm s | tts s | total s | reason |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for c in summary["cases"]:
+        lines.append(
+            f"| {c['id']} | {c['group']} | {'pass' if c['passed'] else 'FAIL'} "
+            f"| {', '.join(c['tools'])} | {c['stt_s']:.1f} | {c['llm_s']:.1f} "
+            f"| {c['tts_s']:.1f} | {c['total_s']:.1f} | {c['reason']} |"
+        )
+    lines += ["", "## Answers", ""]
+    lines += [f"- {c['id']}: {c['answer']}" for c in summary["cases"]]
+    return "\n".join(lines) + "\n"
+
+
+def write_report(summary: dict, secrets: list[str], progress: dict) -> Path:
+    config.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    stem = run_eval.now().strftime("%Y-%m-%d_%H%M") + "_v2"
+    md_path = config.RESULTS_DIR / f"{stem}.md"
+    md_path.write_text(render_markdown(summary, secrets), encoding="utf-8")
+    data = {**summary, "secrets": secrets, "cases": progress}
+    (config.RESULTS_DIR / f"{stem}.json").write_text(
+        json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    return md_path
+
+
+def print_summary(summary: dict, report: Path) -> None:
+    for name, g in summary["groups"].items():
+        print(f"{name}: {g['passed']}/{g['total']} passed")
+    lat = summary["look_latency"]
+    print(
+        f"Look latency: median {lat['median_total_s']:.1f} s, "
+        f"worst {lat['worst_total_s']:.1f} s"
+    )
+    print(f"missing groups: {', '.join(summary['missing_groups']) or 'none'}")
+    print(f"targets met: {'yes' if summary['verdict']['all_met'] else 'no'}")
+    print(f"report: {report}")
+
+
 def main(argv: Sequence[str] = ()) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--group", choices=config.GROUPS_V2)
@@ -292,7 +406,9 @@ def main(argv: Sequence[str] = ()) -> int:
                 print(f"{n:2}/{len(todo)} {row['id']} {verdict}")
         finally:
             end()
-    print(f"{len(progress)} of {len(data['rows'])} cases finished.")
+    summary = summarize(data, progress)
+    secrets = secrets_problems()
+    print_summary(summary, write_report(summary, secrets, progress))
     return 0
 
 

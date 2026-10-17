@@ -731,14 +731,11 @@ def test_fr22_main_rejects_unknown_group(main_env):
 
 def test_fr22_main_resume_skips_finished_cases(main_env):
     """Cases already in progress.json are skipped on the next run."""
-    ev2.save_progress({"look01": {"id": "look01", "group": "look", "passed": True}})
+    earlier = case("look01", "look", passed=True)
+    ev2.save_progress({"look01": earlier})
     assert ev2.main([]) == 0
     assert main_env["calls"] == ["look02", "fu01", "c01", "qz01"]
-    assert ev2.load_progress()["look01"] == {
-        "id": "look01",
-        "group": "look",
-        "passed": True,
-    }
+    assert ev2.load_progress()["look01"] == earlier
 
 
 def test_fr22_main_fresh_clears_progress_and_reruns_all(main_env):
@@ -1101,3 +1098,261 @@ def test_fr24_quiz_http_failure_fails_with_http_reason(env):
     result = run_hooked(quiz_row(), FakeServer(status={2: 500}), lambda n: None)
     assert result["passed"] is False
     assert result["reason"].startswith("http 500")
+
+
+# ---------- summary and report (T6: FR-19, FR-21, FR-23, FR-24) ----------
+
+
+def case(row_id, group, passed=True, total_s=4.0, status=200) -> dict:
+    return {
+        "id": row_id,
+        "group": group,
+        "turns": [{"clip": row_id, "status": status}],
+        "passed": passed,
+        "reason": "ok" if passed else "answer lacks one of ['x']",
+        "transcript": f"said {row_id}",
+        "answer": f"answer {row_id}",
+        "tools": ["web_search"] if group == "look" else [],
+        "stt_s": 0.5,
+        "llm_s": 2.0,
+        "tts_s": 0.25,
+        "total_s": total_s,
+    }
+
+
+def full_progress(**overrides) -> dict:
+    """All five rows of data_v2() finished and passed; overrides replace a case by id."""
+    progress = {
+        "look01": case("look01", "look", total_s=4.0),
+        "look02": case("look02", "look", total_s=6.0),
+        "fu01": case("fu01", "followup"),
+        "c01": case("c01", "concept"),
+        "qz01": case("qz01", "quiz"),
+    }
+    progress.update(overrides)
+    return progress
+
+
+def test_fr19_targets_in_config():
+    """Targets: Look >= 80%, follow-ups 80%, concepts 90%, quiz 80%, Look median <= 8 s."""
+    assert eval_config.GROUP_TARGETS_V2 == {
+        "look": 0.8,
+        "followup": 0.8,
+        "concept": 0.9,
+        "quiz": 0.8,
+    }
+    assert eval_config.LOOK_MEDIAN_MAX_S == 8
+
+
+def test_fr19_summarize_counts_passed_per_group():
+    """summarize gives passed/total/finished/rate/target/met per group."""
+    s = ev2.summarize(data_v2(), full_progress())
+    assert set(s["groups"]) == {"look", "followup", "concept", "quiz"}
+    look = s["groups"]["look"]
+    assert (look["passed"], look["total"], look["finished"]) == (2, 2, 2)
+    assert look["rate"] == 1.0 and look["target"] == 0.8 and look["met"] is True
+    assert s["groups"]["quiz"]["total"] == 1
+
+
+def test_fr19_summarize_look_below_target_not_met():
+    """One of two Look cases passing (50%) is below 80%: not met, all_met false."""
+    progress = full_progress(look02=case("look02", "look", passed=False))
+    s = ev2.summarize(data_v2(), progress)
+    look = s["groups"]["look"]
+    assert look["passed"] == 1 and look["rate"] == 0.5 and look["met"] is False
+    assert s["verdict"]["groups"] is False
+    assert s["verdict"]["all_met"] is False
+
+
+def test_fr23_summarize_unfinished_cases_count_as_not_passed():
+    """Total comes from the question file: unfinished cases lower the rate and are not counted finished."""
+    progress = full_progress()
+    del progress["look02"]
+    s = ev2.summarize(data_v2(), progress)
+    look = s["groups"]["look"]
+    assert (look["passed"], look["total"], look["finished"]) == (1, 2, 1)
+    assert look["rate"] == 0.5 and look["met"] is False
+
+
+def test_fr24_summarize_missing_groups_listed_and_incomplete():
+    """A group with no finished case is listed in missing_groups; complete and all_met are false."""
+    progress = full_progress()
+    del progress["qz01"]
+    s = ev2.summarize(data_v2(), progress)
+    assert s["missing_groups"] == ["quiz"]
+    assert s["verdict"]["complete"] is False
+    assert s["verdict"]["all_met"] is False
+
+
+def test_fr24_summarize_complete_run_has_no_missing_groups():
+    """A full passing run: nothing missing, every verdict key true."""
+    s = ev2.summarize(data_v2(), full_progress())
+    assert s["missing_groups"] == []
+    assert s["verdict"] == {
+        "groups": True,
+        "look_latency": True,
+        "complete": True,
+        "all_met": True,
+    }
+
+
+def test_fr21_summarize_look_latency_median_and_worst():
+    """Look median and worst total seconds come from the finished Look cases only."""
+    progress = full_progress(
+        fu01=case("fu01", "followup", total_s=99.0),
+        look01=case("look01", "look", total_s=3.0),
+        look02=case("look02", "look", total_s=9.0),
+    )
+    lat = ev2.summarize(data_v2(), progress)["look_latency"]
+    assert lat["median_total_s"] == pytest.approx(6.0)
+    assert lat["worst_total_s"] == pytest.approx(9.0)
+
+
+def test_fr21_summarize_look_median_over_limit_fails_verdict():
+    """Look median above LOOK_MEDIAN_MAX_S fails look_latency and all_met; exactly 8 s passes."""
+    slow = full_progress(
+        look01=case("look01", "look", total_s=9.0),
+        look02=case("look02", "look", total_s=10.0),
+    )
+    s = ev2.summarize(data_v2(), slow)
+    assert s["verdict"]["look_latency"] is False
+    assert s["verdict"]["all_met"] is False
+    edge = full_progress(
+        look01=case("look01", "look", total_s=8.0),
+        look02=case("look02", "look", total_s=8.0),
+    )
+    assert ev2.summarize(data_v2(), edge)["verdict"]["look_latency"] is True
+
+
+def test_fr21_summarize_no_look_cases_gives_zero_latency():
+    """With no finished Look case the latency numbers are zero."""
+    progress = {"c01": case("c01", "concept")}
+    lat = ev2.summarize(data_v2(), progress)["look_latency"]
+    assert lat["median_total_s"] == 0 and lat["worst_total_s"] == 0
+
+
+def test_fr21_summarize_counts_errors_but_all_met_does_not_need_zero():
+    """errors counts finished cases with a non-200 turn; they do not by themselves block all_met."""
+    progress = full_progress(c01=case("c01", "concept", passed=True, status=500))
+    s = ev2.summarize(data_v2(), progress)
+    assert s["errors"] == 1
+    assert s["verdict"]["all_met"] is True
+
+
+def test_fr21_render_markdown_sections_and_targets():
+    """Report has the heading, Targets section with per-group lines, Look latency, secrets and cases."""
+    progress = full_progress(look02=case("look02", "look", passed=False))
+    md = ev2.render_markdown(ev2.summarize(data_v2(), progress), [])
+    assert md.startswith("# Eval report v2")
+    assert "## Targets" in md and "## Cases" in md and "## Answers" in md
+    assert "look: 1/2 passed" in md
+    assert "NOT met" in md
+    assert "followup: 1/1 passed" in md
+    assert "(target <= 8 s)" in md
+    assert "secrets: ok" in md
+    assert "missing groups: none" in md
+    for row_id in progress:
+        assert row_id in md
+    assert "answer lacks one of ['x']" in md
+    assert "answer c01" in md
+
+
+def test_fr21_render_markdown_lists_secret_problems():
+    """Secret problems are printed instead of 'secrets: ok'."""
+    md = ev2.render_markdown(
+        ev2.summarize(data_v2(), full_progress()),
+        ["GEMINI_API_KEY value found in logs"],
+    )
+    assert "GEMINI_API_KEY value found in logs" in md
+    assert "secrets: ok" not in md
+
+
+def test_fr24_render_markdown_partial_run_names_missing_groups():
+    """A partial run says 'missing groups: look, quiz'."""
+    progress = {
+        "fu01": case("fu01", "followup"),
+        "c01": case("c01", "concept"),
+    }
+    md = ev2.render_markdown(ev2.summarize(data_v2(), progress), [])
+    assert "missing groups: look, quiz" in md
+
+
+@pytest.fixture
+def report_env(env, monkeypatch, tmp_path):
+    results = tmp_path / "results"
+    monkeypatch.setattr(eval_config, "RESULTS_DIR", results)
+
+    class Stamp:
+        def strftime(self, fmt):
+            return "2026-10-17_1530"
+
+    monkeypatch.setattr(run_eval, "now", lambda: Stamp())
+    return results
+
+
+def test_fr21_write_report_writes_md_and_json_with_stamp(report_env):
+    """write_report creates <date_time>_v2.md and .json in RESULTS_DIR and returns the .md path."""
+    progress = full_progress()
+    summary = ev2.summarize(data_v2(), progress)
+    path = ev2.write_report(summary, ["oops"], progress)
+    assert path == report_env / "2026-10-17_1530_v2.md"
+    assert path.read_text(encoding="utf-8").startswith("# Eval report v2")
+    saved = json.loads((report_env / "2026-10-17_1530_v2.json").read_text("utf-8"))
+    assert saved["secrets"] == ["oops"]
+    assert saved["cases"] == progress
+    assert saved["groups"]["look"]["passed"] == 2
+    assert saved["verdict"]["all_met"] is True
+
+
+def test_fr19_main_writes_report_and_prints_summary(
+    main_env, report_env, monkeypatch, capsys
+):
+    """A full main run restores the DB, writes the report, and prints group lines, Look latency, targets and report path."""
+    monkeypatch.setattr(ev2, "secrets_problems", list)
+    assert ev2.main([]) == 0
+    out = capsys.readouterr().out
+    for name, total in (("look", 2), ("followup", 1), ("concept", 1), ("quiz", 1)):
+        assert f"{name}: " in out and f"/{total} passed" in out
+    assert "targets met: " in out
+    assert "report: " in out and "_v2.md" in out
+    assert (report_env / "2026-10-17_1530_v2.md").exists()
+    assert (report_env / "2026-10-17_1530_v2.json").exists()
+    assert counts(main_env["env"]) == (1, 1, 1)
+
+
+def test_fr24_main_partial_group_run_reports_missing_groups(
+    main_env, report_env, monkeypatch, capsys
+):
+    """Running only one group reports the other three as missing and targets met: no."""
+    monkeypatch.setattr(ev2, "secrets_problems", list)
+    assert ev2.main(["--group", "concept"]) == 0
+    out = capsys.readouterr().out
+    assert "missing groups: look, followup, quiz" in out
+    assert "targets met: no" in out
+    saved = json.loads((report_env / "2026-10-17_1530_v2.json").read_text("utf-8"))
+    assert saved["missing_groups"] == ["look", "followup", "quiz"]
+    assert set(saved["cases"]) == {"c01"}
+
+
+def test_fr19_main_report_written_even_when_all_cases_already_finished(
+    main_env, report_env, monkeypatch, capsys
+):
+    """If progress already holds every case, main runs none but still writes the report."""
+    monkeypatch.setattr(ev2, "secrets_problems", list)
+    ev2.save_progress(full_progress())
+    assert ev2.main([]) == 0
+    assert main_env["calls"] == []
+    assert (report_env / "2026-10-17_1530_v2.md").exists()
+    assert "targets met: yes" in capsys.readouterr().out
+
+
+def test_fr21_main_report_includes_secret_problems(
+    main_env, report_env, monkeypatch, capsys
+):
+    """Problems from secrets_problems appear in the report and the printed output."""
+    monkeypatch.setattr(
+        ev2, "secrets_problems", lambda: ["TAVILY_API_KEY value found in logs"]
+    )
+    ev2.main(["--group", "concept"])
+    md = (report_env / "2026-10-17_1530_v2.md").read_text(encoding="utf-8")
+    assert "TAVILY_API_KEY value found in logs" in md
