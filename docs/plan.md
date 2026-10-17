@@ -66,7 +66,7 @@ row and adds none; "when is Diwali?" adds none; "what did I learn this week?" gi
 and names within the FR-5 limit (FR-23, FR-25). The 20-question concept target is checked in
 the M12 eval.
 
-## M11 (v2): Quiz me | in progress
+## M11 (v2): Quiz me | done
 Goal: `start_quiz`, quiz state in the session, stop, grading call, score, 300 s wait · GitHub milestone: #11
 
 | Task | FR | Files | Done when | Test | Issue | Done |
