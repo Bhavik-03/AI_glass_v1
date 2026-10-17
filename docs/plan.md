@@ -118,6 +118,7 @@ T8 results (first run): look 17/20, followup 7/10, concept 15/20, quiz 0/10; Loo
 - f05: "tell me more" routing gap (called list_notes after an unrelated topic); fixed in
   `server/llm.py`.
 - c09: Fourier-transform STT mis-hear; left as is, same class as issue #38.
+- quiz_start reworded to 'Please quiz me.' after two short-phrase mis-transcriptions blocked the quiz group entirely.
 
 Manual checks: after T3, run one group with the real server and check the progress file
 survives Ctrl+C and the DB is restored (FR-22).
