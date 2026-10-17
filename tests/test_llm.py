@@ -120,6 +120,14 @@ def test_fr5_instruction_numbers_follow_config(monkeypatch) -> None:
     assert "first 5" not in text
 
 
+def test_fr5_instruction_says_user_learns_ai_ml() -> None:
+    """The instruction says the user is an engineering student learning AI/ML, and ambiguous terms take the AI/ML meaning."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "engineering student" in text
+    assert "ai/ml" in text
+    assert "ambiguous" in text
+
+
 def test_fr6_instruction_has_privacy_rule() -> None:
     """The instruction says never to put note or reminder content in a search."""
     text = llm.system_instruction(fixed_now()).lower()

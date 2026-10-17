@@ -9,6 +9,8 @@ from server import config, tools
 
 SYSTEM_INSTRUCTION = """\
 You are a voice assistant. Your answers are spoken aloud.
+The user is an engineering student learning AI/ML: give an ambiguous term its AI/ML meaning \
+(LoRA is the fine-tuning method, not LoRa radio).
 Now: {weekday} {day} {month_year}, {time} ({iso}), time zone {timezone}.
 Home city (for weather and local questions): {home_city}.
 Rules:
