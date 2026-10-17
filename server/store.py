@@ -6,6 +6,7 @@ from server import config
 PENDING = "pending"
 DELIVERED = "delivered"
 CANCELLED = "cancelled"
+NEW = "new"
 
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS notes (
@@ -19,6 +20,15 @@ CREATE TABLE IF NOT EXISTS reminders (
     due_at TEXT NOT NULL,
     created_at TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT '{PENDING}'
+);
+CREATE TABLE IF NOT EXISTS concepts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    summary TEXT NOT NULL,
+    first_asked TEXT NOT NULL,
+    last_asked TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT '{NEW}',
+    last_quizzed TEXT
 );
 """
 
@@ -116,3 +126,43 @@ def ack(reminder_id: int) -> dict | None:
     with _connect() as con:
         _move_pending(con, reminder_id, DELIVERED)
         return _fetch(con, reminder_id)
+
+
+def log_concept(name: str, summary: str, now: str) -> dict:
+    """Add a concept, or update the one whose name matches case-insensitively."""
+    with _connect() as con:
+        cur = con.execute(
+            "UPDATE concepts SET summary = ?, last_asked = ? WHERE name = ?",
+            (summary, now, name),
+        )
+        new = cur.rowcount == 0
+        if new:
+            con.execute(
+                "INSERT INTO concepts (name, summary, first_asked, last_asked, status)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (name, summary, now, now, NEW),
+            )
+        row = con.execute(
+            "SELECT name, summary, status FROM concepts WHERE name = ?", (name,)
+        ).fetchone()
+    return {**dict(row), "new": new}
+
+
+def concept_names() -> list[str]:
+    with _connect() as con:
+        rows = con.execute("SELECT name FROM concepts ORDER BY id").fetchall()
+    return [row["name"] for row in rows]
+
+
+def learned_since(since: str, limit: int) -> dict:
+    """Count concepts first asked at or after `since`; names of the `limit` newest."""
+    with _connect() as con:
+        count = con.execute(
+            "SELECT COUNT(*) FROM concepts WHERE first_asked >= ?", (since,)
+        ).fetchone()[0]
+        rows = con.execute(
+            "SELECT name FROM concepts WHERE first_asked >= ?"
+            " ORDER BY first_asked DESC, id DESC LIMIT ?",
+            (since, limit),
+        ).fetchall()
+    return {"count": count, "names": [row["name"] for row in rows]}

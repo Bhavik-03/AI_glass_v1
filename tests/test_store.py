@@ -322,6 +322,122 @@ def test_fr14_ack_unknown_id_returns_none(db):
     assert store.ack(999) is None
 
 
+T1 = "2026-10-09T10:00:00+05:30"
+T2 = "2026-10-10T11:00:00+05:30"
+
+
+def concept_rows(path) -> list[tuple]:
+    con = REAL_CONNECT(path)
+    try:
+        return con.execute(
+            "SELECT name, summary, status, first_asked, last_asked, last_quizzed"
+            " FROM concepts"
+        ).fetchall()
+    finally:
+        con.close()
+
+
+def test_fr23_new_concept_adds_one_row_with_status_new(db):
+    """A new concept adds one row: status new, first and last asked set to now, last quizzed empty."""
+    result = store.log_concept("LoRA", "Low-rank adapters for fine-tuning", T1)
+
+    assert result == {
+        "name": "LoRA",
+        "summary": "Low-rank adapters for fine-tuning",
+        "status": "new",
+        "new": True,
+    }
+    assert concept_rows(db) == [
+        ("LoRA", "Low-rank adapters for fine-tuning", "new", T1, T1, None)
+    ]
+
+
+def test_fr23_same_name_other_case_updates_row_and_adds_none(db):
+    """The same name in another case updates last_asked and the summary, keeps first_asked, adds no row."""
+    store.log_concept("LoRA", "old summary", T1)
+
+    result = store.log_concept("lora", "new summary", T2)
+
+    assert result == {
+        "name": "LoRA",
+        "summary": "new summary",
+        "status": "new",
+        "new": False,
+    }
+    assert concept_rows(db) == [("LoRA", "new summary", "new", T1, T2, None)]
+
+
+def test_fr23_repeat_keeps_status(db):
+    """An update leaves the status unchanged."""
+    store.log_concept("LoRA", "s", T1)
+    con = REAL_CONNECT(db)
+    try:
+        with con:
+            con.execute("UPDATE concepts SET status = 'wrong'")
+    finally:
+        con.close()
+
+    result = store.log_concept("LORA", "s2", T2)
+
+    assert result["status"] == "wrong"
+    assert result["new"] is False
+    assert concept_rows(db)[0][2] == "wrong"
+
+
+def test_fr23_concept_names_lists_all_names(db):
+    """concept_names lists the names of all logged concepts, one per concept."""
+    store.log_concept("LoRA", "a", T1)
+    store.log_concept("Attention", "b", T1)
+    store.log_concept("lora", "c", T2)
+
+    assert sorted(store.concept_names()) == ["Attention", "LoRA"]
+
+
+def test_fr23_concept_names_empty(db):
+    """concept_names returns an empty list when no concept is logged."""
+    assert store.concept_names() == []
+
+
+def test_fr23_init_creates_concepts_table(monkeypatch, tmp_path):
+    """init() creates the concepts table in the database."""
+    path = tmp_path / "c.db"
+    monkeypatch.setattr("server.config.DB_PATH", path)
+
+    store.init()
+
+    assert "concepts" in table_names(path)
+
+
+def test_fr25_learned_since_counts_all_and_limits_names_newest_first(db):
+    """learned_since counts every concept first asked at or after since, and lists the `limit` newest names, newest first."""
+    for day in (3, 1, 5, 2, 4, 6):
+        store.log_concept(f"c{day}", "s", f"2026-10-0{day}T10:00:00+05:30")
+    store.log_concept("old", "s", "2026-09-01T10:00:00+05:30")
+
+    result = store.learned_since("2026-10-02T10:00:00+05:30", 3)
+
+    assert result == {"count": 5, "names": ["c6", "c5", "c4"]}
+
+
+def test_fr25_learned_since_ignores_last_asked(db):
+    """The window uses first_asked: a concept asked again recently but first asked before since is not counted."""
+    store.log_concept("LoRA", "s", "2026-09-01T10:00:00+05:30")
+    store.log_concept("lora", "s2", "2026-10-09T10:00:00+05:30")
+
+    assert store.learned_since("2026-10-03T10:00:00+05:30", 5) == {
+        "count": 0,
+        "names": [],
+    }
+
+
+def test_fr25_learned_since_empty(db):
+    """With no concepts, learned_since returns count 0 and no names."""
+    assert store.learned_since("2026-10-03T10:00:00+05:30", 5) == {
+        "count": 0,
+        "names": [],
+    }
+
+
 def traced_statements(monkeypatch, call) -> list[str]:
     statements: list[str] = []
 

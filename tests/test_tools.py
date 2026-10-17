@@ -91,6 +91,14 @@ def declaration(name):
     return matches[0]
 
 
+def test_fr5_web_search_declaration_forbids_private_content():
+    """The web_search declaration says the query must never contain note, reminder, concept or screen content."""
+    description = declaration("web_search")["description"].lower()
+    assert "never" in description
+    for word in ("note", "reminder", "concept", "screen"):
+        assert word in description
+
+
 def test_fr8_declares_add_note_with_required_text():
     """DECLARATIONS has one add_note entry whose schema requires a string 'text'."""
     decl = declaration("add_note")
@@ -989,3 +997,147 @@ def test_fr10_reminder_text_is_prefix_due_spoken_and_text(db, due_at, now, prefi
     spoken = tools.reminder_text(stored, now)
 
     assert spoken == f"{prefix}, {added['due_spoken']}: call the lab"
+
+
+# --- log_concept (FR-23) ---
+
+LORA_SUMMARY = "LoRA fine-tunes a model by training small low-rank adapter matrices."
+
+
+def test_fr23_declares_log_concept_with_required_name_and_summary():
+    """DECLARATIONS has one log_concept entry whose schema requires string 'name' and 'summary'."""
+    decl = declaration("log_concept")
+    assert decl["description"]
+    schema = decl["parameters_json_schema"]
+    assert schema["type"] == "object"
+    assert schema["properties"]["name"]["type"] == "string"
+    assert schema["properties"]["summary"]["type"] == "string"
+    assert "name" in schema["required"]
+    assert "summary" in schema["required"]
+
+
+def test_fr23_log_concept_returns_new_result_and_stores_one_concept(db, fixed_now):
+    """run('log_concept') returns {name, summary, status 'new', new True} and stores the concept."""
+    out = tools.run("log_concept", {"name": "LoRA", "summary": LORA_SUMMARY}, fixed_now)
+
+    assert set(out) == {"name", "summary", "status", "new"}
+    assert out["name"] == "LoRA"
+    assert out["summary"] == LORA_SUMMARY
+    assert out["status"] == "new"
+    assert out["new"] is True
+    assert store.concept_names() == ["LoRA"]
+
+
+def test_fr23_log_concept_same_name_other_case_is_not_new(db, fixed_now):
+    """Logging 'lora' after 'LoRA' returns new False and still stores one concept."""
+    tools.run("log_concept", {"name": "LoRA", "summary": LORA_SUMMARY}, fixed_now)
+
+    out = tools.run(
+        "log_concept", {"name": "lora", "summary": "Low-rank adaptation."}, fixed_now
+    )
+
+    assert "error" not in out
+    assert out["new"] is False
+    assert len(store.concept_names()) == 1
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"summary": LORA_SUMMARY},
+        {"name": "", "summary": LORA_SUMMARY},
+        {"name": "   ", "summary": LORA_SUMMARY},
+        {"name": 5, "summary": LORA_SUMMARY},
+        {"name": None, "summary": LORA_SUMMARY},
+        {"name": "LoRA"},
+        {"name": "LoRA", "summary": ""},
+        {"name": "LoRA", "summary": "   "},
+        {"name": "LoRA", "summary": 5},
+    ],
+    ids=[
+        "missing-name",
+        "empty-name",
+        "whitespace-name",
+        "non-string-name",
+        "none-name",
+        "missing-summary",
+        "empty-summary",
+        "whitespace-summary",
+        "non-string-summary",
+    ],
+)
+def test_fr23_log_concept_bad_arguments_return_error_and_store_nothing(
+    db, fixed_now, args
+):
+    """A missing, empty, blank or non-string name or summary returns {error} and stores nothing."""
+    out = tools.run("log_concept", args, fixed_now)
+
+    assert isinstance(out.get("error"), str) and out["error"]
+    assert store.concept_names() == []
+
+
+# --- learned_this_week (FR-25) ---
+
+
+def log_concept_at(name, when):
+    store.log_concept(name, "summary", when.isoformat(timespec="seconds"))
+
+
+def test_fr25_declares_learned_this_week_without_required_parameters():
+    """DECLARATIONS has one learned_this_week entry that requires no parameters."""
+    decl = declaration("learned_this_week")
+    assert decl["description"]
+    schema = decl["parameters_json_schema"]
+    assert schema["type"] == "object"
+    assert not schema.get("required")
+
+
+def test_fr25_learned_this_week_counts_recent_and_names_five_newest(db):
+    """With 7 concepts first asked in the last 7 days and 2 older, count is 7 and names are the 5 newest, newest first."""
+    assert config.LEARNED_DAYS == 7
+    assert config.LEARNED_MAX_NAMES == 5
+    # Inserted out of order so that insertion order cannot pass for recency.
+    for i in (3, 0, 6, 1, 5, 2, 4):
+        log_concept_at(f"recent{i}", NOW - timedelta(days=i, hours=1))
+    log_concept_at("older8", NOW - timedelta(days=8))
+    log_concept_at("older9", NOW - timedelta(days=9))
+
+    out = tools.run("learned_this_week", {}, NOW)
+
+    assert out == {
+        "count": 7,
+        "names": ["recent0", "recent1", "recent2", "recent3", "recent4"],
+    }
+
+
+def test_fr25_learned_this_week_none_returns_zero_and_no_names(db):
+    """With no concepts in the last 7 days, the result is {count: 0, names: []}."""
+    assert tools.run("learned_this_week", {}, NOW) == {"count": 0, "names": []}
+    log_concept_at("older", NOW - timedelta(days=8))
+    assert tools.run("learned_this_week", {}, NOW) == {"count": 0, "names": []}
+
+
+def test_fr25_learned_this_week_ignores_extra_arguments(db):
+    """learned_this_week takes no arguments: extra ones are ignored."""
+    log_concept_at("recent", NOW - timedelta(days=1))
+
+    out = tools.run("learned_this_week", {"junk": 1}, NOW)
+
+    assert out == {"count": 1, "names": ["recent"]}
+
+
+def test_fr25_learned_this_week_uses_config_values(db, monkeypatch):
+    """The window and the name limit come from config: LEARNED_MAX_NAMES=2 gives 2 names, LEARNED_DAYS=3 narrows the count."""
+    for i in range(5):
+        log_concept_at(f"c{i}", NOW - timedelta(days=i, hours=1))
+    monkeypatch.setattr(config, "LEARNED_MAX_NAMES", 2)
+
+    out = tools.run("learned_this_week", {}, NOW)
+
+    assert out == {"count": 5, "names": ["c0", "c1"]}
+
+    monkeypatch.setattr(config, "LEARNED_DAYS", 3)
+
+    out = tools.run("learned_this_week", {}, NOW)
+
+    assert out == {"count": 3, "names": ["c0", "c1"]}
