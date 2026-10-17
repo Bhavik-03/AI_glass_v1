@@ -66,6 +66,7 @@ def fake_stages(monkeypatch, fixed_now) -> dict:
         "stt": [],
         "llm": [],
         "llm_turns": [],
+        "llm_images": [],
         "tts": [],
         "stt_load": [],
         "tts_load": [],
@@ -76,10 +77,11 @@ def fake_stages(monkeypatch, fixed_now) -> dict:
         calls["stt"].append(wav)
         return FAKE_TRANSCRIPT
 
-    def ask(question, now, turns=()):
+    def ask(question, now, turns=(), image=None):
         calls["order"].append("llm")
         calls["llm"].append((question, now))
         calls["llm_turns"].append(list(turns))
+        calls["llm_images"].append(image)
         return FAKE_ANSWER, False, []
 
     def synthesize(text):

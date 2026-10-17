@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import uvicorn
 from fastapi import FastAPI, File, Response, UploadFile
 from fastapi.responses import JSONResponse
+from PIL import Image
 
 from server import config, llm, logger, session, store, stt, tools, tts
 
@@ -76,14 +77,37 @@ def _audio_problem(data: bytes | None) -> str | None:
     return None
 
 
+# The formats the API contract allows, by Pillow format name.
+_IMAGE_TYPES = {"JPEG": "image/jpeg", "PNG": "image/png"}
+
+
+def _image_type(data: bytes) -> str | None:
+    """MIME type of a readable JPEG or PNG, else None; taken from the content, not the upload."""
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            # load() decodes every pixel, so a truncated file fails here, not in Gemini.
+            img.load()
+            return _IMAGE_TYPES.get(img.format)
+    except (OSError, SyntaxError, ValueError, Image.DecompressionBombError):
+        return None
+
+
 def _error(status_code: int, message: str, record: dict) -> JSONResponse:
     record["error"] = message
     return JSONResponse(status_code=status_code, content={"error": message})
 
 
-def _answer(data: bytes | None, record: dict) -> Response:
+def _answer(data: bytes | None, image: bytes | None, record: dict) -> Response:
     if problem := _audio_problem(data):
         return _error(400, problem, record)
+    new_image = None
+    if image is not None:
+        if len(image) > config.IMAGE_MAX_BYTES:
+            return _error(400, "image too large", record)
+        if not (mime_type := _image_type(image)):
+            return _error(400, "image is not a readable image", record)
+        new_image = (image, mime_type)
+        record["image_sent"] = True
     timings = record["timings_ms"]
     try:
         record["question"] = run_stage("stt", timings, stt.transcribe, data)
@@ -92,12 +116,16 @@ def _answer(data: bytes | None, record: dict) -> Response:
         asked_at = now()
         turns = session.turns(asked_at)
         record["session_continued"] = bool(turns)
+        # A text follow-up is about the screenshot saved with an earlier turn (FR-21).
+        image_for_llm = new_image or session.image(asked_at)
         record["answer"], record["searched"], record["tool_calls"] = run_stage(
-            "llm", timings, llm.ask, record["question"], asked_at, turns
+            "llm", timings, llm.ask, record["question"], asked_at, turns, image_for_llm
         )
         wav = run_stage("tts", timings, tts.synthesize, record["answer"])
         # Only an answered question becomes a turn, so a failure never extends the session (FR-21).
-        session.add_turn(record["question"], record["answer"], asked_at)
+        session.add_turn(
+            record["question"], record["answer"], asked_at, image=new_image
+        )
     except StageFailed as e:
         record["tool_calls"] = e.tool_calls or record["tool_calls"]
         return _error(500, f"{e.stage}: {e.reason}", record)
@@ -157,7 +185,10 @@ def reminder_audio(reminder_id: str) -> Response:
 
 # Plain def, not async: FastAPI runs it in a thread pool, so a slow query doesn't block other endpoints.
 @app.post("/query")
-def query(audio: Annotated[UploadFile | None, File()] = None) -> Response:
+def query(
+    audio: Annotated[UploadFile | None, File()] = None,
+    image: Annotated[UploadFile | None, File()] = None,
+) -> Response:
     record = {
         "question": None,
         "answer": None,
@@ -166,9 +197,14 @@ def query(audio: Annotated[UploadFile | None, File()] = None) -> Response:
         "tool_calls": [],
         "error": None,
         "session_continued": False,
+        "image_sent": False,
     }
     try:
-        return _answer(audio.file.read() if audio else None, record)
+        return _answer(
+            audio.file.read() if audio else None,
+            image.file.read() if image else None,
+            record,
+        )
     finally:
         logger.log_query(record)
 

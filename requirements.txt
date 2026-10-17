@@ -12,3 +12,4 @@ piper-tts==1.8.0
 python-multipart==0.0.32
 sounddevice==0.5.6
 pynput==1.8.2
+Pillow==12.3.0

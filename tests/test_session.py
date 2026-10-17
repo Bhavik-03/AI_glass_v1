@@ -116,6 +116,96 @@ def test_fr21_ttl_follows_config(monkeypatch):
     assert session.turns(T0 + secs(11)) == []
 
 
+IMG = (b"\xff\xd8jpeg-bytes", "image/jpeg")
+IMG2 = (b"\x89PNGpng-bytes", "image/png")
+
+
+def test_fr21_no_image_saved_returns_none():
+    """With no image saved, image() returns None."""
+    session.add_turn("q", "a", T0)
+    assert session.image(T0 + secs(5)) is None
+
+
+def test_fr21_image_empty_session_returns_none():
+    """With no turns at all, image() returns None."""
+    assert session.image(T0) is None
+
+
+def test_fr21_image_is_saved_with_turn():
+    """The most recent image (bytes and type) is kept with the turn."""
+    session.add_turn("q", "a", T0, image=IMG)
+    assert session.image(T0 + secs(5)) == IMG
+
+
+def test_fr21_text_follow_up_keeps_earlier_image():
+    """A later turn without an image keeps the earlier screenshot."""
+    session.add_turn("q1", "a1", T0, image=IMG)
+    session.add_turn("q2", "a2", T0 + secs(10))
+    assert session.image(T0 + secs(20)) == IMG
+
+
+def test_fr21_new_image_replaces_old_image():
+    """A later turn with a new image replaces the saved one."""
+    session.add_turn("q1", "a1", T0, image=IMG)
+    session.add_turn("q2", "a2", T0 + secs(10), image=IMG2)
+    assert session.image(T0 + secs(20)) == IMG2
+
+
+def test_fr21_image_kept_119s_after_last_answer():
+    """The image is still there 119 s after the last answer."""
+    session.add_turn("q", "a", T0, image=IMG)
+    assert session.image(T0 + secs(119)) == IMG
+
+
+def test_fr21_image_gone_at_120s():
+    """The image ends with the session at 120 s."""
+    session.add_turn("q", "a", T0, image=IMG)
+    assert session.image(T0 + secs(120)) is None
+
+
+def test_fr21_image_gone_at_121s():
+    """The image is gone 121 s after the last answer."""
+    session.add_turn("q", "a", T0, image=IMG)
+    assert session.image(T0 + secs(121)) is None
+
+
+def test_fr21_text_turn_extends_image_life():
+    """The timer counts from the last answer, so a text turn extends the image."""
+    session.add_turn("q1", "a1", T0, image=IMG)
+    session.add_turn("q2", "a2", T0 + secs(100))
+    assert session.image(T0 + secs(200)) == IMG
+    assert session.image(T0 + secs(100 + 120)) is None
+
+
+def test_fr21_expired_image_not_resurrected():
+    """After expiry, a new turn without an image has no image."""
+    session.add_turn("q1", "a1", T0, image=IMG)
+    session.add_turn("q2", "a2", T0 + secs(200))
+    assert session.image(T0 + secs(201)) is None
+
+
+def test_fr21_expired_image_not_resurrected_after_read():
+    """An expired read clears the image; a later text turn does not bring it back."""
+    session.add_turn("q1", "a1", T0, image=IMG)
+    assert session.image(T0 + secs(150)) is None
+    session.add_turn("q2", "a2", T0 + secs(151))
+    assert session.image(T0 + secs(152)) is None
+
+
+def test_fr21_reset_clears_image():
+    """reset() clears the image."""
+    session.add_turn("q", "a", T0, image=IMG)
+    session.reset()
+    assert session.image(T0 + secs(1)) is None
+
+
+def test_fr21_add_turn_without_image_argument_still_works():
+    """Existing 3-argument add_turn calls still work and save no image."""
+    session.add_turn("q", "a", T0)
+    assert session.turns(T0 + secs(1)) == [{"question": "q", "answer": "a"}]
+    assert session.image(T0 + secs(1)) is None
+
+
 def test_fr21_concurrent_add_turn_keeps_max_turns():
     """add_turn is safe under many threads: exactly the max turns remain."""
     errors: list[Exception] = []
