@@ -778,6 +778,22 @@ def test_fr5_grade_answer_all_whole_word_only():
     assert run_grade(rule, answer="Symbol au, gold")[0] is True
 
 
+def test_fr5_grade_answer_all_accepts_short_suffixes():
+    """A plural or verb form (s, es, ing) of the expected word counts; other endings do not."""
+    assert run_grade({"answer_all": [["chloroplast"]]}, answer="In chloroplasts.")[0]
+    assert run_grade({"answer_all": [["stop"]]}, answer="The loop stops here.")[0]
+    assert run_grade({"answer_all": [["output"]]}, answer="It outputs 5.")[0]
+    assert run_grade({"answer_all": [["fix"]]}, answer="Fixes the bug.")[0]
+    assert run_grade({"answer_all": [["print"]]}, answer="It is printing 5.")[0]
+
+
+def test_fr5_grade_answer_all_suffix_stays_word_bounded():
+    """A longer unrelated word still does not match."""
+    assert not run_grade({"answer_all": [["cat"]]}, answer="A category")[0]
+    assert not run_grade({"answer_all": [["cat"]]}, answer="A catalog")[0]
+    assert not run_grade({"answer_all": [["stop"]]}, answer="A stopover")[0]
+
+
 def test_fr5_grade_answer_some_min_distinct_words():
     """answer_some passes with at least min distinct words found as whole words."""
     rule = {"answer_some": {"min": 2, "words": ["red", "green", "blue"]}}
