@@ -1198,6 +1198,39 @@ def test_fr23_ask_puts_stored_concept_names_in_instruction(monkeypatch) -> None:
     assert "Backpropagation" in fake.models.calls[0]["config"].system_instruction
 
 
+def _quiz_rule() -> str:
+    lines = llm.system_instruction(fixed_now()).lower().splitlines()
+    return " ".join(line for line in lines if "start_quiz" in line)
+
+
+def test_fr24_instruction_start_quiz_on_quiz_me() -> None:
+    """The instruction names the start_quiz tool and the trigger phrase 'quiz me'."""
+    rule = _quiz_rule()
+    assert "start_quiz" in rule
+    assert "quiz me" in rule
+
+
+def test_fr24_instruction_start_quiz_only_when_asked() -> None:
+    """The instruction says to call start_quiz only when the user asks to be quizzed."""
+    rule = _quiz_rule()
+    assert "only when" in rule
+    assert "asks to be quizzed" in rule
+
+
+def test_fr24_instruction_read_returned_question_exactly() -> None:
+    """The instruction says to read the returned question exactly."""
+    rule = _quiz_rule()
+    assert "returned question" in rule
+    assert "exactly" in rule
+
+
+def test_fr24_instruction_count_zero_means_nothing_to_quiz() -> None:
+    """The instruction says that when count is 0, the assistant says there is nothing to quiz."""
+    rule = _quiz_rule()
+    assert "count is 0" in rule
+    assert "nothing to quiz" in rule
+
+
 def test_fr5_api_failure_propagates(monkeypatch) -> None:
     """An exception from generate_content propagates out of ask."""
     install_fake(monkeypatch, [ConnectionError("boom")])
