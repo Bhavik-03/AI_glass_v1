@@ -438,6 +438,129 @@ def test_fr25_learned_since_empty(db):
     }
 
 
+def day(n: int) -> str:
+    return f"2026-10-{n:02d}T10:00:00+05:30"
+
+
+def names_of(concepts: list[dict]) -> list[str]:
+    return [c["name"] for c in concepts]
+
+
+def test_fr24_max_concepts_is_three():
+    """A quiz picks up to config.QUIZ_MAX_CONCEPTS concepts, which is 3."""
+    assert config.QUIZ_MAX_CONCEPTS == 3
+
+
+def test_fr24_four_new_one_wrong_returns_three_oldest_new_in_order(db):
+    """With 4 new and 1 wrong concept, the 3 oldest new ones come back, oldest first_asked first."""
+    store.log_concept("wrongone", "w", day(1))
+    store.set_quiz_result("wrongone", False, day(2))
+    for n, name in ((6, "n6"), (3, "n3"), (5, "n5"), (4, "n4")):
+        store.log_concept(name, f"summary {name}", day(n))
+
+    result = store.quiz_concepts(config.QUIZ_MAX_CONCEPTS)
+
+    assert names_of(result) == ["n3", "n4", "n5"]
+    assert all(set(c) == {"name", "summary", "status"} for c in result)
+    assert all(c["status"] == "new" for c in result)
+    assert result[0]["summary"] == "summary n3"
+
+
+def test_fr24_new_ties_broken_by_id(db):
+    """New concepts with the same first_asked come back in id (insert) order."""
+    for name in ("first", "second", "third"):
+        store.log_concept(name, "s", T1)
+
+    assert names_of(store.quiz_concepts(3)) == ["first", "second", "third"]
+
+
+def test_fr24_new_come_before_wrong_when_room(db):
+    """Status new is listed before status wrong when the limit leaves room for both."""
+    store.log_concept("old", "s", day(1))
+    store.set_quiz_result("old", False, day(2))
+    store.log_concept("fresh", "s", day(5))
+
+    result = store.quiz_concepts(3)
+
+    assert names_of(result) == ["fresh", "old"]
+    assert [c["status"] for c in result] == ["new", "wrong"]
+
+
+def test_fr24_only_wrong_oldest_last_quizzed_first(db):
+    """With only wrong concepts, the one quizzed longest ago comes first."""
+    # first_asked runs opposite to last_quizzed, so ordering by first_asked would fail.
+    for name, asked in (("a", 3), ("b", 2), ("c", 1)):
+        store.log_concept(name, "s", day(asked))
+    store.set_quiz_result("a", False, day(9))
+    store.set_quiz_result("b", False, day(4))
+    store.set_quiz_result("c", False, day(6))
+
+    assert names_of(store.quiz_concepts(3)) == ["b", "c", "a"]
+
+
+def test_fr24_right_concept_is_not_picked_again(db):
+    """A concept set right is never returned by quiz_concepts."""
+    store.log_concept("LoRA", "s", T1)
+
+    store.set_quiz_result("LoRA", True, T2)
+
+    assert store.quiz_concepts(3) == []
+
+
+def test_fr24_wrong_concept_is_picked_again(db):
+    """A concept set wrong is returned by a later quiz_concepts call with status wrong."""
+    store.log_concept("LoRA", "s", T1)
+
+    store.set_quiz_result("LoRA", False, T2)
+
+    assert store.quiz_concepts(3) == [
+        {"name": "LoRA", "summary": "s", "status": "wrong"}
+    ]
+
+
+def test_fr24_set_quiz_result_sets_status_and_last_quizzed_keeps_rows(db):
+    """set_quiz_result sets status and last_quizzed to now, matches the name case-insensitively and deletes nothing."""
+    store.log_concept("LoRA", "s", T1)
+    store.log_concept("Attention", "t", T1)
+
+    store.set_quiz_result("lora", True, T2)
+    rows = {r[0]: r for r in concept_rows(db)}
+    assert len(rows) == 2
+    assert rows["LoRA"][2] == "right"
+    assert rows["LoRA"][5] == T2
+    assert rows["Attention"][2] == "new"
+    assert rows["Attention"][5] is None
+
+    store.set_quiz_result("LORA", False, "2026-10-11T09:00:00+05:30")
+    rows = {r[0]: r for r in concept_rows(db)}
+    assert len(rows) == 2
+    assert rows["LoRA"][2] == "wrong"
+    assert rows["LoRA"][5] == "2026-10-11T09:00:00+05:30"
+
+
+def test_fr24_fewer_concepts_than_limit_returns_all_eligible(db):
+    """With fewer eligible concepts than the limit, all of them are returned."""
+    store.log_concept("a", "s", day(1))
+    store.log_concept("b", "s", day(2))
+    store.log_concept("done", "s", day(3))
+    store.set_quiz_result("done", True, day(4))
+
+    assert names_of(store.quiz_concepts(3)) == ["a", "b"]
+
+
+def test_fr24_limit_caps_result(db):
+    """quiz_concepts never returns more than limit concepts."""
+    for n in range(1, 6):
+        store.log_concept(f"c{n}", "s", day(n))
+
+    assert names_of(store.quiz_concepts(2)) == ["c1", "c2"]
+
+
+def test_fr24_no_eligible_concepts_returns_empty(db):
+    """With no concepts at all, quiz_concepts returns an empty list."""
+    assert store.quiz_concepts(3) == []
+
+
 def traced_statements(monkeypatch, call) -> list[str]:
     statements: list[str] = []
 

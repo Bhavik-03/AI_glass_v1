@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from server import config, search, store
+from server import config, search, session, store
 
 # Larger integers can't be bound as SQLite parameters (OverflowError).
 SQLITE_MAX_INT = 2**63 - 1
@@ -96,6 +96,15 @@ DECLARATIONS = [
         ),
         "parameters_json_schema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "start_quiz",
+        "description": (
+            "Start a quiz on logged concepts. Call it only when the user asks to be quizzed. "
+            "Returns the first question to read out exactly, or count 0 when there is "
+            "nothing to quiz."
+        ),
+        "parameters_json_schema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -165,6 +174,22 @@ def _learned_this_week(args: dict, now: datetime) -> dict:
     )
 
 
+def _start_quiz(args: dict, now: datetime) -> dict:
+    concepts = store.quiz_concepts(config.QUIZ_MAX_CONCEPTS)
+    if not concepts:
+        return {"count": 0, "question": ""}
+    session.start_quiz(concepts, now)
+    return {"count": len(concepts), "question": quiz_question(concepts[0]["name"])}
+
+
+def quiz_question(name: str) -> str:
+    return config.QUIZ_QUESTION.format(name=name)
+
+
+def quiz_score_text(right: int, total: int) -> str:
+    return f"{right} of {total} right"
+
+
 def _reminder_id(value: object) -> int | None:
     # Gemini may send 3.0 for 3; bool is an int subclass but never an id.
     if isinstance(value, bool):
@@ -195,6 +220,7 @@ _HANDLERS = {
     "list_notes": _list_notes,
     "log_concept": _log_concept,
     "learned_this_week": _learned_this_week,
+    "start_quiz": _start_quiz,
 }
 
 

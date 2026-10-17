@@ -1,3 +1,4 @@
+import json
 import time
 from collections.abc import Sequence
 from datetime import datetime
@@ -27,7 +28,12 @@ offset, based on the time above.
 - When you tell the user a reminder time, say the due_spoken text from the tool result, never an ISO timestamp.
 - Never say an id aloud; ids are only for calling cancel_reminder.
 - Call log_concept for learning questions only: "what is LoRA?" is one, "when is Diwali?" is not. Reuse a listed concept name when it is the same concept.
+- Call start_quiz only when the user asks to be quizzed ("quiz me"). Read the returned question exactly as given. If count is 0, say there is nothing to quiz.
 Existing concept names: {concept_names}"""
+
+GRADE_INSTRUCTION = """You grade one spoken answer to a quiz question about a concept.
+The answer was transcribed by speech recognition: judge its meaning and ignore speech recognition errors, such as misheard or misspelled words.
+Reply as JSON: correct is true when the answer shows the concept's meaning, otherwise false. feedback is one short line: right or wrong plus a short correction when wrong. It is spoken aloud, so use plain words."""
 
 SKIPPED_RESULT = {
     "error": "skipped: no time left; tell the user you could not look it up, do not guess"
@@ -199,3 +205,29 @@ def _ask(
                 )
             )
         contents.append(types.Content(role="user", parts=replies))
+
+
+def grade(name: str, summary: str, answer: str) -> dict:
+    """Grade a spoken quiz answer in one Gemini call without tools; returns
+    {correct, feedback} (FR-24)."""
+    request = types.GenerateContentConfig(
+        system_instruction=GRADE_INSTRUCTION,
+        response_mime_type="application/json",
+        thinking_config=types.ThinkingConfig(thinking_level=config.LLM_THINKING_LEVEL),
+    )
+    prompt = f"Concept: {name}\nSummary: {summary}\nSpoken answer: {answer}"
+    response = _get_client().models.generate_content(
+        model=config.LLM_MODEL, contents=prompt, config=request
+    )
+    try:
+        graded = json.loads(response.text)
+    except (TypeError, ValueError) as e:
+        raise RuntimeError("grading reply is not JSON") from e
+    if not (
+        isinstance(graded, dict)
+        and isinstance(graded.get("correct"), bool)
+        and isinstance(graded.get("feedback"), str)
+        and graded["feedback"].strip()
+    ):
+        raise RuntimeError("grading reply lacks correct and feedback")
+    return {"correct": graded["correct"], "feedback": graded["feedback"].strip()}

@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from server import config, search, store, tools
+from server import config, search, session, store, tools
 
 NOW = datetime(2026, 10, 10, 9, 0, tzinfo=ZoneInfo(config.TIMEZONE))
 FIXED_ISO = "2026-10-09T14:00:00+05:30"
@@ -1141,3 +1141,90 @@ def test_fr25_learned_this_week_uses_config_values(db, monkeypatch):
     out = tools.run("learned_this_week", {}, NOW)
 
     assert out == {"count": 3, "names": ["c0", "c1"]}
+
+
+# --- start_quiz (FR-24) ---
+
+
+def log_quiz_concept(name, day):
+    store.log_concept(name, f"summary {name}", f"2026-10-{day:02d}T10:00:00+05:30")
+
+
+def test_fr24_declares_start_quiz_without_parameters():
+    """DECLARATIONS has one start_quiz entry that takes no arguments."""
+    decl = declaration("start_quiz")
+    assert decl["description"]
+    schema = decl["parameters_json_schema"]
+    assert schema["type"] == "object"
+    assert not schema.get("properties")
+    assert not schema.get("required")
+
+
+def test_fr24_start_quiz_picks_three_oldest_new_and_asks_the_first(db):
+    """With 4 new concepts and 1 wrong one, count is 3, the question names the oldest new one, and the session holds those 3 in order."""
+    log_quiz_concept("wrongone", 1)
+    store.set_quiz_result("wrongone", False, "2026-10-02T10:00:00+05:30")
+    for name, day in (("n6", 6), ("n3", 3), ("n5", 5), ("n4", 4)):
+        log_quiz_concept(name, day)
+
+    out = tools.run("start_quiz", {}, NOW)
+
+    assert out == {"count": 3, "question": "Explain n3 in one sentence."}
+    state = session.quiz(NOW)
+    assert [c["name"] for c in state["concepts"]] == ["n3", "n4", "n5"]
+    assert state["index"] == 0
+    assert state["right"] == 0
+
+
+def test_fr24_start_quiz_with_no_concepts_returns_zero_and_starts_nothing(db):
+    """With no concepts, start_quiz returns {count: 0, question: ''} and no quiz is running."""
+    out = tools.run("start_quiz", {}, NOW)
+
+    assert out == {"count": 0, "question": ""}
+    assert session.quiz(NOW) is None
+
+
+def test_fr24_start_quiz_with_only_right_concepts_returns_zero(db):
+    """Concepts answered right are not quizzed again: count 0, empty question, no quiz running."""
+    log_quiz_concept("done", 1)
+    store.set_quiz_result("done", True, "2026-10-02T10:00:00+05:30")
+
+    out = tools.run("start_quiz", {}, NOW)
+
+    assert out == {"count": 0, "question": ""}
+    assert session.quiz(NOW) is None
+
+
+def test_fr24_start_quiz_ignores_extra_arguments(db):
+    """start_quiz takes no arguments: extra ones are ignored and nothing raises."""
+    log_quiz_concept("LoRA", 1)
+
+    out = tools.run("start_quiz", {"junk": 1}, NOW)
+
+    assert out == {"count": 1, "question": "Explain LoRA in one sentence."}
+
+
+def test_fr24_quiz_question_template():
+    """quiz_question(name) is 'Explain <name> in one sentence.' from config.QUIZ_QUESTION."""
+    assert config.QUIZ_QUESTION == "Explain {name} in one sentence."
+    assert tools.quiz_question("LoRA") == "Explain LoRA in one sentence."
+
+
+def test_fr24_start_quiz_question_comes_from_config_template(db, monkeypatch):
+    """The question is built from config.QUIZ_QUESTION, not hard-coded."""
+    monkeypatch.setattr(config, "QUIZ_QUESTION", "Define {name}.")
+    log_quiz_concept("LoRA", 1)
+
+    out = tools.run("start_quiz", {}, NOW)
+
+    assert out == {"count": 1, "question": "Define LoRA."}
+    assert tools.quiz_question("Softmax") == "Define Softmax."
+
+
+@pytest.mark.parametrize(
+    ("right", "total", "text"),
+    [(2, 3, "2 of 3 right"), (0, 3, "0 of 3 right")],
+)
+def test_fr24_quiz_score_text(right, total, text):
+    """The end of a quiz speaks the score as '<right> of <total> right'."""
+    assert tools.quiz_score_text(right, total) == text

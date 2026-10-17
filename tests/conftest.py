@@ -60,6 +60,9 @@ def fake_stages(monkeypatch, fixed_now) -> dict:
 
     calls["order"] lists stage names; calls["stt"], ["llm"], ["tts"], and
     ["stt_load"], ["tts_load"] hold the arguments of each call.
+    calls["transcript"] is what stt "hears"; calls["grade"] holds (name,
+    summary, answer) per llm.grade call; calls["grade_result"] is the dict
+    grade returns, or an Exception instance to make it raise.
     """
     calls = {
         "order": [],
@@ -70,12 +73,23 @@ def fake_stages(monkeypatch, fixed_now) -> dict:
         "tts": [],
         "stt_load": [],
         "tts_load": [],
+        "transcript": FAKE_TRANSCRIPT,
+        "grade": [],
+        "grade_result": {"correct": True, "feedback": "Right."},
     }
 
     def transcribe(wav):
         calls["order"].append("stt")
         calls["stt"].append(wav)
-        return FAKE_TRANSCRIPT
+        return calls["transcript"]
+
+    def grade(name, summary, answer):
+        calls["order"].append("grade")
+        calls["grade"].append((name, summary, answer))
+        result = calls["grade_result"]
+        if isinstance(result, Exception):
+            raise result
+        return dict(result)
 
     def ask(question, now, turns=(), image=None):
         calls["order"].append("llm")
@@ -91,6 +105,7 @@ def fake_stages(monkeypatch, fixed_now) -> dict:
 
     monkeypatch.setattr("server.stt.transcribe", transcribe)
     monkeypatch.setattr("server.llm.ask", ask)
+    monkeypatch.setattr("server.llm.grade", grade)
     monkeypatch.setattr("server.tts.synthesize", synthesize)
     monkeypatch.setattr("server.stt.load", lambda: calls["stt_load"].append(1))
     monkeypatch.setattr("server.tts.load", lambda: calls["tts_load"].append(1))

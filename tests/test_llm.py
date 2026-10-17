@@ -1,6 +1,7 @@
 """LLM tests: system instruction (FR-6), Gemini call and tool loop (FR-5, FR-7), session turns (FR-21). Fake client, no network."""
 
 import copy
+import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -1198,8 +1199,169 @@ def test_fr23_ask_puts_stored_concept_names_in_instruction(monkeypatch) -> None:
     assert "Backpropagation" in fake.models.calls[0]["config"].system_instruction
 
 
+def _quiz_rule() -> str:
+    lines = llm.system_instruction(fixed_now()).lower().splitlines()
+    return " ".join(line for line in lines if "start_quiz" in line)
+
+
+def test_fr24_instruction_start_quiz_on_quiz_me() -> None:
+    """The instruction names the start_quiz tool and the trigger phrase 'quiz me'."""
+    rule = _quiz_rule()
+    assert "start_quiz" in rule
+    assert "quiz me" in rule
+
+
+def test_fr24_instruction_start_quiz_only_when_asked() -> None:
+    """The instruction says to call start_quiz only when the user asks to be quizzed."""
+    rule = _quiz_rule()
+    assert "only when" in rule
+    assert "asks to be quizzed" in rule
+
+
+def test_fr24_instruction_read_returned_question_exactly() -> None:
+    """The instruction says to read the returned question exactly."""
+    rule = _quiz_rule()
+    assert "returned question" in rule
+    assert "exactly" in rule
+
+
+def test_fr24_instruction_count_zero_means_nothing_to_quiz() -> None:
+    """The instruction says that when count is 0, the assistant says there is nothing to quiz."""
+    rule = _quiz_rule()
+    assert "count is 0" in rule
+    assert "nothing to quiz" in rule
+
+
 def test_fr5_api_failure_propagates(monkeypatch) -> None:
     """An exception from generate_content propagates out of ask."""
     install_fake(monkeypatch, [ConnectionError("boom")])
     with pytest.raises(ConnectionError, match="boom"):
         llm.ask("hi", fixed_now())
+
+
+# --- grade(): one Gemini call that grades a spoken quiz answer (FR-24) ---
+
+
+def grade_json(correct=True, feedback="Right. LoRA adds low-rank adapters.") -> str:
+    return json.dumps({"correct": correct, "feedback": feedback})
+
+
+def sent_text(call: dict) -> str:
+    contents = call["contents"]
+    if isinstance(contents, str):
+        return contents
+    if not isinstance(contents, list):
+        contents = [contents]
+    texts = []
+    for item in contents:
+        if isinstance(item, str):
+            texts.append(item)
+            continue
+        texts.extend(p.text for p in item.parts if getattr(p, "text", None))
+    return "\n".join(texts)
+
+
+def test_fr24_grade_returns_correct_and_feedback(monkeypatch) -> None:
+    """A right answer returns {"correct": True, "feedback": <Gemini's line>}."""
+    install_fake(monkeypatch, [text_response(grade_json(True, "Right. Nice."))])
+    result = llm.grade("LoRA", "Low-rank adapters.", "adapters")
+    assert result == {"correct": True, "feedback": "Right. Nice."}
+
+
+def test_fr24_grade_wrong_answer_returns_false_and_correction(monkeypatch) -> None:
+    """A wrong answer returns {"correct": False, "feedback": <correction>}."""
+    line = "Wrong. LoRA adds low-rank adapters."
+    install_fake(monkeypatch, [text_response(grade_json(False, line))])
+    result = llm.grade("LoRA", "Low-rank adapters.", "a database")
+    assert result == {"correct": False, "feedback": line}
+
+
+def test_fr24_grade_makes_exactly_one_call(monkeypatch) -> None:
+    """grade makes exactly one Gemini call, with no tool round."""
+    fake = install_fake(monkeypatch, [text_response(grade_json())])
+    llm.grade("LoRA", "Low-rank adapters.", "adapters")
+    assert len(fake.models.calls) == 1
+
+
+def test_fr24_grade_request_has_no_tools_and_json_mime(monkeypatch) -> None:
+    """The grade request carries no tools or tool_config, asks for JSON, thinking MINIMAL,
+    and uses GRADE_INSTRUCTION."""
+    fake = install_fake(monkeypatch, [text_response(grade_json())])
+    llm.grade("LoRA", "Low-rank adapters.", "adapters")
+    cfg = fake.models.calls[0]["config"]
+    assert not cfg.tools
+    assert cfg.tool_config is None
+    assert cfg.response_mime_type == "application/json"
+    assert enum_value(cfg.thinking_config.thinking_level) == "MINIMAL"
+    assert cfg.system_instruction == llm.GRADE_INSTRUCTION
+
+
+def test_fr24_grade_uses_configured_model(monkeypatch) -> None:
+    """The grade call uses config.LLM_MODEL."""
+    monkeypatch.setattr(config, "LLM_MODEL", "test-model")
+    fake = install_fake(monkeypatch, [text_response(grade_json())])
+    llm.grade("LoRA", "Low-rank adapters.", "adapters")
+    assert fake.models.calls[0]["model"] == "test-model"
+
+
+def test_fr24_grade_contents_hold_name_summary_and_answer(monkeypatch) -> None:
+    """The request contents contain the concept name, its summary and the spoken answer."""
+    fake = install_fake(monkeypatch, [text_response(grade_json())])
+    llm.grade("Zeta-concept", "Summary about xylophones.", "my spoken guess")
+    text = sent_text(fake.models.calls[0])
+    assert "Zeta-concept" in text
+    assert "Summary about xylophones." in text
+    assert "my spoken guess" in text
+
+
+def test_fr24_grade_instruction_ignores_speech_recognition_errors() -> None:
+    """GRADE_INSTRUCTION says to judge the meaning and ignore speech recognition errors,
+    and to give one short line of feedback with a correction."""
+    text = llm.GRADE_INSTRUCTION.lower()
+    assert "meaning" in text
+    assert "speech recognition" in text
+    assert "one" in text
+    assert "correction" in text
+
+
+def test_fr24_grade_client_error_propagates(monkeypatch) -> None:
+    """An exception from generate_content propagates out of grade unchanged."""
+    install_fake(monkeypatch, [ConnectionError("boom")])
+    with pytest.raises(ConnectionError, match="boom"):
+        llm.grade("LoRA", "Low-rank adapters.", "adapters")
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "not json at all",
+        "",
+        '["correct", "feedback"]',
+        '"just a string"',
+        json.dumps({"feedback": "Right."}),
+        json.dumps({"correct": True}),
+        json.dumps({"correct": "yes", "feedback": "Right."}),
+        json.dumps({"correct": 1, "feedback": "Right."}),
+        json.dumps({"correct": None, "feedback": "Right."}),
+        json.dumps({"correct": True, "feedback": ""}),
+        json.dumps({"correct": True, "feedback": "   "}),
+    ],
+    ids=[
+        "bad-json",
+        "empty-text",
+        "list",
+        "string",
+        "missing-correct",
+        "missing-feedback",
+        "correct-str",
+        "correct-int",
+        "correct-null",
+        "feedback-empty",
+        "feedback-blank",
+    ],
+)
+def test_fr24_grade_unreadable_response_raises(monkeypatch, bad: str) -> None:
+    """Text that is not a JSON object with a bool `correct` and a non-empty `feedback` raises."""
+    install_fake(monkeypatch, [text_response(bad)])
+    with pytest.raises(RuntimeError):
+        llm.grade("LoRA", "Low-rank adapters.", "adapters")

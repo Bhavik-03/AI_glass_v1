@@ -7,6 +7,8 @@ PENDING = "pending"
 DELIVERED = "delivered"
 CANCELLED = "cancelled"
 NEW = "new"
+RIGHT = "right"
+WRONG = "wrong"
 
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS notes (
@@ -166,3 +168,22 @@ def learned_since(since: str, limit: int) -> dict:
             (since, limit),
         ).fetchall()
     return {"count": count, "names": [row["name"] for row in rows]}
+
+
+def quiz_concepts(limit: int) -> list[dict]:
+    """Concepts to quiz: status new, oldest first asked first, then wrong, oldest last quizzed first."""
+    with _connect() as con:
+        rows = con.execute(
+            "SELECT name, summary, status FROM concepts WHERE status IN (?, ?)"
+            " ORDER BY status = ? DESC, COALESCE(last_quizzed, first_asked), id LIMIT ?",
+            (NEW, WRONG, NEW, limit),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def set_quiz_result(name: str, correct: bool, now: str) -> None:
+    with _connect() as con:
+        con.execute(
+            "UPDATE concepts SET status = ?, last_quizzed = ? WHERE name = ?",
+            (RIGHT if correct else WRONG, now, name),
+        )

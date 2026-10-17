@@ -1424,3 +1424,292 @@ def test_fr17_concept_kept_when_llm_fails_after_ok_log_concept(
     assert response.json() == {"error": "llm: deadline exceeded"}
     (line,) = _log_lines(log_path)
     assert line["concept"] == "LoRA"
+
+
+# --- quiz answers (FR-24, FR-17) ---
+
+
+def _start_quiz(*names: str) -> None:
+    """Log the concepts (oldest first) and start a quiz at FIXED_NOW."""
+    from server import store, tools
+
+    for day, name in enumerate(names, start=1):
+        store.log_concept(name, f"summary of {name}", f"2026-10-0{day}T10:00:00+05:30")
+    out = tools.run("start_quiz", {}, FIXED_NOW)
+    assert out["count"] == len(names)
+
+
+def _concept_row(db_path, name: str) -> tuple:
+    import sqlite3
+
+    con = sqlite3.connect(db_path)
+    try:
+        return con.execute(
+            "SELECT status, last_quizzed FROM concepts WHERE name = ?", (name,)
+        ).fetchone()
+    finally:
+        con.close()
+
+
+def test_fr24_quiz_answer_is_graded_and_ask_not_called(fake_stages, silent_wav):
+    """FR-24: during a quiz the transcript is graded for the current concept
+    with llm.grade(name, summary, transcript); llm.ask is not called."""
+    _start_quiz("LoRA", "Attention")
+    fake_stages["transcript"] = "low rank adapters"
+    response = _post_query(silent_wav)
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.content == FAKE_TTS_WAV
+    assert fake_stages["order"] == ["stt", "grade", "tts"]
+    assert fake_stages["llm"] == []
+    assert fake_stages["grade"] == [("LoRA", "summary of LoRA", "low rank adapters")]
+
+
+def test_fr24_question_like_answer_is_still_graded(fake_stages, silent_wav):
+    """FR-24: a transcript that sounds like a question is still graded as the
+    answer while a quiz is running."""
+    _start_quiz("LoRA", "Attention")
+    fake_stages["transcript"] = "what is LoRA?"
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["llm"] == []
+    assert fake_stages["grade"] == [("LoRA", "summary of LoRA", "what is LoRA?")]
+
+
+def test_fr24_spoken_text_is_feedback_then_next_question(fake_stages, silent_wav):
+    """FR-24: TTS speaks the feedback, a space, then the next question
+    'Explain <name> in one sentence.'"""
+    _start_quiz("LoRA", "Attention")
+    fake_stages["grade_result"] = {"correct": True, "feedback": "Yes, well done."}
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["tts"] == ["Yes, well done. Explain Attention in one sentence."]
+
+
+def test_fr24_next_answer_is_graded_against_next_concept(fake_stages, silent_wav):
+    """FR-24: after one answer the quiz advances to the next concept."""
+    _start_quiz("LoRA", "Attention")
+    assert _post_query(silent_wav).status_code == 200
+    fake_stages["transcript"] = "it weights tokens"
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["grade"][1] == (
+        "Attention",
+        "summary of Attention",
+        "it weights tokens",
+    )
+
+
+def test_fr24_last_answer_speaks_score_and_ends_quiz(fake_stages, silent_wav):
+    """FR-24: after the last concept TTS speaks the feedback and '<right> of
+    <total> right', and the quiz is over (a later query goes to llm.ask)."""
+    from server import session
+
+    _start_quiz("LoRA", "Attention")
+    fake_stages["grade_result"] = {"correct": True, "feedback": "Right."}
+    assert _post_query(silent_wav).status_code == 200
+    fake_stages["grade_result"] = {"correct": False, "feedback": "Not quite."}
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["tts"][-1] == "Not quite. 1 of 2 right"
+    assert session.quiz(FIXED_NOW) is None
+    assert _post_query(silent_wav).status_code == 200
+    assert len(fake_stages["llm"]) == 1
+    assert len(fake_stages["grade"]) == 2
+
+
+def test_fr24_graded_answers_set_status_and_last_quizzed(fake_stages, silent_wav, db):
+    """FR-24: grading saves the concept's status (right or wrong) and sets
+    last_quizzed to now."""
+    _start_quiz("LoRA", "Attention")
+    fake_stages["grade_result"] = {"correct": True, "feedback": "Right."}
+    assert _post_query(silent_wav).status_code == 200
+    fake_stages["grade_result"] = {"correct": False, "feedback": "No."}
+    assert _post_query(silent_wav).status_code == 200
+    assert _concept_row(db, "LoRA") == ("right", FIXED_NOW.isoformat())
+    assert _concept_row(db, "Attention") == ("wrong", FIXED_NOW.isoformat())
+
+
+def test_fr24_grading_failure_returns_500_and_quiz_stays(fake_stages, silent_wav, db):
+    """FR-24: if grading fails the response is 500 {"error": "llm: boom"}, the
+    quiz stays on the same question and the store row is unchanged."""
+    from server import session
+
+    _start_quiz("LoRA", "Attention")
+    before = _concept_row(db, "LoRA")
+    fake_stages["grade_result"] = RuntimeError("boom")
+    response = _post_query(silent_wav)
+    assert response.status_code == 500
+    assert response.json() == {"error": "llm: boom"}
+    assert fake_stages["order"] == ["stt", "grade"]
+    state = session.quiz(FIXED_NOW)
+    assert state["index"] == 0
+    assert state["right"] == 0
+    assert _concept_row(db, "LoRA") == before
+    assert _concept_row(db, "LoRA")[0] == "new"
+
+
+def test_fr24_tts_failure_keeps_quiz_on_same_question(
+    fake_stages, silent_wav, db, monkeypatch
+):
+    """FR-24: if speaking the grade fails the quiz stays on the same question and the
+    store row is unchanged, so the user is asked again."""
+    from server import session
+
+    def fail(text):
+        raise RuntimeError("no voice")
+
+    _start_quiz("LoRA", "Attention")
+    monkeypatch.setattr("server.tts.synthesize", fail)
+    response = _post_query(silent_wav)
+    assert response.status_code == 500
+    assert response.json() == {"error": "tts: no voice"}
+    assert session.quiz(FIXED_NOW)["index"] == 0
+    assert _concept_row(db, "LoRA")[0] == "new"
+
+
+def test_fr17_grading_failure_writes_one_line_without_concept(
+    fake_stages, silent_wav, log_path
+):
+    """FR-17: a failed grading query writes one line with the error and no
+    concept logged."""
+    _start_quiz("LoRA", "Attention")
+    fake_stages["grade_result"] = RuntimeError("boom")
+    assert _post_query(silent_wav).status_code == 500
+    (line,) = _log_lines(log_path)
+    assert line["error"] == "llm: boom"
+    assert line["concept"] is None
+
+
+def test_fr17_quiz_query_writes_one_line_with_transcript_and_spoken_answer(
+    fake_stages, silent_wav, log_path
+):
+    """FR-17: a quiz query writes one line: question = transcript, answer =
+    spoken text, error null, tool_calls [], timings for stt, llm and tts."""
+    _start_quiz("LoRA", "Attention")
+    fake_stages["transcript"] = "low rank adapters"
+    fake_stages["grade_result"] = {"correct": True, "feedback": "Right."}
+    assert _post_query(silent_wav).status_code == 200
+    (line,) = _log_lines(log_path)
+    assert line["question"] == "low rank adapters"
+    assert line["answer"] == "Right. Explain Attention in one sentence."
+    assert line["error"] is None
+    assert line["tool_calls"] == []
+    assert {"stt", "llm", "tts"} <= set(line["timings_ms"])
+
+
+def test_fr24_without_quiz_query_still_calls_ask(fake_stages, silent_wav):
+    """FR-24: with no running quiz /query runs stt, llm.ask, tts as before and
+    never grades."""
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["order"] == ["stt", "llm", "tts"]
+    assert fake_stages["grade"] == []
+
+
+# --- quiz stop, expiry and reset (FR-24, FR-22) ---
+
+STOPPED = "Quiz stopped."
+
+
+def test_fr24_stop_phrase_default_is_stop_quiz():
+    """FR-24: config.QUIZ_STOP_PHRASE is 'stop quiz'."""
+    assert config.QUIZ_STOP_PHRASE == "stop quiz"
+
+
+@pytest.mark.parametrize(
+    "transcript",
+    ["stop quiz", "Stop quiz.", "okay, STOP quiz!"],
+    ids=["plain", "punctuated", "embedded"],
+)
+def test_fr24_stop_phrase_ends_quiz_without_llm(fake_stages, silent_wav, transcript):
+    """FR-24: while a quiz runs, a transcript containing 'stop quiz' (lowercased,
+    punctuation removed) ends it: 200 audio/wav speaking exactly 'Quiz stopped.',
+    stages stt then tts, no ask and no grade, and the quiz is over."""
+    from server import session
+
+    _start_quiz("LoRA", "Attention")
+    fake_stages["transcript"] = transcript
+    response = _post_query(silent_wav)
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.content == FAKE_TTS_WAV
+    assert fake_stages["order"] == ["stt", "tts"]
+    assert fake_stages["tts"] == [STOPPED]
+    assert fake_stages["llm"] == []
+    assert fake_stages["grade"] == []
+    assert session.quiz(FIXED_NOW) is None
+
+
+def test_fr24_stop_keeps_graded_statuses(fake_stages, silent_wav, db):
+    """FR-24: stopping keeps statuses already graded; the unasked concept stays new."""
+    _start_quiz("LoRA", "Attention")
+    fake_stages["grade_result"] = {"correct": False, "feedback": "No."}
+    assert _post_query(silent_wav).status_code == 200
+    fake_stages["transcript"] = "Stop quiz."
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["tts"][-1] == STOPPED
+    assert len(fake_stages["grade"]) == 1
+    assert _concept_row(db, "LoRA") == ("wrong", FIXED_NOW.isoformat())
+    assert _concept_row(db, "Attention")[0] == "new"
+
+
+def test_fr17_stop_quiz_writes_one_line(fake_stages, silent_wav, log_path):
+    """FR-17: stopping a quiz writes one line: question = transcript, answer =
+    'Quiz stopped.', error null."""
+    _start_quiz("LoRA", "Attention")
+    fake_stages["transcript"] = "Stop quiz."
+    assert _post_query(silent_wav).status_code == 200
+    (line,) = _log_lines(log_path)
+    assert line["question"] == "Stop quiz."
+    assert line["answer"] == STOPPED
+    assert line["error"] is None
+
+
+def test_fr24_stop_phrase_without_quiz_is_ordinary_question(fake_stages, silent_wav):
+    """FR-24: with no running quiz 'stop quiz' goes to llm.ask like any question."""
+    fake_stages["transcript"] = "stop quiz"
+    response = _post_query(silent_wav)
+    assert response.status_code == 200
+    assert fake_stages["order"] == ["stt", "llm", "tts"]
+    assert fake_stages["llm"][0][0] == "stop quiz"
+    assert fake_stages["tts"] == [FAKE_ANSWER]
+
+
+def test_fr24_session_expiry_does_not_end_quiz(fake_stages, silent_wav, clock):
+    """FR-24: the 120 s session expiry does not end a quiz: a query 200 s after
+    the start is still graded."""
+    _start_quiz("LoRA", "Attention")
+    clock.at(200)
+    fake_stages["transcript"] = "low rank adapters"
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["grade"] == [("LoRA", "summary of LoRA", "low rank adapters")]
+    assert fake_stages["llm"] == []
+
+
+def test_fr24_answer_wait_300s_ends_quiz_quietly(fake_stages, silent_wav, clock, db):
+    """FR-24: 300 s (QUIZ_ANSWER_WAIT_S) without an answer ends the quiz quietly:
+    the query is an ordinary question, the quiz is None, and the concept's status
+    and last_quizzed are unchanged."""
+    from server import session
+
+    assert config.QUIZ_ANSWER_WAIT_S == 300
+    _start_quiz("LoRA", "Attention")
+    before = _concept_row(db, "LoRA")
+    clock.at(300)
+    response = _post_query(silent_wav)
+    assert response.status_code == 200
+    assert fake_stages["order"] == ["stt", "llm", "tts"]
+    assert fake_stages["grade"] == []
+    assert session.quiz(clock.t) is None
+    assert _concept_row(db, "LoRA") == before
+
+
+def test_fr22_reset_clears_running_quiz(fake_stages, silent_wav):
+    """FR-22: POST /session/reset returns 200 {"status": "ok"} and clears a
+    running quiz: the next query goes to llm.ask, not grade."""
+    from server import session
+
+    _start_quiz("LoRA", "Attention")
+    response = client.post("/session/reset")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert session.quiz(FIXED_NOW) is None
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["order"] == ["stt", "llm", "tts"]
+    assert fake_stages["grade"] == []
