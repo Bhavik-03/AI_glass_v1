@@ -989,3 +989,80 @@ def test_fr10_reminder_text_is_prefix_due_spoken_and_text(db, due_at, now, prefi
     spoken = tools.reminder_text(stored, now)
 
     assert spoken == f"{prefix}, {added['due_spoken']}: call the lab"
+
+
+# --- log_concept (FR-23) ---
+
+LORA_SUMMARY = "LoRA fine-tunes a model by training small low-rank adapter matrices."
+
+
+def test_fr23_declares_log_concept_with_required_name_and_summary():
+    """DECLARATIONS has one log_concept entry whose schema requires string 'name' and 'summary'."""
+    decl = declaration("log_concept")
+    assert decl["description"]
+    schema = decl["parameters_json_schema"]
+    assert schema["type"] == "object"
+    assert schema["properties"]["name"]["type"] == "string"
+    assert schema["properties"]["summary"]["type"] == "string"
+    assert "name" in schema["required"]
+    assert "summary" in schema["required"]
+
+
+def test_fr23_log_concept_returns_new_result_and_stores_one_concept(db, fixed_now):
+    """run('log_concept') returns {name, summary, status 'new', new True} and stores the concept."""
+    out = tools.run("log_concept", {"name": "LoRA", "summary": LORA_SUMMARY}, fixed_now)
+
+    assert set(out) == {"name", "summary", "status", "new"}
+    assert out["name"] == "LoRA"
+    assert out["summary"] == LORA_SUMMARY
+    assert out["status"] == "new"
+    assert out["new"] is True
+    assert store.concept_names() == ["LoRA"]
+
+
+def test_fr23_log_concept_same_name_other_case_is_not_new(db, fixed_now):
+    """Logging 'lora' after 'LoRA' returns new False and still stores one concept."""
+    tools.run("log_concept", {"name": "LoRA", "summary": LORA_SUMMARY}, fixed_now)
+
+    out = tools.run(
+        "log_concept", {"name": "lora", "summary": "Low-rank adaptation."}, fixed_now
+    )
+
+    assert "error" not in out
+    assert out["new"] is False
+    assert len(store.concept_names()) == 1
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"summary": LORA_SUMMARY},
+        {"name": "", "summary": LORA_SUMMARY},
+        {"name": "   ", "summary": LORA_SUMMARY},
+        {"name": 5, "summary": LORA_SUMMARY},
+        {"name": None, "summary": LORA_SUMMARY},
+        {"name": "LoRA"},
+        {"name": "LoRA", "summary": ""},
+        {"name": "LoRA", "summary": "   "},
+        {"name": "LoRA", "summary": 5},
+    ],
+    ids=[
+        "missing-name",
+        "empty-name",
+        "whitespace-name",
+        "non-string-name",
+        "none-name",
+        "missing-summary",
+        "empty-summary",
+        "whitespace-summary",
+        "non-string-summary",
+    ],
+)
+def test_fr23_log_concept_bad_arguments_return_error_and_store_nothing(
+    db, fixed_now, args
+):
+    """A missing, empty, blank or non-string name or summary returns {error} and stores nothing."""
+    out = tools.run("log_concept", args, fixed_now)
+
+    assert isinstance(out.get("error"), str) and out["error"]
+    assert store.concept_names() == []

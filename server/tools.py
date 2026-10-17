@@ -73,6 +73,21 @@ DECLARATIONS = [
         "description": "List every saved note, newest first.",
         "parameters_json_schema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "log_concept",
+        "description": (
+            "Log a concept the user is learning about. Call it for learning questions only. "
+            "Reuse an existing concept name when it is the same concept."
+        ),
+        "parameters_json_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Short concept name"},
+                "summary": {"type": "string", "description": "One-line summary"},
+            },
+            "required": ["name", "summary"],
+        },
+    },
 ]
 
 
@@ -124,6 +139,17 @@ def _list_reminders(args: dict, now: datetime) -> dict:
     }
 
 
+def _log_concept(args: dict, now: datetime) -> dict:
+    name, summary = args.get("name"), args.get("summary")
+    if not isinstance(name, str) or not name.strip():
+        return {"error": "log_concept needs a non-empty name"}
+    if not isinstance(summary, str) or not summary.strip():
+        return {"error": "log_concept needs a non-empty summary"}
+    return store.log_concept(
+        name.strip(), summary.strip(), now.isoformat(timespec="seconds")
+    )
+
+
 def _reminder_id(value: object) -> int | None:
     # Gemini may send 3.0 for 3; bool is an int subclass but never an id.
     if isinstance(value, bool):
@@ -152,6 +178,7 @@ _HANDLERS = {
     "list_reminders": _list_reminders,
     "cancel_reminder": _cancel_reminder,
     "list_notes": _list_notes,
+    "log_concept": _log_concept,
 }
 
 
