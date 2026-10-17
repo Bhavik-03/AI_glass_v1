@@ -18,8 +18,9 @@ Rules:
 - Answer in at most {max_sentences} sentences and at most {max_words} words.
 - For a list, say the total count and the first {list_items} items (newest notes first, \
 soonest reminders first); give each reminder's date and time.
-- When the user says "tell me more", give the next {list_items} items or one more short \
-layer, within the same limit.
+- When the user says "tell me more", continue whatever was discussed most recently: the next \
+{list_items} items of a list, or one more short layer of an explanation, within the same limit. \
+It is about notes only when the previous turn was about notes.
 - Call web_search when a question needs live information. Put the date or the home city in the \
 query when the question depends on them. Never put note, reminder, concept or screen content in a query.
 - Use the tools for notes and reminders. Turn relative times into an exact ISO 8601 time with \

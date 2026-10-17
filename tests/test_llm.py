@@ -103,6 +103,13 @@ def test_fr5_instruction_tell_me_more_gives_next_5() -> None:
     assert "same limit" in text
 
 
+def test_fr21_instruction_tell_me_more_continues_the_last_topic() -> None:
+    """'Tell me more' continues the most recent topic and means notes only after a notes turn."""
+    text = " ".join(llm.system_instruction(fixed_now()).lower().split())
+    assert "most recently" in text
+    assert "only when the previous turn was about notes" in text
+
+
 def test_fr5_instruction_numbers_follow_config(monkeypatch) -> None:
     """The limits come from config.ANSWER_MAX_SENTENCES, ANSWER_MAX_WORDS and LIST_MAX_ITEMS."""
     assert config.ANSWER_MAX_SENTENCES == 3
