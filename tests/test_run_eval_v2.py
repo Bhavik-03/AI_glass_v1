@@ -801,3 +801,303 @@ def test_fr22_main_only_checks_files_of_selected_group(main_env):
     (eval_config.SCREENSHOT_DIR_V2 / "look01.jpg").unlink()
     assert ev2.main(["--group", "concept"]) == 0
     assert main_env["calls"] == ["c01"]
+
+
+# ---------- concept and quiz grading (T5: FR-23, FR-24) ----------
+
+
+def concept_names() -> list[str]:
+    con = sqlite3.connect(eval_config.DB_PATH)
+    try:
+        return [r[0] for r in con.execute("SELECT name FROM concepts")]
+    finally:
+        con.close()
+
+
+def stored_status(name: str):
+    con = sqlite3.connect(eval_config.DB_PATH)
+    try:
+        row = con.execute(
+            "SELECT status FROM concepts WHERE name = ? COLLATE NOCASE", (name,)
+        ).fetchone()
+        return row[0] if row else None
+    finally:
+        con.close()
+
+
+def set_status(name: str, status: str) -> None:
+    con = sqlite3.connect(eval_config.DB_PATH)
+    try:
+        with con:
+            con.execute(
+                "UPDATE concepts SET status = ? WHERE name = ? COLLATE NOCASE",
+                (status, name),
+            )
+    finally:
+        con.close()
+
+
+def set_log_concept(value) -> None:
+    """Rewrite the last log line with the given concept value."""
+    lines = eval_config.LOG_PATH.read_text(encoding="utf-8").splitlines()
+    entry = json.loads(lines[-1])
+    entry["concept"] = value
+    lines[-1] = json.dumps(entry)
+    eval_config.LOG_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def hooked(server, on_query):
+    """Handler wrapper: after a successful fake /query, call on_query(n) (n = 1-based)."""
+
+    def handler(request):
+        resp = server(request)
+        if request.url.path == "/query" and resp.status_code == 200:
+            on_query(len(server.queries))
+        return resp
+
+    return handler
+
+
+def run_hooked(row, server, on_query):
+    write_files(data_v2())
+    with make_client(hooked(server, on_query)) as client:
+        return ev2.run_case(client, row, sleep=lambda s: None, clock=Clock())
+
+
+def concept_row(added: bool = True) -> dict:
+    row = dict(row_of(data_v2(), "c01"))
+    row["pass"] = {"concept_added": added}
+    return row
+
+
+def quiz_row(status: str = "right") -> dict:
+    row = dict(row_of(data_v2(), "qz01"))
+    row["seed"] = {"name": "Photosynthesis", "summary": "plants make sugar from light"}
+    row["pass"] = {"status": status}
+    return row
+
+
+def test_fr23_concept_passes_when_one_row_added_and_log_concept_set(env):
+    """Concept row passes when exactly one concept row is added and the log concept is set."""
+
+    def on_query(n):
+        store.log_concept("gradient descent", "minimise loss", CREATED)
+        set_log_concept("gradient descent")
+
+    result = run_hooked(concept_row(), FakeServer(), on_query)
+    assert result["passed"] is True and result["reason"] == "ok"
+
+
+def test_fr23_concept_fails_when_no_row_added(env):
+    """Concept row fails with 'concept not added' when the table did not grow."""
+
+    result = run_hooked(concept_row(), FakeServer(), lambda n: set_log_concept("x"))
+    assert result["passed"] is False
+    assert "concept not added" in result["reason"]
+
+
+def test_fr23_concept_existing_name_updated_counts_as_not_added(env):
+    """Re-logging an existing name (a duplicate) updates the row, count unchanged: 'concept not added'."""
+
+    def on_query(n):
+        store.log_concept("gravity", "things fall down", CREATED)
+        set_log_concept("gravity")
+
+    result = run_hooked(concept_row(), FakeServer(), on_query)
+    assert result["passed"] is False
+    assert "concept not added" in result["reason"]
+    assert concept_names().count("gravity") == 1
+
+
+def test_fr23_concept_duplicate_name_case_insensitive_fails(env):
+    """Two names equal ignoring case in the table fail with 'duplicate concept name'."""
+    con = sqlite3.connect(eval_config.DB_PATH)
+    try:
+        with con:
+            con.execute("DROP TABLE concepts")
+            con.execute(
+                "CREATE TABLE concepts (id INTEGER PRIMARY KEY, name TEXT, summary TEXT,"
+                " first_asked TEXT, last_asked TEXT, status TEXT)"
+            )
+            con.execute(
+                "INSERT INTO concepts (name, summary, first_asked, last_asked, status)"
+                " VALUES ('Gravity', 's', ?, ?, 'new')",
+                (CREATED, CREATED),
+            )
+    finally:
+        con.close()
+
+    def on_query(n):
+        c = sqlite3.connect(eval_config.DB_PATH)
+        try:
+            with c:
+                c.execute(
+                    "INSERT INTO concepts (name, summary, first_asked, last_asked, status)"
+                    " VALUES ('gravity', 's', ?, ?, 'new')",
+                    (CREATED, CREATED),
+                )
+        finally:
+            c.close()
+        set_log_concept("gravity")
+
+    result = run_hooked(concept_row(), FakeServer(), on_query)
+    assert result["passed"] is False
+    assert "duplicate concept name" in result["reason"]
+
+
+def test_fr23_concept_fails_when_log_concept_is_none(env):
+    """A row added but log concept None fails with 'log concept is None'."""
+
+    def on_query(n):
+        store.log_concept("gradient descent", "minimise loss", CREATED)
+
+    result = run_hooked(concept_row(), FakeServer(), on_query)
+    assert result["passed"] is False
+    assert result["reason"] == "log concept is None"
+
+
+def test_fr23_concept_fails_when_two_rows_added(env):
+    """Adding two concept rows in one turn is not 'exactly one more': fails with 'concept not added'."""
+
+    def on_query(n):
+        store.log_concept("gradient descent", "a", CREATED)
+        store.log_concept("loss function", "b", CREATED)
+        set_log_concept("gradient descent")
+
+    result = run_hooked(concept_row(), FakeServer(), on_query)
+    assert result["passed"] is False
+    assert "concept not added" in result["reason"]
+
+
+def test_fr23_concept_expected_absent_passes_when_nothing_changes(env):
+    """concept_added false passes when the count is unchanged and log concept is None."""
+    result = run_hooked(concept_row(False), FakeServer(), lambda n: None)
+    assert result["passed"] is True and result["reason"] == "ok"
+
+
+def test_fr23_concept_expected_absent_fails_when_row_added(env):
+    """concept_added false fails with 'concept added unexpectedly' when a row appears."""
+
+    def on_query(n):
+        store.log_concept("gradient descent", "a", CREATED)
+
+    result = run_hooked(concept_row(False), FakeServer(), on_query)
+    assert result["passed"] is False
+    assert "concept added unexpectedly" in result["reason"]
+
+
+def test_fr23_concept_expected_absent_fails_when_log_concept_set(env):
+    """concept_added false fails when the log concept is set though no row was added."""
+    result = run_hooked(
+        concept_row(False), FakeServer(), lambda n: set_log_concept("gravity")
+    )
+    assert result["passed"] is False
+    assert result["reason"] == "log concept is gravity but none expected"
+
+
+def test_fr23_concept_reasons_joined_with_semicolon(env):
+    """Several concept failures are joined with '; '."""
+    result = run_hooked(concept_row(), FakeServer(), lambda n: None)
+    assert result["passed"] is False
+    assert result["reason"] == "concept not added; log concept is None"
+
+
+def test_fr23_concept_http_failure_keeps_http_reason(env):
+    """A 500 on a concept case still fails with the 'http 500: ...' reason."""
+    result = run_hooked(concept_row(), FakeServer(status={1: 500}), lambda n: None)
+    assert result["passed"] is False
+    assert result["reason"] == "http 500: llm: broke"
+
+
+def test_fr24_quiz_seeds_only_the_seed_concept_as_new(env):
+    """Before the quiz, all concepts are deleted and the seed concept is inserted with status new."""
+    seen = {}
+
+    def on_query(n):
+        if n == 1:
+            seen["names"] = concept_names()
+            seen["status"] = stored_status("Photosynthesis")
+
+    run_hooked(quiz_row(), FakeServer(), on_query)
+    assert seen["names"] == ["Photosynthesis"]
+    assert seen["status"] == "new"
+
+
+def test_fr24_quiz_seeds_before_session_reset(env):
+    """The seed is in the DB by the time /session/reset is called."""
+    seen = {}
+    server = FakeServer()
+
+    def handler(request):
+        if request.url.path == "/session/reset":
+            seen["names"] = concept_names()
+        return server(request)
+
+    write_files(data_v2())
+    with make_client(handler) as client:
+        ev2.run_case(client, quiz_row(), sleep=lambda s: None, clock=Clock())
+    assert seen["names"] == ["Photosynthesis"]
+
+
+def test_fr24_quiz_sends_start_clip_then_answer_clip(env):
+    """Quiz sends quiz_start.wav, then the row's own clip, after one reset."""
+    server = FakeServer()
+    result = run_hooked(quiz_row(), server, lambda n: None)
+    assert server.resets == 1
+    assert CLIP + b"quiz_start" in server.queries[0].content
+    assert CLIP + b"qz01" in server.queries[1].content
+    assert [t["clip"] for t in result["turns"]] == ["quiz_start", "qz01"]
+
+
+@pytest.mark.parametrize("expected", ["right", "wrong"])
+def test_fr24_quiz_passes_when_stored_status_equals_expected(env, expected):
+    """Quiz passes when the seed concept's stored status equals the judged one (right or wrong)."""
+
+    def on_query(n):
+        if n == 2:
+            set_status("photosynthesis", expected)
+
+    result = run_hooked(quiz_row(expected), FakeServer(), on_query)
+    assert result["passed"] is True and result["reason"] == "ok"
+
+
+def test_fr24_quiz_fails_when_status_differs(env):
+    """Quiz fails with 'status is <stored>, expected <expected>' when the status differs."""
+
+    def on_query(n):
+        if n == 2:
+            set_status("photosynthesis", "wrong")
+
+    result = run_hooked(quiz_row("right"), FakeServer(), on_query)
+    assert result["passed"] is False
+    assert result["reason"] == "status is wrong, expected right"
+
+
+def test_fr24_quiz_fails_when_status_still_new(env):
+    """A status never updated stays 'new' and fails against right."""
+    result = run_hooked(quiz_row("right"), FakeServer(), lambda n: None)
+    assert result["passed"] is False
+    assert result["reason"] == "status is new, expected right"
+
+
+def test_fr24_quiz_fails_when_seed_concept_missing(env):
+    """If the seed concept is gone after the turns, the quiz fails with 'seed concept missing'."""
+
+    def on_query(n):
+        con = sqlite3.connect(eval_config.DB_PATH)
+        try:
+            with con:
+                con.execute("DELETE FROM concepts")
+        finally:
+            con.close()
+
+    result = run_hooked(quiz_row(), FakeServer(), on_query)
+    assert result["passed"] is False
+    assert "seed concept missing" in result["reason"]
+
+
+def test_fr24_quiz_http_failure_fails_with_http_reason(env):
+    """A 500 on the answer turn fails the quiz with the http reason."""
+    result = run_hooked(quiz_row(), FakeServer(status={2: 500}), lambda n: None)
+    assert result["passed"] is False
+    assert result["reason"].startswith("http 500")

@@ -135,7 +135,59 @@ def _turn(
     return turn
 
 
-def _grade(row: dict, turns: list[dict]) -> tuple[bool, str]:
+def _concept_names() -> list[str]:
+    with closing(sqlite3.connect(config.DB_PATH)) as con:
+        return [row[0] for row in con.execute("SELECT name FROM concepts ORDER BY id")]
+
+
+def _concept_status(name: str) -> str | None:
+    with closing(sqlite3.connect(config.DB_PATH)) as con:
+        row = con.execute(
+            "SELECT status FROM concepts WHERE name = ? COLLATE NOCASE", (name,)
+        ).fetchone()
+    return row[0] if row else None
+
+
+def _seed_concept(seed: dict) -> None:
+    """Make the seed the only concept, status new, so the quiz asks exactly it."""
+    asked = datetime.now(ZoneInfo(server_config.TIMEZONE)).isoformat(timespec="seconds")
+    with closing(sqlite3.connect(config.DB_PATH)) as con, con:
+        con.execute("DELETE FROM concepts")
+        con.execute(
+            "INSERT INTO concepts (name, summary, first_asked, last_asked, status)"
+            " VALUES (?, ?, ?, ?, 'new')",
+            (seed["name"], seed.get("summary", ""), asked, asked),
+        )
+
+
+def _concept_failures(row: dict, before: list[str], log: dict) -> list[str]:
+    after = _concept_names()
+    failures = []
+    if len({name.lower() for name in after}) != len(after):
+        failures.append("duplicate concept name")
+    added = len(after) - len(before)
+    if row["pass"]["concept_added"]:
+        if added != 1:
+            failures.append("concept not added")
+        if log["concept"] is None:
+            failures.append("log concept is None")
+    else:
+        if added != 0:
+            failures.append("concept added unexpectedly")
+        if log["concept"] is not None:
+            failures.append(f"log concept is {log['concept']} but none expected")
+    return failures
+
+
+def _quiz_failures(row: dict) -> list[str]:
+    stored = _concept_status(row["seed"]["name"])
+    if stored is None:
+        return ["seed concept missing"]
+    expected = row["pass"]["status"]
+    return [] if stored == expected else [f"status is {stored}, expected {expected}"]
+
+
+def _grade(row: dict, turns: list[dict], before: list[str]) -> tuple[bool, str]:
     for turn in turns:
         if turn["status"] != 200:
             return False, f"http {turn['status']}: {turn['error']}"
@@ -147,6 +199,10 @@ def _grade(row: dict, turns: list[dict]) -> tuple[bool, str]:
         failures.append("image_sent was false")
     if row["group"] == "followup" and not log["session_continued"]:
         failures.append("session was not continued")
+    if row["group"] == "concept" and "concept_added" in row.get("pass", {}):
+        failures += _concept_failures(row, before, log)
+    if row["group"] == "quiz" and "seed" in row and "status" in row.get("pass", {}):
+        failures += _quiz_failures(row)
     return (not failures, "; ".join(failures) or "ok")
 
 
@@ -172,6 +228,9 @@ def run_case(
     clock: Callable[[], float] = time.perf_counter,
 ) -> dict:
     """Run one case in a fresh session; the turns of a follow-up case share it (FR-22)."""
+    if row["group"] == "quiz" and "seed" in row:
+        _seed_concept(row["seed"])
+    before = _concept_names()
     client.post("/session/reset").raise_for_status()
     image = None
     if row["group"] == "look":
@@ -183,7 +242,7 @@ def run_case(
         pace(turn["wall_s"], gemini_calls(turn["log"]), sleep)
         if turn["status"] != 200:
             break
-    passed, reason = _grade(row, turns)
+    passed, reason = _grade(row, turns, before)
     return {
         "id": row["id"],
         "group": row["group"],
