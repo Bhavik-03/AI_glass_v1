@@ -57,7 +57,7 @@ Goal: concepts table, `log_concept` and `learned_this_week`, names in the prompt
 | M10-T3 | FR-23 | server/tools.py (+ tests/test_tools.py) | Declaration `log_concept(name, summary)`; dispatch returns `{name, summary, status, new}`; a missing or empty name or summary returns `{error}` and stores nothing | pytest | #85 | [x] |
 | M10-T4 | FR-25 | server/config.py, server/store.py, server/tools.py (+ tests/test_store.py, tests/test_tools.py) | Declaration `learned_this_week()` returns `{count, names}`; with 7 concepts first asked in the last `LEARNED_DAYS` (7) days and 2 older, count 7 and the `LEARNED_MAX_NAMES` (5) most recent names; with none, count 0 and no names | pytest | #86 | [x] |
 | M10-T5 | FR-23, FR-5 | server/llm.py (+ tests/test_llm.py) | The system instruction says to call `log_concept` for learning questions only ("what is LoRA?" is one, "when is Diwali?" is not), to reuse a listed name for the same concept, and never to put concepts in a `web_search` query; it lists the existing concept names from `store` (temp DB, fake client) | pytest | #87 | [x] |
-| M10-T6 | FR-17 | server/main.py (+ tests/test_server.py) | Every `/query` log line has `concept`: the name from an ok `log_concept` call in that query, else null; failed queries included | pytest | #88 | [ ] |
+| M10-T6 | FR-17 | server/main.py (+ tests/test_server.py) | Every `/query` log line has `concept`: the name from an ok `log_concept` call in that query, else null; failed queries included | pytest | #88 | [x] |
 
 Manual checks: with the real model, "what is LoRA?" adds one concept row with status new and
 the answer is about the fine-tuning method; asking "what is lora used for?" later updates that

@@ -92,6 +92,14 @@ def _image_type(data: bytes) -> str | None:
         return None
 
 
+def _concept(tool_calls: list[dict]) -> str | None:
+    """The concept an ok log_concept call stored in this query, even if a later stage failed."""
+    for call in tool_calls:
+        if call["name"] == "log_concept" and call["status"] == "ok":
+            return call["args"]["name"]
+    return None
+
+
 def _error(status_code: int, message: str, record: dict) -> JSONResponse:
     record["error"] = message
     return JSONResponse(status_code=status_code, content={"error": message})
@@ -206,6 +214,7 @@ def query(
             record,
         )
     finally:
+        record["concept"] = _concept(record["tool_calls"])
         logger.log_query(record)
 
 

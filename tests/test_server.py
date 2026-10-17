@@ -1346,3 +1346,81 @@ def test_fr17_log_never_contains_the_image(fake_stages, silent_wav, log_path):
     image_keys = [k for k in line if "image" in k.lower()]
     assert image_keys == ["image_sent"]
     assert line["image_sent"] is True
+
+
+def _lora_call(status: str = "ok") -> dict:
+    return {
+        "name": "log_concept",
+        "args": {"name": "LoRA", "summary": "Low-rank adapters for fine-tuning."},
+        "status": status,
+    }
+
+
+def _fake_llm_tool_calls(monkeypatch, calls: list[dict]) -> None:
+    monkeypatch.setattr(
+        "server.llm.ask",
+        lambda question, now, turns=(), image=None: (FAKE_ANSWER, False, calls),
+    )
+
+
+def test_fr17_concept_logged_from_ok_log_concept_call(
+    fake_stages, silent_wav, monkeypatch, log_path
+):
+    """FR-17: the line's concept is the name from an ok log_concept call."""
+    _fake_llm_tool_calls(monkeypatch, [_lora_call("ok")])
+    assert _post_query(silent_wav).status_code == 200
+    (line,) = _log_lines(log_path)
+    assert line["concept"] == "LoRA"
+
+
+def test_fr17_concept_null_without_tool_calls(fake_stages, silent_wav, log_path):
+    """FR-17: with no tool calls the line has concept null."""
+    assert _post_query(silent_wav).status_code == 200
+    (line,) = _log_lines(log_path)
+    assert "concept" in line
+    assert line["concept"] is None
+
+
+def test_fr17_concept_null_when_log_concept_failed(
+    fake_stages, silent_wav, monkeypatch, log_path
+):
+    """FR-17: a log_concept call with status failed leaves concept null."""
+    _fake_llm_tool_calls(monkeypatch, [_lora_call("failed")])
+    assert _post_query(silent_wav).status_code == 200
+    (line,) = _log_lines(log_path)
+    assert line["concept"] is None
+
+
+def test_fr17_concept_null_when_only_other_tools_ran(
+    fake_stages, silent_wav, monkeypatch, log_path
+):
+    """FR-17: other tools (add_note ok) do not set concept; it stays null."""
+    other = {"name": "add_note", "args": {"text": "buy milk"}, "status": "ok"}
+    _fake_llm_tool_calls(monkeypatch, [other])
+    assert _post_query(silent_wav).status_code == 200
+    (line,) = _log_lines(log_path)
+    assert line["concept"] is None
+
+
+def test_fr17_concept_null_on_audio_400(fake_stages, log_path):
+    """FR-17: a failed query (400 bad audio) still has a concept key, null."""
+    response = client.post("/query")
+    assert response.status_code == 400
+    (line,) = _log_lines(log_path)
+    assert "concept" in line
+    assert line["concept"] is None
+
+
+def test_fr17_concept_kept_when_llm_fails_after_ok_log_concept(
+    fake_stages, silent_wav, monkeypatch, log_path
+):
+    """FR-17: when llm raises with an ok log_concept in exc.tool_calls, the
+    failed query's line still records the concept (it was stored before the failure)."""
+    exc = RuntimeError("deadline exceeded")
+    exc.tool_calls = [_lora_call("ok")]
+    _make_stage_raise(monkeypatch, fake_stages, "llm", exc)
+    response = _post_query(silent_wav)
+    assert response.status_code == 500
+    assert response.json() == {"error": "llm: deadline exceeded"}
+    (line,) = _log_lines(log_path)
+    assert line["concept"] == "LoRA"
