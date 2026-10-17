@@ -1,26 +1,31 @@
-# AI Assistant (voice, v1)
+# AI Assistant (voice, v2 Teacher)
 
-A voice assistant that runs on a laptop. Hold the push-to-talk key (F9), ask a question or give
-a command, let go, and hear the answer. It can search the web for live facts, keep notes, and
-set, list and cancel reminders; due reminders are spoken aloud.
+A learning companion that runs on a laptop. Hold a push-to-talk key, ask a question or give a
+command, let go, and hear a short answer. v2 keeps everything from v1 (web search, notes,
+reminders that are spoken when due) and adds four things: a Look key that sends a screenshot
+of what you are studying with your question, a short-term session so follow-ups such as
+"what is it used for?" and "tell me more" work, a concept tracker that logs what you ask to
+learn, and "quiz me", which quizzes you on the concepts you logged and grades your spoken
+answers.
 
-Pipeline: microphone -> faster-whisper -> Gemini with tools -> Piper -> speakers.
+Pipeline: microphone -> faster-whisper -> Gemini with tools (and the screenshot) -> Piper ->
+speakers.
 
-The long-term goal is a pair of glasses that act as a second brain; this is version 1.
+The long-term goal is a pair of glasses that act as a second brain; this is version 2.
 
 ## Demo
 
-[Watch the demo video](https://youtu.be/wGKn86mIK80): a live question, a note, and a
-reminder that is spoken when it is due.
+The v1 demo: [watch the demo video](https://youtu.be/wGKn86mIK80), a live question, a note,
+and a reminder that is spoken when it is due. A v2 demo is not recorded yet.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    C["PC client<br/>mic, F9 key, speakers"] -->|"question WAV"| STT
+    C["PC client<br/>mic, two keys, screenshot, speakers"] -->|"question WAV<br/>+ optional JPEG"| STT
     subgraph S["Laptop server (FastAPI, 127.0.0.1)"]
         STT["Whisper<br/>speech to text, GPU"] --> LLM["Gemini with tools<br/>cloud API"]
-        LLM <--> T["Tools<br/>web search (Tavily),<br/>notes and reminders (SQLite)"]
+        LLM <--> T["Tools<br/>web search (Tavily),<br/>notes, reminders, concepts (SQLite)"]
         LLM --> TTS["Piper<br/>text to speech"]
     end
     TTS -->|"answer WAV"| C
@@ -28,12 +33,21 @@ flowchart LR
 
 The client also polls the server every 10 s and speaks reminders when they are due.
 
+## Keys
+
+- **Right Alt**: voice. Hold, speak, let go.
+- **Right Ctrl**: Look. Same as voice, and it also takes one screenshot at the moment you
+  press, so you can ask about what is on screen.
+- There is no F9 key any more.
+
+Screenshots are shrunk, sent with the question and never saved to disk.
+
 ## Requirements
 
 - Windows, Python 3.11.
 - An NVIDIA GPU with CUDA for speech recognition (developed on an RTX 3050 Laptop, 4 GB).
-- A Gemini API key and a Tavily API key. Copy `.env.example` to `.env` and fill in both.
-  `.env` is ignored by git and must never be committed.
+- A Gemini API key and a Tavily API key. Copy `.env.example` to `.env` and fill in
+  `GEMINI_API_KEY` and `TAVILY_API_KEY`. `.env` is ignored by git and must never be committed.
 
 ## Setup
 
@@ -43,7 +57,8 @@ py -3.11 -m venv .venv
 .venv\Scripts\python -m piper.download_voices en_US-lessac-medium --download-dir models
 ```
 
-The speech recognition model downloads on the first run.
+`requirements.txt` includes Pillow, used by the client to shrink screenshots. The speech
+recognition model downloads on the first run.
 
 ## Run
 
@@ -62,30 +77,68 @@ Tests and checks:
 .venv\Scripts\python -m ruff format --check .
 ```
 
-Evaluation (30 questions, real Gemini, slow). Record the clips once, then run it with the
-server up and the client stopped; it backs up your notes and reminders and restores them after:
+### Evaluations
+
+Both evaluations use real Gemini and are slow. Run them with the server up and the client
+stopped; they back up your notes, reminders and concepts and restore them afterwards.
+
+Record the clips once (`--set v1` is the default). The v2 Look questions also need your 20
+screenshots in `data/eval_v2/screenshots/`.
 
 ```powershell
-.venv\Scripts\python -m eval.record
+.venv\Scripts\python -m eval.record --set v1
+.venv\Scripts\python -m eval.record --set v2
+```
+
+v1 evaluation (30 questions):
+
+```powershell
 .venv\Scripts\python -m eval.run_eval
+```
+
+v2 evaluation (20 Look, 10 follow-up, 20 concept and 10 quiz cases). The Gemini free tier
+allows 500 requests a day, so run one group at a time. Finished cases are kept in
+`data/eval_v2/progress.json` and skipped on the next run; `--fresh` starts over:
+
+```powershell
+.venv\Scripts\python -m eval.run_eval_v2 --group look
+.venv\Scripts\python -m eval.run_eval_v2 --group followup
+.venv\Scripts\python -m eval.run_eval_v2 --group concept
+.venv\Scripts\python -m eval.run_eval_v2 --group quiz
+```
+
+Reports are written to `eval/results/`. To see the last 10 logged queries:
+
+```powershell
 .venv\Scripts\python -m eval.live_log
 ```
 
 ## Measured results
 
-From the final run of the 30-question evaluation (`eval/results/2026-10-11_1555.md`):
+### v1 regression (30 questions, re-run on the v2 code)
+
+From `eval/results/2026-10-17_1611.md`:
 
 | Check | Result | Pass mark |
 | --- | --- | --- |
 | General and live questions | 8/10 (80%) | 80% |
 | Notes | 10/10 (100%) | 80% |
 | Reminders | 10/10 (100%) | 80% |
-| Transcription | 26/30 (87%) | 90%, missed by one clip |
-| Median time, key release to answer | 3.1 s | 15 s |
+| Transcription | 26/30 (87%) | at least 26/30 for the regression |
+| Median time, key release to answer | 3.4 s (worst 9.6 s) | 15 s |
 | Errors | 0 | none |
 
-Questions that search the web take about 6 s. The transcription target is missed and accepted
-as a known gap; see `docs/plan.md`.
+### v2 (TBD - T11 not finished)
+
+Placeholder: these numbers come from the final v2 run (M12-T11) and are not measured yet.
+
+| Check | Result | Pass mark |
+| --- | --- | --- |
+| Look questions | TBD - T11 not finished | 80% |
+| Follow-ups | TBD - T11 not finished | 8 of 10 |
+| Concept logging | TBD - T11 not finished | 90% |
+| Quiz grading | TBD - T11 not finished | 8 of 10 |
+| Look latency, median (worst) | TBD - T11 not finished | median 8 s |
 
 ## Known limits
 
@@ -97,15 +150,17 @@ as a known gap; see `docs/plan.md`.
 
 ## Privacy
 
-Audio stays on the laptop: it is transcribed locally and never uploaded. The question text and
-tool results are sent to Gemini, and the search query alone is sent to Tavily. Notes and
-reminders are stored in a local SQLite database that is not committed.
+Audio stays on the laptop: it is transcribed locally and never uploaded. The question text,
+tool results and, for Look, the screenshot are sent to Gemini; the search query alone is sent
+to Tavily. Notes, reminders and concepts are stored in a local SQLite database that is not
+committed.
 
 ## Roadmap
 
-- v2: phone link (the phone becomes the client; calls, texts and calendar after a spoken yes).
-- v3: Remember (private memory of what I said and discussed, with a local text model).
-- v4: audio wearable (glasses replace the phone as the push-to-talk client).
-- v5: camera (ask about what is in front of me).
+- v3: Memory (it knows me and recalls past conversations as short key points).
+- v4: Planner and habits (helps run my day).
+- v5: Cloud (the server moves off the laptop).
+- v6: Own models (open-source models replace cloud APIs where good enough).
+- v7: Wearable (the client becomes the glasses).
 
 Details are in `docs/roadmap.md`.
