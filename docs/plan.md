@@ -66,9 +66,23 @@ row and adds none; "when is Diwali?" adds none; "what did I learn this week?" gi
 and names within the FR-5 limit (FR-23, FR-25). The 20-question concept target is checked in
 the M12 eval.
 
-## M11 (v2): Quiz me | planned
-Goal: `start_quiz`, quiz state in the session, stop, grading call, score, 300 s wait
-FRs: FR-24, FR-22 · Tasks: not planned yet
+## M11 (v2): Quiz me | in progress
+Goal: `start_quiz`, quiz state in the session, stop, grading call, score, 300 s wait · GitHub milestone: #11
+
+| Task | FR | Files | Done when | Test | Issue | Done |
+| --- | --- | --- | --- | --- | --- | --- |
+| M11-T1 | FR-24 | server/config.py, server/store.py (+ tests/test_store.py) | `quiz_concepts(limit)` gives status new first (oldest first asked first), then status wrong (oldest last quizzed first), never right; with 4 new and 1 wrong and `QUIZ_MAX_CONCEPTS` (3), the 3 oldest new; with only wrong ones, the oldest last quizzed first; `set_quiz_result(name, correct, now)` sets status right or wrong and `last_quizzed`, deletes nothing; a concept set right is not picked again, one set wrong is; temp DB | pytest | #91 | [ ] |
+| M11-T2 | FR-24, FR-22 | server/config.py, server/session.py (+ tests/test_session.py) | The session holds a quiz (concepts, current index, right count) behind the lock; `start_quiz`, `quiz(now)`, advancing after a graded answer and `end_quiz()`; the 120 s session expiry does not end a running quiz; with no answer for `QUIZ_ANSWER_WAIT_S` (300) after the last question the quiz ends quietly and no concept status changes; `reset()` also clears a running quiz | pytest | #92 | [ ] |
+| M11-T3 | FR-24 | server/config.py, server/tools.py (+ tests/test_tools.py) | Declaration `start_quiz()`; dispatch picks up to `QUIZ_MAX_CONCEPTS` from `store`, starts the session quiz and returns `{count, question}` with `question` from `QUIZ_QUESTION` ("Explain {name} in one sentence."); with no concept to quiz, `{count: 0, question: ""}` and no quiz starts; the score text is "2 of 3 right" | pytest | #93 | [ ] |
+| M11-T4 | FR-24 | server/llm.py (+ tests/test_llm.py) | The system instruction says to call `start_quiz` only when the user asks ("quiz me"), to read the returned question exactly, and to say there is nothing to quiz when `count` is 0; a test checks `system_instruction()` contains it | pytest | #94 | [ ] |
+| M11-T5 | FR-24 | server/llm.py (+ tests/test_llm.py) | `grade(name, summary, answer)` makes one Gemini call with no tools, `LLM_TIMEOUT_S`, JSON output `{correct, feedback}` (one line: right or wrong plus a short correction); the prompt holds the concept name, its summary and the answer, and tells Gemini to judge the meaning and ignore speech recognition errors in the spoken answer; an error or unreadable JSON raises, so the stage fails (fake client checks the request) | pytest | #95 | [ ] |
+| M11-T6 | FR-24, FR-17 | server/main.py, tests/conftest.py (+ tests/test_server.py) | While a quiz runs, every `/query` after STT is graded as the answer by `llm.grade` and `llm.ask` is not called, even for a transcript that sounds like a question ("what is LoRA?"); `store` saves the grade; the spoken answer is the feedback plus the next question, or plus the score after the last one, which ends the quiz; a grading failure is 500 `{"error": "llm: <reason>"}` and the quiz stays on the same question; every quiz query writes its log line | pytest | #96 | [ ] |
+| M11-T7 | FR-24, FR-22 | server/config.py, server/main.py (+ tests/test_server.py) | A transcript containing `QUIZ_STOP_PHRASE` ("stop quiz", lowercase, no punctuation) ends the quiz with the answer "Quiz stopped.", no Gemini call, statuses so far kept; an answer after 300 s goes to `llm.ask` as a normal question and the concept's status is unchanged; a quiz answer at 200 s after the 120 s session TTL is still graded; after `POST /session/reset` the next `/query` goes to `llm.ask` with no quiz running | pytest | #97 | [ ] |
+
+Manual checks: with the real model and a few logged concepts, "quiz me" asks "Explain <name>
+in one sentence.", each spoken answer gets one line of right or wrong plus a correction, and
+the end speaks the score; with no concepts it says there is nothing to quiz; ordinary
+questions never start a quiz (FR-24). Grading agreement (≥ 8 of 10) is checked in the M12 eval.
 
 ## M12 (v2): Evaluation | planned
 Goal: frozen v2 set, `record --set v2`, `run_eval_v2`, v1 regression, README, tag v0.2.0
