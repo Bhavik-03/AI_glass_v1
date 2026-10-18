@@ -100,7 +100,7 @@ Goal: frozen v2 set, `record --set v2`, `run_eval_v2`, v1 regression, README, ta
 | M12-T9 | per failure | files per T8 cause (+ tests) | Only where T8 numbers justify it: one fix per cause, no hint words taken from the test questions; only the failing rows re-run; skipped if every v2 target is met | pytest | #107 | [x] |
 | M12-T10 | FR-4, FR-5, FR-8, FR-9 | docs/plan.md | `run_eval` re-run unchanged on the final code: every v1 target met except transcription, which must be ≥ 26 of 30; numbers recorded below | manual | #108 | [x] |
 | M12-T11 | all v2 quality targets | docs/plan.md | Full v2 run on the final code; every target met; the final `_v2` report and the v1 regression report are committed with `git add -f`; numbers recorded below | manual | #109 | [x] |
-| M12-T12 | — | README.md | What v2 does, keys, setup, how to run server, client and both evals, the final numbers; docs only, after T11 | manual | #110 | [ ] |
+| M12-T12 | — | README.md | What v2 does, keys, setup, how to run server, client and both evals, the final numbers; docs only, after T11 | manual | #110 | [x] |
 
 Notes: no new dependency. T1 to T6 are tool tasks (no hint or prompt change); T7 onward need
 the real models and you. Pacing counts Gemini calls from the log line (tool calls + 1), 4 s

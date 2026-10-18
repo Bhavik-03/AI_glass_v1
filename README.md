@@ -128,17 +128,18 @@ From `eval/results/2026-10-17_1611.md`:
 | Median time, key release to answer | 3.4 s (worst 9.6 s) | 15 s |
 | Errors | 0 | none |
 
-### v2 (TBD - T11 not finished)
+### v2 (20 Look, 10 follow-up, 20 concept and 10 quiz cases)
 
-Placeholder: these numbers come from the final v2 run (M12-T11) and are not measured yet.
+From `eval/results/2026-10-18_2340_v2.md`, run group by group on the final code:
 
 | Check | Result | Pass mark |
 | --- | --- | --- |
-| Look questions | TBD - T11 not finished | 80% |
-| Follow-ups | TBD - T11 not finished | 8 of 10 |
-| Concept logging | TBD - T11 not finished | 90% |
-| Quiz grading | TBD - T11 not finished | 8 of 10 |
-| Look latency, median (worst) | TBD - T11 not finished | median 8 s |
+| Look questions | 17/20 (85%) | 80% |
+| Follow-ups | 8/10 (80%) | 8 of 10 |
+| Concept logging | 19/20 (95%) | 90% |
+| Quiz grading | 10/10 (100%) | 8 of 10 |
+| Look latency, median (worst) | 4.8 s (9.3 s) | median 8 s |
+| Errors | 0 | none |
 
 ## Known limits
 
