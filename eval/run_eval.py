@@ -147,8 +147,10 @@ def expected_due(spec: dict, asked_at: datetime) -> tuple[datetime, int]:
 
 
 def _has_word(text: str, word: str) -> bool:
+    """Whole word, or with a plural or verb ending (s, es, ing): "stops" matches "stop"."""
     return (
-        re.search(rf"(?<!\w){re.escape(word)}(?!\w)", text, re.IGNORECASE) is not None
+        re.search(rf"(?<!\w){re.escape(word)}(?:s|es|ing)?(?!\w)", text, re.IGNORECASE)
+        is not None
     )
 
 

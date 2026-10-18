@@ -1,0 +1,723 @@
+{
+ "quiz_start": "Please quiz me.",
+ "rows": [
+  {
+   "id": "l01",
+   "group": "look",
+   "spoken": "What does this error message mean?",
+   "screenshot": "l01.jpg",
+   "pass": {
+    "answer_all": [
+     [
+      "error",
+      "exception",
+      "traceback"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "l02",
+   "group": "look",
+   "spoken": "What is this circuit diagram showing?",
+   "screenshot": "l02.jpg",
+   "pass": {
+    "answer_all": [
+     [
+      "circuit",
+      "resistor",
+      "led"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "l03",
+   "group": "look",
+   "spoken": "Can you explain this equation?",
+   "screenshot": "l03.jpg",
+   "pass": {
+    "answer_all": [
+     [
+      "equation",
+      "derivative",
+      "integral"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "l04",
+   "group": "look",
+   "spoken": "What programming language is this code written in?",
+   "screenshot": "l04.jpg",
+   "pass": {
+    "answer_all": [
+     [
+      "python"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "l05",
+   "group": "look",
+   "spoken": "What is this chemical reaction?",
+   "screenshot": "l05.jpg",
+   "pass": {
+    "answer_all": [
+     [
+      "reaction",
+      "acid",
+      "base"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "l06",
+   "group": "look",
+   "spoken": "Summarize this paragraph for me.",
+   "screenshot": "l06.jpg",
+   "pass": {
+    "answer_all": [
+     [
+      "paragraph",
+      "text"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "l07",
+   "group": "look",
+   "spoken": "What does this graph show?",
+   "screenshot": "l07.jpg",
+   "pass": {
+    "answer_all": [
+     [
+      "graph",
+      "axis",
+      "increase"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "l08",
+   "group": "look",
+   "spoken": "What is this function doing?",
+   "screenshot": "l08.jpg",
+   "pass": {
+    "answer_all": [
+     [
+      "function",
+      "returns",
+      "return"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "l09",
+   "group": "look",
+   "spoken": "Which pin is this wire connected to?",
+   "screenshot": "l09.jpg",
+   "pass": {
+    "answer_all": [
+     [
+      "pin",
+      "wire"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "l10",
+   "group": "look",
+   "spoken": "What is the title of this page?",
+   "screenshot": "l10.jpg",
+   "pass": {
+    "answer_all": [
+     [
+      "title",
+      "page"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "l11",
+   "group": "look",
+   "spoken": "What does this table contain?",
+   "screenshot": "l11.jpg",
+   "pass": {
+    "answer_all": [
+     [
+      "table",
+      "column",
+      "row"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "l12",
+   "group": "look",
+   "spoken": "Explain this diagram simply.",
+   "screenshot": "l12.jpg",
+   "pass": {
+    "answer_all": [
+     [
+      "diagram"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "l13",
+   "group": "look",
+   "spoken": "What is the bug in this code?",
+   "screenshot": "l13.jpg",
+   "pass": {
+    "answer_all": [
+     [
+      "bug",
+      "error",
+      "wrong"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "l14",
+   "group": "look",
+   "spoken": "What formula is on the screen?",
+   "screenshot": "l14.jpg",
+   "pass": {
+    "answer_all": [
+     [
+      "formula"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "l15",
+   "group": "look",
+   "spoken": "What is this slide about?",
+   "screenshot": "l15.jpg",
+   "pass": {
+    "answer_all": [
+     [
+      "slide",
+      "about"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "l16",
+   "group": "look",
+   "spoken": "Translate this sentence into English.",
+   "screenshot": "l16.jpg",
+   "pass": {
+    "answer_all": [
+     [
+      "sentence",
+      "means"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "l17",
+   "group": "look",
+   "spoken": "What command is shown in the terminal?",
+   "screenshot": "l17.jpg",
+   "pass": {
+    "answer_all": [
+     [
+      "command",
+      "terminal"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "l18",
+   "group": "look",
+   "spoken": "What does this flowchart do?",
+   "screenshot": "l18.jpg",
+   "pass": {
+    "answer_all": [
+     [
+      "flowchart",
+      "step"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "l19",
+   "group": "look",
+   "spoken": "What is the output of this code?",
+   "screenshot": "l19.jpg",
+   "pass": {
+    "answer_all": [
+     [
+      "output",
+      "print"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "l20",
+   "group": "look",
+   "spoken": "What is the main idea of this article?",
+   "screenshot": "l20.jpg",
+   "pass": {
+    "answer_all": [
+     [
+      "article",
+      "idea"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "f01",
+   "group": "followup",
+   "spoken": "What is LoRA?",
+   "followup": "What is it used for?",
+   "pass": {
+    "answer_all": [
+     [
+      "fine",
+      "tun",
+      "adapt"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "f02",
+   "group": "followup",
+   "spoken": "What is a transistor?",
+   "followup": "What are its three terminals called?",
+   "pass": {
+    "answer_all": [
+     [
+      "base"
+     ],
+     [
+      "collector"
+     ],
+     [
+      "emitter"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "f03",
+   "group": "followup",
+   "spoken": "What is photosynthesis?",
+   "followup": "Where does it happen in the cell?",
+   "pass": {
+    "answer_all": [
+     [
+      "chloroplast"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "f04",
+   "group": "followup",
+   "spoken": "What is a binary search?",
+   "followup": "What is its time complexity?",
+   "pass": {
+    "answer_all": [
+     [
+      "log"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "f05",
+   "group": "followup",
+   "spoken": "What is Ohm's law?",
+   "followup": "Tell me more.",
+   "pass": {
+    "answer_all": [
+     [
+      "voltage",
+      "current",
+      "resistance"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "f06",
+   "group": "followup",
+   "spoken": "What is a neural network?",
+   "followup": "How does it learn?",
+   "pass": {
+    "answer_all": [
+     [
+      "weight",
+      "gradient",
+      "backprop",
+      "train"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "f07",
+   "group": "followup",
+   "spoken": "What is an API?",
+   "followup": "Give me an example.",
+   "pass": {
+    "answer_all": [
+     [
+      "weather",
+      "request",
+      "server",
+      "website"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "f08",
+   "group": "followup",
+   "spoken": "What is entropy?",
+   "followup": "Which field uses it most?",
+   "pass": {
+    "answer_all": [
+     [
+      "thermodynamic",
+      "physics",
+      "information"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "f09",
+   "group": "followup",
+   "spoken": "What is a pull-up resistor?",
+   "followup": "Why is it needed?",
+   "pass": {
+    "answer_all": [
+     [
+      "float",
+      "default",
+      "high"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "f10",
+   "group": "followup",
+   "spoken": "What is recursion?",
+   "followup": "What is the base case?",
+   "pass": {
+    "answer_all": [
+     [
+      "stop",
+      "terminat",
+      "without",
+      "simplest"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "c01",
+   "group": "concept",
+   "spoken": "What is gradient descent?",
+   "pass": {
+    "concept_added": true
+   }
+  },
+  {
+   "id": "c02",
+   "group": "concept",
+   "spoken": "What is a capacitor?",
+   "pass": {
+    "concept_added": true
+   }
+  },
+  {
+   "id": "c03",
+   "group": "concept",
+   "spoken": "Explain how a hash table works.",
+   "pass": {
+    "concept_added": true
+   }
+  },
+  {
+   "id": "c04",
+   "group": "concept",
+   "spoken": "What is the Pythagorean theorem?",
+   "pass": {
+    "concept_added": true
+   }
+  },
+  {
+   "id": "c05",
+   "group": "concept",
+   "spoken": "What is attention in transformers?",
+   "pass": {
+    "concept_added": true
+   }
+  },
+  {
+   "id": "c06",
+   "group": "concept",
+   "spoken": "What does a voltage regulator do?",
+   "pass": {
+    "concept_added": true
+   }
+  },
+  {
+   "id": "c07",
+   "group": "concept",
+   "spoken": "What is Newton's second law?",
+   "pass": {
+    "concept_added": true
+   }
+  },
+  {
+   "id": "c08",
+   "group": "concept",
+   "spoken": "What is overfitting?",
+   "pass": {
+    "concept_added": true
+   }
+  },
+  {
+   "id": "c09",
+   "group": "concept",
+   "spoken": "What is a Fourier transform?",
+   "pass": {
+    "concept_added": true
+   }
+  },
+  {
+   "id": "c10",
+   "group": "concept",
+   "spoken": "What is the difference between TCP and UDP?",
+   "pass": {
+    "concept_added": true
+   }
+  },
+  {
+   "id": "c11",
+   "group": "concept",
+   "spoken": "When is Diwali?",
+   "pass": {
+    "concept_added": false
+   }
+  },
+  {
+   "id": "c12",
+   "group": "concept",
+   "spoken": "What time is it now?",
+   "pass": {
+    "concept_added": false
+   }
+  },
+  {
+   "id": "c13",
+   "group": "concept",
+   "spoken": "What is the weather in Pune today?",
+   "pass": {
+    "concept_added": false
+   }
+  },
+  {
+   "id": "c14",
+   "group": "concept",
+   "spoken": "Tell me a joke.",
+   "pass": {
+    "concept_added": false
+   }
+  },
+  {
+   "id": "c15",
+   "group": "concept",
+   "spoken": "Thank you very much.",
+   "pass": {
+    "concept_added": false
+   }
+  },
+  {
+   "id": "c16",
+   "group": "concept",
+   "spoken": "What is the news today?",
+   "pass": {
+    "concept_added": false
+   }
+  },
+  {
+   "id": "c17",
+   "group": "concept",
+   "spoken": "Add a note to buy solder wire.",
+   "pass": {
+    "concept_added": false
+   }
+  },
+  {
+   "id": "c18",
+   "group": "concept",
+   "spoken": "How are you today?",
+   "pass": {
+    "concept_added": false
+   }
+  },
+  {
+   "id": "c19",
+   "group": "concept",
+   "spoken": "What day is it tomorrow?",
+   "pass": {
+    "concept_added": false
+   }
+  },
+  {
+   "id": "c20",
+   "group": "concept",
+   "spoken": "Who won the cricket match yesterday?",
+   "pass": {
+    "concept_added": false
+   }
+  },
+  {
+   "id": "q01",
+   "group": "quiz",
+   "spoken": "It trains small low rank adapters and keeps the main model frozen",
+   "seed": {
+    "name": "LoRA",
+    "summary": "Fine-tuning by training small low-rank adapter matrices while the base model stays frozen"
+   },
+   "pass": {
+    "status": "right"
+   }
+  },
+  {
+   "id": "q02",
+   "group": "quiz",
+   "spoken": "It stores energy in an electric field",
+   "seed": {
+    "name": "Capacitor",
+    "summary": "A part that stores energy in an electric field between two plates"
+   },
+   "pass": {
+    "status": "right"
+   }
+  },
+  {
+   "id": "q03",
+   "group": "quiz",
+   "spoken": "It means the model works well on new data",
+   "seed": {
+    "name": "Overfitting",
+    "summary": "A model fits training data so closely that it does badly on new data"
+   },
+   "pass": {
+    "status": "wrong"
+   }
+  },
+  {
+   "id": "q04",
+   "group": "quiz",
+   "spoken": "Voltage equals current times resistance",
+   "seed": {
+    "name": "Ohm's law",
+    "summary": "Voltage equals current times resistance"
+   },
+   "pass": {
+    "status": "right"
+   }
+  },
+  {
+   "id": "q05",
+   "group": "quiz",
+   "spoken": "It looks at every item one by one from the start",
+   "seed": {
+    "name": "Binary search",
+    "summary": "Finding an item in a sorted list by repeatedly halving the range"
+   },
+   "pass": {
+    "status": "wrong"
+   }
+  },
+  {
+   "id": "q06",
+   "group": "quiz",
+   "spoken": "Plants use light to make sugar and give out oxygen",
+   "seed": {
+    "name": "Photosynthesis",
+    "summary": "Plants turn light, water and carbon dioxide into sugar and oxygen"
+   },
+   "pass": {
+    "status": "right"
+   }
+  },
+  {
+   "id": "q07",
+   "group": "quiz",
+   "spoken": "It is a part that only stores charge like a battery",
+   "seed": {
+    "name": "Transistor",
+    "summary": "A semiconductor part used as a switch or amplifier"
+   },
+   "pass": {
+    "status": "wrong"
+   }
+  },
+  {
+   "id": "q08",
+   "group": "quiz",
+   "spoken": "It moves the parameters in the direction that lowers the loss",
+   "seed": {
+    "name": "Gradient descent",
+    "summary": "Repeatedly stepping a model's parameters against the gradient of the loss"
+   },
+   "pass": {
+    "status": "right"
+   }
+  },
+  {
+   "id": "q09",
+   "group": "quiz",
+   "spoken": "It is a loop that never calls any function",
+   "seed": {
+    "name": "Recursion",
+    "summary": "A function that calls itself on a smaller problem until a base case"
+   },
+   "pass": {
+    "status": "wrong"
+   }
+  },
+  {
+   "id": "q10",
+   "group": "quiz",
+   "spoken": "It is the total heat energy stored in a system",
+   "seed": {
+    "name": "Entropy",
+    "summary": "A measure of disorder or uncertainty in a system"
+   },
+   "pass": {
+    "status": "wrong"
+   }
+  }
+ ]
+}

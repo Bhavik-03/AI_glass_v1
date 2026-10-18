@@ -6,6 +6,8 @@ from server import config as server_config
 ROOT = Path(__file__).resolve().parent.parent
 QUESTIONS_PATH = ROOT / "eval" / "questions.json"
 CLIP_DIR = ROOT / "data" / "eval"
+QUESTIONS_V2_PATH = ROOT / "eval" / "questions_v2.json"
+CLIP_DIR_V2 = ROOT / "data" / "eval_v2"
 MARKER_PATH = CLIP_DIR / "restore-pending"
 DB_PATH = server_config.DB_PATH
 LOG_PATH = server_config.LOG_PATH
@@ -26,3 +28,11 @@ RESULTS_DIR = ROOT / "eval" / "results"
 GROUP_PASS_MIN = 0.8
 MEDIAN_TOTAL_MAX_S = 15
 TRANSCRIPTION_MIN = 0.9
+SCREENSHOT_DIR_V2 = CLIP_DIR_V2 / "screenshots"
+MARKER_PATH_V2 = CLIP_DIR_V2 / "restore-pending"
+PROGRESS_PATH_V2 = CLIP_DIR_V2 / "progress.json"
+GROUPS_V2 = ("look", "followup", "concept", "quiz")
+# Quality targets from spec.md: Look >= 80%, follow-ups >= 8 of 10, concepts >= 90%,
+# quiz >= 8 of 10, Look median total <= 8 s.
+GROUP_TARGETS_V2 = {"look": 0.8, "followup": 0.8, "concept": 0.9, "quiz": 0.8}
+LOOK_MEDIAN_MAX_S = 8
