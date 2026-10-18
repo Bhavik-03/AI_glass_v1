@@ -84,7 +84,7 @@ in one sentence.", each spoken answer gets one line of right or wrong plus a cor
 the end speaks the score; with no concepts it says there is nothing to quiz; ordinary
 questions never start a quiz (FR-24). Grading agreement (≥ 8 of 10) is checked in the M12 eval.
 
-## M12 (v2): Evaluation | in progress
+## M12 (v2): Evaluation | done
 Goal: frozen v2 set, `record --set v2`, `run_eval_v2`, v1 regression, README, tag v0.2.0 · GitHub milestone: #12
 
 | Task | FR | Files | Done when | Test | Issue | Done |
