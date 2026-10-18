@@ -16,7 +16,8 @@ The long-term goal is a pair of glasses that act as a second brain; this is vers
 ## Demo
 
 The v1 demo: [watch the demo video](https://youtu.be/wGKn86mIK80), a live question, a note,
-and a reminder that is spoken when it is due. A v2 demo is not recorded yet.
+and a reminder that is spoken when it is due. The v2 demo: [watch the demo video](https://youtu.be/kQE3i1y5kHM),
+Look, follow-ups, and quiz me.
 
 ## Architecture
 
