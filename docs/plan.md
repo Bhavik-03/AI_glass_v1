@@ -99,7 +99,7 @@ Goal: frozen v2 set, `record --set v2`, `run_eval_v2`, v1 regression, README, ta
 | M12-T8 | FR-19, FR-21, FR-23, FR-24 | docs/plan.md | First run, one group at a time (free tier: 500 requests a day); numbers and a cause per failure (STT, tool choice, prompt, deadline, other) recorded below; `eval/questions_v2.json` frozen from now on (only an obvious error, logged here) | manual | #106 | [ ] |
 | M12-T9 | per failure | files per T8 cause (+ tests) | Only where T8 numbers justify it: one fix per cause, no hint words taken from the test questions; only the failing rows re-run; skipped if every v2 target is met | pytest | #107 | [x] |
 | M12-T10 | FR-4, FR-5, FR-8, FR-9 | docs/plan.md | `run_eval` re-run unchanged on the final code: every v1 target met except transcription, which must be ≥ 26 of 30; numbers recorded below | manual | #108 | [x] |
-| M12-T11 | all v2 quality targets | docs/plan.md | Full v2 run on the final code; every target met; the final `_v2` report and the v1 regression report are committed with `git add -f`; numbers recorded below | manual | #109 | [ ] |
+| M12-T11 | all v2 quality targets | docs/plan.md | Full v2 run on the final code; every target met; the final `_v2` report and the v1 regression report are committed with `git add -f`; numbers recorded below | manual | #109 | [x] |
 | M12-T12 | — | README.md | What v2 does, keys, setup, how to run server, client and both evals, the final numbers; docs only, after T11 | manual | #110 | [ ] |
 
 Notes: no new dependency. T1 to T6 are tool tasks (no hint or prompt change); T7 onward need
@@ -127,3 +127,10 @@ reminders 10/10 (every group >= 80%); median total 3.4 s, worst 9.6 s (target <=
 
 Manual checks: after T3, run one group with the real server and check the progress file
 survives Ctrl+C and the DB is restored (FR-22).
+
+T11 result (final v2 run, `eval/results/2026-10-18_2340_v2.md`, built from the group-by-group
+progress file on the final code): look 17/20 (85%), followup 8/10 (80%), concept 19/20 (95%),
+quiz 10/10 (100%); Look median 4.8 s, worst 9.3 s (target <= 8 s); 0 errors; secrets ok; no
+missing groups. Every v2 target is met. Remaining failures: l06, l14, l16 (Look word fit),
+f05, f07 (follow-up words), c09 (Fourier-transform STT mis-hear, issue #38 class). The v1
+regression report is `eval/results/2026-10-17_1611.md` (see the T10 result).
