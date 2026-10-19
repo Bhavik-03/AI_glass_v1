@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import sqlite3
 import statistics
@@ -63,21 +64,18 @@ def check_clips(questions: list[dict]) -> list[str]:
 
 def client_running(run: Callable = subprocess.run) -> bool:
     """True if a PC client process is running; it would acknowledge the eval's reminders."""
-    script = (
-        "Get-CimInstance Win32_Process | Where-Object "
-        f"{{ $_.CommandLine -like '*{config.CLIENT_MODULE}*' -and $_.ProcessId -ne $PID }} "
-        "| Select-Object -ExpandProperty ProcessId"
-    )
     try:
+        # Matches any command line containing the module, so it may warn with no client: safe side.
         done = run(
-            ["powershell", "-NoProfile", "-Command", script],
+            ["pgrep", "-f", re.escape(config.CLIENT_MODULE)],
             capture_output=True,
             text=True,
             timeout=config.PROCESS_LIST_TIMEOUT_S,
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
-    return done.returncode == 0 and bool(done.stdout.strip())
+    pids = set(done.stdout.split()) - {str(os.getpid())}
+    return done.returncode == 0 and bool(pids)
 
 
 def gemini_calls(entry: dict | None) -> int:

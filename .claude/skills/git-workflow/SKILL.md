@@ -5,7 +5,7 @@ user-invocable: false
 ---
 # Git and GitHub workflow
 
-Shell is PowerShell: one command per line, never `&&`.
+Shell is bash: one command per line is preferred for git; `&&` is available.
 
 ## Branches
 - One branch per milestone, created by /plan-milestone from an up-to-date main, one command per line:

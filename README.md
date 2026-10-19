@@ -52,10 +52,10 @@ Screenshots are shrunk, sent with the question and never saved to disk.
 
 ## Setup
 
-```powershell
-py -3.11 -m venv .venv
-.venv\Scripts\python -m pip install -r requirements.txt
-.venv\Scripts\python -m piper.download_voices en_US-lessac-medium --download-dir models
+```bash
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m piper.download_voices en_US-lessac-medium --download-dir models
 ```
 
 `requirements.txt` includes Pillow, used by the client to shrink screenshots. The speech
@@ -65,17 +65,17 @@ recognition model downloads on the first run.
 
 Start the server first, then the client:
 
-```powershell
-.venv\Scripts\python -m server.main
-.venv\Scripts\python -m client_pc.client
+```bash
+.venv/bin/python -m server.main
+.venv/bin/python -m client_pc.client
 ```
 
 Tests and checks:
 
-```powershell
-.venv\Scripts\python -m pytest -q
-.venv\Scripts\python -m ruff check .
-.venv\Scripts\python -m ruff format --check .
+```bash
+.venv/bin/python -m pytest -q
+.venv/bin/python -m ruff check .
+.venv/bin/python -m ruff format --check .
 ```
 
 ### Evaluations
@@ -86,32 +86,32 @@ stopped; they back up your notes, reminders and concepts and restore them afterw
 Record the clips once (`--set v1` is the default). The v2 Look questions also need your 20
 screenshots in `data/eval_v2/screenshots/`.
 
-```powershell
-.venv\Scripts\python -m eval.record --set v1
-.venv\Scripts\python -m eval.record --set v2
+```bash
+.venv/bin/python -m eval.record --set v1
+.venv/bin/python -m eval.record --set v2
 ```
 
 v1 evaluation (30 questions):
 
-```powershell
-.venv\Scripts\python -m eval.run_eval
+```bash
+.venv/bin/python -m eval.run_eval
 ```
 
 v2 evaluation (20 Look, 10 follow-up, 20 concept and 10 quiz cases). The Gemini free tier
 allows 500 requests a day, so run one group at a time. Finished cases are kept in
 `data/eval_v2/progress.json` and skipped on the next run; `--fresh` starts over:
 
-```powershell
-.venv\Scripts\python -m eval.run_eval_v2 --group look
-.venv\Scripts\python -m eval.run_eval_v2 --group followup
-.venv\Scripts\python -m eval.run_eval_v2 --group concept
-.venv\Scripts\python -m eval.run_eval_v2 --group quiz
+```bash
+.venv/bin/python -m eval.run_eval_v2 --group look
+.venv/bin/python -m eval.run_eval_v2 --group followup
+.venv/bin/python -m eval.run_eval_v2 --group concept
+.venv/bin/python -m eval.run_eval_v2 --group quiz
 ```
 
 Reports are written to `eval/results/`. To see the last 10 logged queries:
 
-```powershell
-.venv\Scripts\python -m eval.live_log
+```bash
+.venv/bin/python -m eval.live_log
 ```
 
 ## Measured results
