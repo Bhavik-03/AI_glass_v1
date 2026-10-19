@@ -34,7 +34,7 @@ Docs win over code. If docs are unclear or contradict each other, stop and ask; 
 ## Project structure (files go only here; ask before adding anything)
 ```text
 ai-glasses/
-├── CLAUDE.md  README.md  requirements.txt  .env.example  .gitignore
+├── CLAUDE.md  README.md  requirements.txt  .env.example  .gitignore  .gitattributes
 ├── docs/                  # roadmap, brief, spec, design, plan, hardware_plan, archive/
 ├── server/
 │   ├── main.py            # FastAPI app: /query, /session/reset,
@@ -71,6 +71,10 @@ ai-glasses/
 ├── models/                # Piper voice files, gitignored
 ├── logs/                  # queries.jsonl, gitignored
 └── .claude/               # Claude Code setup: skills, agents, settings
+    └── hooks/
+        ├── guard-shell.sh       # blocks secrets and unsafe git (PreToolUse); .ps1 on Windows
+        ├── format-python.sh     # ruff format + check after edits (PostToolUse); .ps1 on Windows
+        └── test-guard-shell.sh  # cases for guard-shell.sh; .ps1 on Windows
 ```
 
 ## Spec-first rules
@@ -118,22 +122,22 @@ ai-glasses/
 - Models load once at startup, never per request. Python 3.11, ruff for lint + format.
 - FastAPI/pytest details: `server-conventions` skill. Git details: `git-workflow` skill.
 
-## Commands (Windows PowerShell; always call the venv's python, never a global one)
-```powershell
-py -3.11 -m venv .venv                                    # create the venv once
-.venv\Scripts\python -m pip install -r requirements.txt   # after any dependency change
-.venv\Scripts\python -m server.main                       # run server (host and port from server/config.py)
-.venv\Scripts\python -m client_pc.client                  # run PC client (start the server first)
-.venv\Scripts\python -m pytest -q                          # all tests; must pass before any commit
-.venv\Scripts\python -m ruff check .                       # lint
-.venv\Scripts\python -m ruff format --check .              # format check
-.venv\Scripts\python -m eval.record                        # record the 30 eval clips once
-.venv\Scripts\python -m eval.run_eval                      # 30-question eval; real Gemini, slow
-.venv\Scripts\python -m eval.record --set v2               # record v2 clips
-.venv\Scripts\python -m eval.run_eval_v2                   # v2 eval; slow
-.venv\Scripts\python -m eval.live_log                      # last 10 logged queries
+## Commands (bash on Ubuntu; always call the venv's python, never a global one)
+```bash
+python3.11 -m venv .venv                                  # create the venv once
+.venv/bin/python -m pip install -r requirements.txt       # after any dependency change
+.venv/bin/python -m server.main                           # run server (host and port from server/config.py)
+.venv/bin/python -m client_pc.client                      # run PC client (start the server first)
+.venv/bin/python -m pytest -q                              # all tests; must pass before any commit
+.venv/bin/python -m ruff check .                           # lint
+.venv/bin/python -m ruff format --check .                  # format check
+.venv/bin/python -m eval.record                            # record the 30 eval clips once
+.venv/bin/python -m eval.run_eval                          # 30-question eval; real Gemini, slow
+.venv/bin/python -m eval.record --set v2                   # record v2 clips
+.venv/bin/python -m eval.run_eval_v2                       # v2 eval; slow
+.venv/bin/python -m eval.live_log                          # last 10 logged queries
 ```
-Use PowerShell syntax: run commands on separate lines, not `&&` (Windows PowerShell 5.1 lacks it).
+Use bash syntax: forward-slash paths. `&&` works, but one command per line is still preferred for git.
 Client microphone: it stays open while the client runs, frames are discarded unless the key is held,
 and nothing is stored.
 

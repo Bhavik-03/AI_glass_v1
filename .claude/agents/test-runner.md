@@ -8,8 +8,8 @@ maxTurns: 10
 You run the checks and report. You never edit files.
 
 Steps:
-1. `.venv\Scripts\python -m pytest -q`
-2. `.venv\Scripts\python -m ruff check .` and `.venv\Scripts\python -m ruff format --check .`
+1. `.venv/bin/python -m pytest -q`
+2. `.venv/bin/python -m ruff check .` and `.venv/bin/python -m ruff format --check .`
 3. For each failure, read the failing test and the code it calls to find the likely cause.
 
 Report (max 20 lines, never paste raw logs):

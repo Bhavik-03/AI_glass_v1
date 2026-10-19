@@ -4,7 +4,7 @@ Speak each question with the push-to-talk key (F9) while the server and the PC c
 These are different from the 30 recorded eval questions. They use your real notes and
 reminders, so delete the test ones afterwards.
 
-Fill in the last three columns, then run `.venv\Scripts\python -m eval.live_log` to see the
+Fill in the last three columns, then run `.venv/bin/python -m eval.live_log` to see the
 question text the server heard, its answer and the latency of the last 10 queries.
 
 | # | group | say this | heard | answer ok? | notes |
