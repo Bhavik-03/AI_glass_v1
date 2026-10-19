@@ -833,7 +833,7 @@ def test_fr3_image_query_400_raises_query_error_with_server_text():
 
 # ---- FR-1/FR-2/FR-3: Client state machine (M6-T5). All collaborators are fakes. ----
 
-PTT = keyboard.Key.alt_gr
+PTT = keyboard.Key.alt_r
 OTHER = keyboard.Key.space
 REC_WAV = b"RECORDED-WAV"
 REPLY_WAV = b"ANSWER-WAV"
@@ -1046,19 +1046,19 @@ def test_fr1_voice_key_comes_from_config(monkeypatch, rig):
     assert rig.client.state == "recording"
 
 
-def test_fr1_voice_key_is_alt_gr_and_ptt_key_is_gone():
-    """The voice key is Right Alt (alt_gr) set in client_pc/config.py; PTT_KEY no longer exists."""
-    assert config.VOICE_KEY == "alt_gr"
+def test_fr1_voice_key_is_alt_r_and_ptt_key_is_gone():
+    """The voice key is Right Alt (alt_r) set in client_pc/config.py; PTT_KEY no longer exists."""
+    assert config.VOICE_KEY == "alt_r"
     assert not hasattr(config, "PTT_KEY")
 
 
-def test_fr1_alt_gr_press_starts_and_release_stops_and_sends(rig):
+def test_fr1_alt_r_press_starts_and_release_stops_and_sends(rig):
     """Pressing Right Alt starts recording; releasing it stops and sends the query."""
-    rig.press(keyboard.Key.alt_gr)
+    rig.press(keyboard.Key.alt_r)
     assert rig.client.state == "recording"
     assert rig.count("start_recording") == 1
     rig.clock.t += 1.0
-    rig.release(keyboard.Key.alt_gr)
+    rig.release(keyboard.Key.alt_r)
     assert rig.count("stop_recording") == 1
     assert ("send", REC_WAV) in rig.log
     assert rig.client.state == "idle"
@@ -1068,8 +1068,8 @@ def test_fr1_alt_gr_press_starts_and_release_stops_and_sends(rig):
 def test_fr1_real_right_alt_sequence_records_once_and_sends_once(
     rig, ctrl_released_first
 ):
-    """Right Alt sends ctrl_l then alt_gr; the extra ctrl_l starts nothing: one recording, one send."""
-    ctrl, alt = keyboard.Key.ctrl_l, keyboard.Key.alt_gr
+    """A stray ctrl_l around the voice key starts nothing: one recording, one send."""
+    ctrl, alt = keyboard.Key.ctrl_l, PTT
     rig.press(ctrl)
     assert rig.log == []
     assert rig.client.state == "idle"
@@ -2314,11 +2314,11 @@ def test_fr19_to_jpeg_does_not_change_the_input_image():
 
 
 def test_fr19_right_alt_cycle_sends_no_image_and_does_not_grab(rig):
-    """Right Alt (ctrl_l then alt_gr) takes no screenshot and sends no image."""
+    """Right Alt, with a stray ctrl_l around it, takes no screenshot and sends no image."""
     rig.press(keyboard.Key.ctrl_l)
-    rig.press(keyboard.Key.alt_gr)
+    rig.press(keyboard.Key.alt_r)
     rig.clock.t += 1.0
-    rig.release(keyboard.Key.alt_gr)
+    rig.release(keyboard.Key.alt_r)
     rig.release(keyboard.Key.ctrl_l)
     assert rig.count(("grab",)) == 0
     assert rig.count(("send", REC_WAV)) == 1
@@ -2329,8 +2329,8 @@ def test_fr19_releasing_voice_key_does_not_stop_a_look_recording(rig):
     """While recording with Right Ctrl, pressing or releasing Right Alt or ctrl_l does not stop it."""
     rig.press(LOOK)
     rig.press(keyboard.Key.ctrl_l)
-    rig.press(keyboard.Key.alt_gr)
-    rig.release(keyboard.Key.alt_gr)
+    rig.press(keyboard.Key.alt_r)
+    rig.release(keyboard.Key.alt_r)
     rig.release(keyboard.Key.ctrl_l)
     assert rig.client.state == "recording"
     assert rig.count("stop_recording") == 0
