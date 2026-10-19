@@ -148,5 +148,4 @@ Look median 4.3 s, worst 6.8 s; 0 errors; secrets ok. The only unmet target is c
 question set (nothing under `server/` or in `eval/questions_v2.json` changed between that run
 and 14e1fa0), so the concept group is flaky between runs on identical code; this is not a
 regression caused by the port. A concept-logging defect seen in this run (an existing name reused for a different
-concept) is filed as the issue "Concept logger reuses an existing name for a different
-concept (FR-23)"; not fixed in v2.
+concept) is filed as issue #116; not fixed in v2.
