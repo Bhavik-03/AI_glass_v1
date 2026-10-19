@@ -125,6 +125,12 @@ reminders 10/10 (every group >= 80%); median total 3.4 s, worst 9.6 s (target <=
 0 errors; transcription 26/30 (87%), which meets the T10 bar of >= 26/30 (below the v1
 90% target, as documented in spec.md); secrets ok.
 
+T10 re-baseline (new laptop: Ubuntu 22.04, RTX 4060 Laptop GPU 8 GB, commit 14e1fa0,
+`eval/results/2026-10-20_0024.md`): general 8/10, notes 10/10, reminders 10/10;
+transcription 26/30 (87%); median total 2.8 s, worst 8.4 s; 0 errors; secrets ok. The only
+unmet target is transcription (>= 90% required). The two failures are the same as on the old
+machine (g09 ISRO heard as Israel, g10 rupee rate): issue #38, unchanged.
+
 Manual checks: after T3, run one group with the real server and check the progress file
 survives Ctrl+C and the DB is restored (FR-22).
 
@@ -134,3 +140,13 @@ quiz 10/10 (100%); Look median 4.8 s, worst 9.3 s (target <= 8 s); 0 errors; sec
 missing groups. Every v2 target is met. Remaining failures: l06, l14, l16 (Look word fit),
 f05, f07 (follow-up words), c09 (Fourier-transform STT mis-hear, issue #38 class). The v1
 regression report is `eval/results/2026-10-17_1611.md` (see the T10 result).
+
+T11 re-baseline (new laptop: Ubuntu 22.04, RTX 4060 Laptop GPU 8 GB, commit 14e1fa0,
+`eval/results/2026-10-20_0158_v2.md`): look 18/20, followup 8/10, concept 17/20, quiz 10/10;
+Look median 4.3 s, worst 6.8 s; 0 errors; secrets ok. The only unmet target is concept
+(>= 90% required). The 2026-10-18 run scored concept 19/20 on the same server code and
+question set (nothing under `server/` or in `eval/questions_v2.json` changed between that run
+and 14e1fa0), so the concept group is flaky between runs on identical code; this is not a
+regression caused by the port. A concept-logging defect seen in this run (an existing name reused for a different
+concept) is filed as the issue "Concept logger reuses an existing name for a different
+concept (FR-23)"; not fixed in v2.
