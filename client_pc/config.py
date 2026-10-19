@@ -14,9 +14,9 @@ PLAYBACK_TAIL_S = 0.2
 START_TONE = ((660, 0.08), (880, 0.08))
 THINKING_TONE = ((440, 0.15),)
 ERROR_TONE = ((300, 0.2), (200, 0.3))
-# Name of a pynput.keyboard.Key member. Right Alt reports alt_gr on this laptop (after an
-# extra ctrl_l press, which is ignored).
-VOICE_KEY = "alt_gr"
+# Name of a pynput.keyboard.Key member. Right Alt reports alt_r on the Ubuntu/Xorg laptop;
+# on the Windows laptop it reported alt_gr after an extra ctrl_l press, which is ignored.
+VOICE_KEY = "alt_r"
 LOOK_KEY = "ctrl_r"  # Right Ctrl: voice plus one screenshot taken at press
 SCREENSHOT_MAX_SIDE_PX = 1280
 SCREENSHOT_JPEG_QUALITY = (
