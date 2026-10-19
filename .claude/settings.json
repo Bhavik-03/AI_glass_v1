@@ -7,8 +7,8 @@
       "PowerShell(git diff *)",
       "PowerShell(git log *)",
       "PowerShell(git branch *)",
-      "Bash(.venv/Scripts/python -m pytest *)",
-      "Bash(.venv/Scripts/python -m ruff *)",
+      "Bash(.venv/bin/python -m pytest *)",
+      "Bash(.venv/bin/python -m ruff *)",
       "Bash(git status *)",
       "Bash(git diff *)",
       "Bash(git log *)",
@@ -36,8 +36,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell.exe",
-            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-shell.ps1"],
+            "command": "bash",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-shell.sh"],
             "timeout": 120
           }
         ]
@@ -49,8 +49,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell.exe",
-            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${CLAUDE_PROJECT_DIR}/.claude/hooks/format-python.ps1"],
+            "command": "bash",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/format-python.sh"],
             "timeout": 30
           }
         ]
