@@ -1,10 +1,12 @@
 """Tests for eval/run_eval.py, the eval replay runner (FR-16, FR-17).
 
 Temp DB, fake server (httpx.MockTransport), fake sleep/clock/process list.
-No network, models, real sleeping or real PowerShell.
+No network, models, real sleeping or a real pgrep.
 """
 
 import json
+import os
+import re
 import sqlite3
 import subprocess
 from datetime import datetime, timedelta
@@ -165,7 +167,7 @@ def fake_run(stdout="", returncode=0, exc=None, seen=None):
 
 
 def test_fr16_client_running_true_when_output(env):
-    """A PowerShell listing with output means the PC client runs."""
+    """A pgrep listing with output means the PC client runs."""
     assert run_eval.client_running(fake_run("1234\n")) is True
 
 
@@ -178,8 +180,8 @@ def test_fr16_client_running_false_when_blank(env):
     "run",
     [
         fake_run("1234", returncode=1),
-        fake_run(exc=OSError("no powershell")),
-        fake_run(exc=subprocess.TimeoutExpired("powershell", 5)),
+        fake_run(exc=OSError("no pgrep")),
+        fake_run(exc=subprocess.TimeoutExpired("pgrep", 5)),
     ],
     ids=["nonzero", "oserror", "timeout"],
 )
@@ -189,13 +191,18 @@ def test_fr16_client_running_false_on_failure(env, run):
 
 
 def test_fr16_client_running_command_names_module(env):
-    """The PowerShell command is searched for config.CLIENT_MODULE."""
+    """pgrep -f searches for config.CLIENT_MODULE with its dots escaped."""
     seen = []
     run_eval.client_running(fake_run("", seen=seen))
     args, kwargs = seen[0]
-    assert "powershell" in str(args[0]).lower()
-    assert eval_config.CLIENT_MODULE in " ".join(args)
+    assert args[:2] == ["pgrep", "-f"]
+    assert args[2] == re.escape(eval_config.CLIENT_MODULE)
     assert kwargs.get("capture_output") is True
+
+
+def test_fr16_client_running_ignores_own_pid(env):
+    """The eval's own PID in the pgrep output does not count as a client."""
+    assert run_eval.client_running(fake_run(f"{os.getpid()}\n")) is False
 
 
 # ---------- gemini_calls / pace ----------
