@@ -1,0 +1,3261 @@
+{
+  "groups": {
+    "look": {
+      "passed": 18,
+      "total": 20,
+      "finished": 20,
+      "rate": 0.9,
+      "target": 0.8,
+      "met": true
+    },
+    "followup": {
+      "passed": 8,
+      "total": 10,
+      "finished": 10,
+      "rate": 0.8,
+      "target": 0.8,
+      "met": true
+    },
+    "concept": {
+      "passed": 17,
+      "total": 20,
+      "finished": 20,
+      "rate": 0.85,
+      "target": 0.9,
+      "met": false
+    },
+    "quiz": {
+      "passed": 10,
+      "total": 10,
+      "finished": 10,
+      "rate": 1.0,
+      "target": 0.8,
+      "met": true
+    }
+  },
+  "look_latency": {
+    "median_total_s": 4.300000000000001,
+    "worst_total_s": 6.82
+  },
+  "errors": 0,
+  "missing_groups": [],
+  "verdict": {
+    "groups": false,
+    "look_latency": true,
+    "complete": true,
+    "all_met": false
+  },
+  "cases": {
+    "l01": {
+      "id": "l01",
+      "group": "look",
+      "turns": [
+        {
+          "clip": "l01",
+          "status": 200,
+          "error": null,
+          "wall_s": 6.835754804000317,
+          "log": {
+            "time": "2026-10-20T01:49:08+05:30",
+            "question": "What does this alert message mean?",
+            "answer": "This PyTorch error means some tensors are on your GPU (`cuda:0`) while others are on your CPU. To fix it, ensure your model and data are moved to the same device using `.to(device)`.",
+            "timings_ms": {
+              "stt": 168,
+              "llm": 6183,
+              "tts": 469
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "name": "device mismatch error",
+                  "summary": "RuntimeError when tensors are on different devices like cuda:0 and cpu."
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": true,
+            "concept": "device mismatch error"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What does this alert message mean?",
+      "answer": "This PyTorch error means some tensors are on your GPU (`cuda:0`) while others are on your CPU. To fix it, ensure your model and data are moved to the same device using `.to(device)`.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.168,
+      "llm_s": 6.183,
+      "tts_s": 0.469,
+      "total_s": 6.82
+    },
+    "l02": {
+      "id": "l02",
+      "group": "look",
+      "turns": [
+        {
+          "clip": "l02",
+          "status": 200,
+          "error": null,
+          "wall_s": 4.311019377999401,
+          "log": {
+            "time": "2026-10-20T01:49:13+05:30",
+            "question": "What is this circuit diagram showing?",
+            "answer": "This diagram shows a simple series circuit with a nine-volt battery, a two hundred twenty ohm resistor, and an LED. The resistor limits the current flowing through the LED to prevent it from burning out.",
+            "timings_ms": {
+              "stt": 154,
+              "llm": 3721,
+              "tts": 429
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "name": "LED and resistor circuit",
+                  "summary": "A series circuit with a 9V battery, a 220-ohm resistor, and an LED."
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": true,
+            "concept": "LED and resistor circuit"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What is this circuit diagram showing?",
+      "answer": "This diagram shows a simple series circuit with a nine-volt battery, a two hundred twenty ohm resistor, and an LED. The resistor limits the current flowing through the LED to prevent it from burning out.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.154,
+      "llm_s": 3.721,
+      "tts_s": 0.429,
+      "total_s": 4.304
+    },
+    "l03": {
+      "id": "l03",
+      "group": "look",
+      "turns": [
+        {
+          "clip": "l03",
+          "status": 200,
+          "error": null,
+          "wall_s": 4.204917052999917,
+          "log": {
+            "time": "2026-10-20T01:49:21+05:30",
+            "question": "Can you explain this equation?",
+            "answer": "This image shows calculus operations on the polynomial $f(x) = x^3 + 2x^2 - 5x + 1$. The derivative $f'(x) = 3x^2 + 4x - 5$ is found using the power rule. The indefinite integral adds the constant $C$ for the family of antiderivatives.",
+            "timings_ms": {
+              "stt": 137,
+              "llm": 3420,
+              "tts": 642
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "name": "calculus review derivative and integral",
+                  "summary": "Derivative and indefinite integral of a cubic polynomial f(x) = x^3 + 2x^2 - 5x + 1."
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": true,
+            "concept": "calculus review derivative and integral"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "Can you explain this equation?",
+      "answer": "This image shows calculus operations on the polynomial $f(x) = x^3 + 2x^2 - 5x + 1$. The derivative $f'(x) = 3x^2 + 4x - 5$ is found using the power rule. The indefinite integral adds the constant $C$ for the family of antiderivatives.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.137,
+      "llm_s": 3.42,
+      "tts_s": 0.642,
+      "total_s": 4.199
+    },
+    "l04": {
+      "id": "l04",
+      "group": "look",
+      "turns": [
+        {
+          "clip": "l04",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.6977000239994595,
+          "log": {
+            "time": "2026-10-20T01:49:28+05:30",
+            "question": "What programming language is the code written in?",
+            "answer": "This code is written in Python. It defines a function to generate Fibonacci numbers and prints the first ten values when run as the main script.",
+            "timings_ms": {
+              "stt": 160,
+              "llm": 2245,
+              "tts": 285
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": false,
+            "image_sent": true,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What programming language is the code written in?",
+      "answer": "This code is written in Python. It defines a function to generate Fibonacci numbers and prints the first ten values when run as the main script.",
+      "tools": [],
+      "stt_s": 0.16,
+      "llm_s": 2.245,
+      "tts_s": 0.285,
+      "total_s": 2.6900000000000004
+    },
+    "l05": {
+      "id": "l05",
+      "group": "look",
+      "turns": [
+        {
+          "clip": "l05",
+          "status": 200,
+          "error": null,
+          "wall_s": 5.451614636999693,
+          "log": {
+            "time": "2026-10-20T01:49:34+05:30",
+            "question": "What is this chemical reaction?",
+            "answer": "This is an acid-base neutralization reaction. Hydrochloric acid reacts with sodium hydroxide to produce sodium chloride salt and water.",
+            "timings_ms": {
+              "stt": 148,
+              "llm": 5007,
+              "tts": 290
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "Acid-base reaction producing salt and water",
+                  "name": "neutralization reaction"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": true,
+            "concept": "neutralization reaction"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What is this chemical reaction?",
+      "answer": "This is an acid-base neutralization reaction. Hydrochloric acid reacts with sodium hydroxide to produce sodium chloride salt and water.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.148,
+      "llm_s": 5.007,
+      "tts_s": 0.29,
+      "total_s": 5.444999999999999
+    },
+    "l06": {
+      "id": "l06",
+      "group": "look",
+      "turns": [
+        {
+          "clip": "l06",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.8386617480000496,
+          "log": {
+            "time": "2026-10-20T01:49:40+05:30",
+            "question": "Summarize this paragraph for me.",
+            "answer": "Computers evolved from large mechanical calculators using vacuum tubes to tiny modern chips packed with billions of transistors, drastically shrinking in size while increasing in capability.",
+            "timings_ms": {
+              "stt": 153,
+              "llm": 2323,
+              "tts": 355
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": false,
+            "image_sent": true,
+            "concept": null
+          }
+        }
+      ],
+      "passed": false,
+      "reason": "answer lacks one of ['paragraph', 'text']",
+      "transcript": "Summarize this paragraph for me.",
+      "answer": "Computers evolved from large mechanical calculators using vacuum tubes to tiny modern chips packed with billions of transistors, drastically shrinking in size while increasing in capability.",
+      "tools": [],
+      "stt_s": 0.153,
+      "llm_s": 2.323,
+      "tts_s": 0.355,
+      "total_s": 2.831
+    },
+    "l07": {
+      "id": "l07",
+      "group": "look",
+      "turns": [
+        {
+          "clip": "l07",
+          "status": 200,
+          "error": null,
+          "wall_s": 4.477142716999879,
+          "log": {
+            "time": "2026-10-20T01:49:45+05:30",
+            "question": "What does this graph show?",
+            "answer": "This graph shows that model accuracy increases non-linearly with training epochs, starting slow near zero percent and accelerating past epoch four to reach nearly thirty-four percent at epoch nine.",
+            "timings_ms": {
+              "stt": 150,
+              "llm": 3948,
+              "tts": 372
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "Graph showing model accuracy increasing non-linearly with training epochs.",
+                  "name": "model accuracy and training epochs"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": true,
+            "concept": "model accuracy and training epochs"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What does this graph show?",
+      "answer": "This graph shows that model accuracy increases non-linearly with training epochs, starting slow near zero percent and accelerating past epoch four to reach nearly thirty-four percent at epoch nine.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.15,
+      "llm_s": 3.948,
+      "tts_s": 0.372,
+      "total_s": 4.47
+    },
+    "l08": {
+      "id": "l08",
+      "group": "look",
+      "turns": [
+        {
+          "clip": "l08",
+          "status": 200,
+          "error": null,
+          "wall_s": 4.036999151999225,
+          "log": {
+            "time": "2026-10-20T01:49:53+05:30",
+            "question": "What is this function doing?",
+            "answer": "This function checks whether a given integer $n$ is a prime number. It returns False if $n$ is less than two, and otherwise tests for divisors up to its square root.",
+            "timings_ms": {
+              "stt": 150,
+              "llm": 3518,
+              "tts": 362
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "Determines if an integer is prime by testing divisors up to its square root.",
+                  "name": "prime number checker function"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": true,
+            "concept": "prime number checker function"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What is this function doing?",
+      "answer": "This function checks whether a given integer $n$ is a prime number. It returns False if $n$ is less than two, and otherwise tests for divisors up to its square root.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.15,
+      "llm_s": 3.518,
+      "tts_s": 0.362,
+      "total_s": 4.029999999999999
+    },
+    "l09": {
+      "id": "l09",
+      "group": "look",
+      "turns": [
+        {
+          "clip": "l09",
+          "status": 200,
+          "error": null,
+          "wall_s": 3.416066394999689,
+          "log": {
+            "time": "2026-10-20T01:50:00+05:30",
+            "question": "Which pin is this wire connected to?",
+            "answer": "The red wire connects GPIO 4 on the ESP32 to the camera data pin.",
+            "timings_ms": {
+              "stt": 167,
+              "llm": 3070,
+              "tts": 173
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "Identified camera data pin connection to GPIO 4 on ESP32.",
+                  "name": "ESP32 camera wiring"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": true,
+            "concept": "ESP32 camera wiring"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "Which pin is this wire connected to?",
+      "answer": "The red wire connects GPIO 4 on the ESP32 to the camera data pin.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.167,
+      "llm_s": 3.07,
+      "tts_s": 0.173,
+      "total_s": 3.4099999999999997
+    },
+    "l10": {
+      "id": "l10",
+      "group": "look",
+      "turns": [
+        {
+          "clip": "l10",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.539598753000064,
+          "log": {
+            "time": "2026-10-20T01:50:08+05:30",
+            "question": "What is the title of this page?",
+            "answer": "The title of the page is Getting Started with Edge AI.",
+            "timings_ms": {
+              "stt": 173,
+              "llm": 2222,
+              "tts": 137
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": false,
+            "image_sent": true,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What is the title of this page?",
+      "answer": "The title of the page is Getting Started with Edge AI.",
+      "tools": [],
+      "stt_s": 0.173,
+      "llm_s": 2.222,
+      "tts_s": 0.137,
+      "total_s": 2.532
+    },
+    "l11": {
+      "id": "l11",
+      "group": "look",
+      "turns": [
+        {
+          "clip": "l11",
+          "status": 200,
+          "error": null,
+          "wall_s": 4.422477905000051,
+          "log": {
+            "time": "2026-10-20T01:50:13+05:30",
+            "question": "What does this table contain?",
+            "answer": "This table compares computer vision models like ResNet-18, MobileNetV2, and EfficientNet-B0. It shows their parameter counts and top-1 accuracy on ImageNet.",
+            "timings_ms": {
+              "stt": 150,
+              "llm": 3868,
+              "tts": 397
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "name": "model accuracy and training epochs",
+                  "summary": "Comparison of model parameters and accuracy across CNN architectures."
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": true,
+            "concept": "model accuracy and training epochs"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What does this table contain?",
+      "answer": "This table compares computer vision models like ResNet-18, MobileNetV2, and EfficientNet-B0. It shows their parameter counts and top-1 accuracy on ImageNet.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.15,
+      "llm_s": 3.868,
+      "tts_s": 0.397,
+      "total_s": 4.415
+    },
+    "l12": {
+      "id": "l12",
+      "group": "look",
+      "turns": [
+        {
+          "clip": "l12",
+          "status": 200,
+          "error": null,
+          "wall_s": 4.752260851000756,
+          "log": {
+            "time": "2026-10-20T01:50:22+05:30",
+            "question": "Explain this diagram simply.",
+            "answer": "This diagram illustrates the fundamental flow of any system. It moves from an input, which receives raw data or materials, through a processing stage that transforms it, and finally to an output, which delivers the final result.",
+            "timings_ms": {
+              "stt": 150,
+              "llm": 4071,
+              "tts": 524
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "Diagram showing Input, Process, and Output stages in a system.",
+                  "name": "Simple system diagram"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": true,
+            "concept": "Simple system diagram"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "Explain this diagram simply.",
+      "answer": "This diagram illustrates the fundamental flow of any system. It moves from an input, which receives raw data or materials, through a processing stage that transforms it, and finally to an output, which delivers the final result.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.15,
+      "llm_s": 4.071,
+      "tts_s": 0.524,
+      "total_s": 4.745
+    },
+    "l13": {
+      "id": "l13",
+      "group": "look",
+      "turns": [
+        {
+          "clip": "l13",
+          "status": 200,
+          "error": null,
+          "wall_s": 4.666629838000517,
+          "log": {
+            "time": "2026-10-20T01:50:30+05:30",
+            "question": "What is the bug in this code?",
+            "answer": "The bug is that `total = n` overwrites the total on each iteration instead of accumulating with `total += n`. This means only the last element is used, giving an incorrect average.",
+            "timings_ms": {
+              "stt": 173,
+              "llm": 4109,
+              "tts": 378
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "name": "Python average function bug",
+                  "summary": "Assignment operator used instead of addition assignment in a loop."
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": true,
+            "concept": "Python average function bug"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What is the bug in this code?",
+      "answer": "The bug is that `total = n` overwrites the total on each iteration instead of accumulating with `total += n`. This means only the last element is used, giving an incorrect average.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.173,
+      "llm_s": 4.109,
+      "tts_s": 0.378,
+      "total_s": 4.66
+    },
+    "l14": {
+      "id": "l14",
+      "group": "look",
+      "turns": [
+        {
+          "clip": "l14",
+          "status": 200,
+          "error": null,
+          "wall_s": 4.399196872000175,
+          "log": {
+            "time": "2026-10-20T01:50:37+05:30",
+            "question": "What formula is on the screen?",
+            "answer": "The screen shows Newton's second law of motion: F equals m times a, where force equals mass times acceleration.",
+            "timings_ms": {
+              "stt": 153,
+              "llm": 4006,
+              "tts": 234
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "name": "Simple system diagram",
+                  "summary": "Newton's second law formula F = m * a representing force equals mass times acceleration."
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": true,
+            "concept": "Simple system diagram"
+          }
+        }
+      ],
+      "passed": false,
+      "reason": "answer lacks one of ['formula']",
+      "transcript": "What formula is on the screen?",
+      "answer": "The screen shows Newton's second law of motion: F equals m times a, where force equals mass times acceleration.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.153,
+      "llm_s": 4.006,
+      "tts_s": 0.234,
+      "total_s": 4.393
+    },
+    "l15": {
+      "id": "l15",
+      "group": "look",
+      "turns": [
+        {
+          "clip": "l15",
+          "status": 200,
+          "error": null,
+          "wall_s": 4.266427062999355,
+          "log": {
+            "time": "2026-10-20T01:50:45+05:30",
+            "question": "What is this light about?",
+            "answer": "This slide introduces neural networks, which are computing systems inspired by biological brains. They consist of layers of interconnected artificial neurons that learn to recognize patterns from data.",
+            "timings_ms": {
+              "stt": 164,
+              "llm": 3530,
+              "tts": 566
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "Overview of neural networks for new learners",
+                  "name": "Introduction to Neural Networks"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": true,
+            "concept": "Introduction to Neural Networks"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What is this light about?",
+      "answer": "This slide introduces neural networks, which are computing systems inspired by biological brains. They consist of layers of interconnected artificial neurons that learn to recognize patterns from data.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.164,
+      "llm_s": 3.53,
+      "tts_s": 0.566,
+      "total_s": 4.26
+    },
+    "l16": {
+      "id": "l16",
+      "group": "look",
+      "turns": [
+        {
+          "clip": "l16",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.3784118169996873,
+          "log": {
+            "time": "2026-10-20T01:50:51+05:30",
+            "question": "Translate this sentence into English.",
+            "answer": "That means, \"Study well.\"",
+            "timings_ms": {
+              "stt": 167,
+              "llm": 2101,
+              "tts": 106
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": false,
+            "image_sent": true,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "Translate this sentence into English.",
+      "answer": "That means, \"Study well.\"",
+      "tools": [],
+      "stt_s": 0.167,
+      "llm_s": 2.101,
+      "tts_s": 0.106,
+      "total_s": 2.3739999999999997
+    },
+    "l17": {
+      "id": "l17",
+      "group": "look",
+      "turns": [
+        {
+          "clip": "l17",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.478756018999775,
+          "log": {
+            "time": "2026-10-20T01:50:56+05:30",
+            "question": "Word command is shown in the terminal.",
+            "answer": "The terminal shows `git status`, indicating you are on the branch `feature/m12-evaluation` with a clean working tree.",
+            "timings_ms": {
+              "stt": 151,
+              "llm": 2013,
+              "tts": 308
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": false,
+            "image_sent": true,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "Word command is shown in the terminal.",
+      "answer": "The terminal shows `git status`, indicating you are on the branch `feature/m12-evaluation` with a clean working tree.",
+      "tools": [],
+      "stt_s": 0.151,
+      "llm_s": 2.013,
+      "tts_s": 0.308,
+      "total_s": 2.4719999999999995
+    },
+    "l18": {
+      "id": "l18",
+      "group": "look",
+      "turns": [
+        {
+          "clip": "l18",
+          "status": 200,
+          "error": null,
+          "wall_s": 4.3018661039996005,
+          "log": {
+            "time": "2026-10-20T01:51:01+05:30",
+            "question": "What does this flow chart do?",
+            "answer": "This flowchart outlines a sequential monitoring process. It starts, reads a sensor value, checks if it exceeds a threshold, triggers an alert if it does, and then ends.",
+            "timings_ms": {
+              "stt": 156,
+              "llm": 3715,
+              "tts": 425
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "Flow chart showing sensor reading and threshold alert steps",
+                  "name": "Simple system diagram"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": true,
+            "concept": "Simple system diagram"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What does this flow chart do?",
+      "answer": "This flowchart outlines a sequential monitoring process. It starts, reads a sensor value, checks if it exceeds a threshold, triggers an alert if it does, and then ends.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.156,
+      "llm_s": 3.715,
+      "tts_s": 0.425,
+      "total_s": 4.296
+    },
+    "l19": {
+      "id": "l19",
+      "group": "look",
+      "turns": [
+        {
+          "clip": "l19",
+          "status": 200,
+          "error": null,
+          "wall_s": 4.457554298999639,
+          "log": {
+            "time": "2026-10-20T01:51:10+05:30",
+            "question": "What is the output of this code?",
+            "answer": "The output of this code is 0, 1, 4, 9, and 16, each printed on a new line.",
+            "timings_ms": {
+              "stt": 158,
+              "llm": 4102,
+              "tts": 192
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "name": "Python average function bug",
+                  "summary": "Calculating square values in a loop and printing results from 0 to 16"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": true,
+            "concept": "Python average function bug"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What is the output of this code?",
+      "answer": "The output of this code is 0, 1, 4, 9, and 16, each printed on a new line.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.158,
+      "llm_s": 4.102,
+      "tts_s": 0.192,
+      "total_s": 4.452000000000001
+    },
+    "l20": {
+      "id": "l20",
+      "group": "look",
+      "turns": [
+        {
+          "clip": "l20",
+          "status": 200,
+          "error": null,
+          "wall_s": 5.512401759999193,
+          "log": {
+            "time": "2026-10-20T01:51:19+05:30",
+            "question": "What is the main idea of this article?",
+            "answer": "The main idea is that lithium-ion batteries gradually lose capacity due to chemical breakdown from charge cycles, heat, and fast charging. You can extend their lifespan by keeping the charge level between 20% and 80%.",
+            "timings_ms": {
+              "stt": 157,
+              "llm": 4899,
+              "tts": 449
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "Lithium-ion batteries lose capacity from charge cycles, heat, and fast charging; keeping charge between 20% and 80% extends lifespan.",
+                  "name": "Why Batteries Degrade Over Time"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": true,
+            "concept": "Why Batteries Degrade Over Time"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What is the main idea of this article?",
+      "answer": "The main idea is that lithium-ion batteries gradually lose capacity due to chemical breakdown from charge cycles, heat, and fast charging. You can extend their lifespan by keeping the charge level between 20% and 80%.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.157,
+      "llm_s": 4.899,
+      "tts_s": 0.449,
+      "total_s": 5.505
+    },
+    "f01": {
+      "id": "f01",
+      "group": "followup",
+      "turns": [
+        {
+          "clip": "f01",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.8893736760001048,
+          "log": {
+            "time": "2026-10-20T01:51:24+05:30",
+            "question": "What is Lora?",
+            "answer": "In AI and machine learning, LoRA stands for Low-Rank Adaptation. It is a parameter-efficient fine-tuning method that freezes pretrained model weights and trains small, low-rank decomposition matrices instead, drastically reducing computational overhead.",
+            "timings_ms": {
+              "stt": 146,
+              "llm": 2230,
+              "tts": 509
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "name": "LoRA fine-tuning",
+                  "summary": "LoRA is a parameter-efficient fine-tuning method that freezes model weights and trains low-rank decomposition matrices."
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": "LoRA fine-tuning"
+          }
+        },
+        {
+          "clip": "f01_2",
+          "status": 200,
+          "error": null,
+          "wall_s": 3.905869519000589,
+          "log": {
+            "time": "2026-10-20T01:51:33+05:30",
+            "question": "What is it used for?",
+            "answer": "LoRA is used to efficiently fine-tune large language and diffusion models for specific downstream tasks. By training only a tiny fraction of the parameters, it makes customizing massive AI models faster and cheaper without needing massive compute clusters.",
+            "timings_ms": {
+              "stt": 158,
+              "llm": 3227,
+              "tts": 516
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "name": "LoRA fine-tuning",
+                  "summary": "Parameter-efficient fine-tuning method using low-rank decomposition matrices"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": true,
+            "image_sent": false,
+            "concept": "LoRA fine-tuning"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What is it used for?",
+      "answer": "LoRA is used to efficiently fine-tune large language and diffusion models for specific downstream tasks. By training only a tiny fraction of the parameters, it makes customizing massive AI models faster and cheaper without needing massive compute clusters.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.158,
+      "llm_s": 3.227,
+      "tts_s": 0.516,
+      "total_s": 3.901
+    },
+    "f02": {
+      "id": "f02",
+      "group": "followup",
+      "turns": [
+        {
+          "clip": "f02",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.674600807000388,
+          "log": {
+            "time": "2026-10-20T01:51:40+05:30",
+            "question": "What is the transistor?",
+            "answer": "A transistor is a semiconductor device used to amplify or switch electrical signals and power, serving as the fundamental building block of modern electronic devices.",
+            "timings_ms": {
+              "stt": 157,
+              "llm": 2184,
+              "tts": 331
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "name": "Transistor",
+                  "summary": "Semiconductor device used to amplify or switch electrical signals and power."
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": "Transistor"
+          }
+        },
+        {
+          "clip": "f02_2",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.8508421790002103,
+          "log": {
+            "time": "2026-10-20T01:51:48+05:30",
+            "question": "What are its three terminals called?",
+            "answer": "The three terminals of a bipolar junction transistor are called the emitter, the base, and the collector.",
+            "timings_ms": {
+              "stt": 169,
+              "llm": 2462,
+              "tts": 215
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "name": "Transistor",
+                  "summary": "Three terminals of a transistor: emitter, base, and collector."
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": true,
+            "image_sent": false,
+            "concept": "Transistor"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What are its three terminals called?",
+      "answer": "The three terminals of a bipolar junction transistor are called the emitter, the base, and the collector.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.169,
+      "llm_s": 2.462,
+      "tts_s": 0.215,
+      "total_s": 2.846
+    },
+    "f03": {
+      "id": "f03",
+      "group": "followup",
+      "turns": [
+        {
+          "clip": "f03",
+          "status": 200,
+          "error": null,
+          "wall_s": 3.296679506000146,
+          "log": {
+            "time": "2026-10-20T01:51:56+05:30",
+            "question": "What is photosynthesis?",
+            "answer": "Photosynthesis is the process by which plants, algae, and some bacteria convert sunlight, water, and carbon dioxide into oxygen and energy in the form of glucose. It primarily takes place in the chloroplasts using the green pigment chlorophyll.",
+            "timings_ms": {
+              "stt": 165,
+              "llm": 2549,
+              "tts": 579
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "Process by which plants convert light energy into chemical energy.",
+                  "name": "Photosynthesis"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": "Photosynthesis"
+          }
+        },
+        {
+          "clip": "f03_2",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.9452215309993335,
+          "log": {
+            "time": "2026-10-20T01:52:03+05:30",
+            "question": "Where does it happen in the cell?",
+            "answer": "Photosynthesis happens inside the chloroplasts of plant cells. These specialized organelles contain chlorophyll, the green pigment that absorbs light energy to drive the chemical reactions of photosynthesis.",
+            "timings_ms": {
+              "stt": 189,
+              "llm": 1281,
+              "tts": 470
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": true,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "Where does it happen in the cell?",
+      "answer": "Photosynthesis happens inside the chloroplasts of plant cells. These specialized organelles contain chlorophyll, the green pigment that absorbs light energy to drive the chemical reactions of photosynthesis.",
+      "tools": [],
+      "stt_s": 0.189,
+      "llm_s": 1.281,
+      "tts_s": 0.47,
+      "total_s": 1.94
+    },
+    "f04": {
+      "id": "f04",
+      "group": "followup",
+      "turns": [
+        {
+          "clip": "f04",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.4964575579997472,
+          "log": {
+            "time": "2026-10-20T01:52:08+05:30",
+            "question": "What is a binary search?",
+            "answer": "Binary search is an efficient algorithm that finds the position of a target value within a sorted array. It works by repeatedly comparing the target to the middle element and halving the search space, resulting in logarithmic time complexity.",
+            "timings_ms": {
+              "stt": 175,
+              "llm": 1815,
+              "tts": 503
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "Efficient search algorithm that finds an item in a sorted array by repeatedly dividing the search interval in half.",
+                  "name": "Binary search"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": "Binary search"
+          }
+        },
+        {
+          "clip": "f04_2",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.3147562550002476,
+          "log": {
+            "time": "2026-10-20T01:52:15+05:30",
+            "question": "What is its time complexity?",
+            "answer": "Binary search has a time complexity of Big-O of log $n$, where $n$ is the number of elements in the array. This logarithmic efficiency comes from dividing the search space in half with every single step.",
+            "timings_ms": {
+              "stt": 194,
+              "llm": 1610,
+              "tts": 506
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "Efficient algorithm finding a target in a sorted array by halving the search space.",
+                  "name": "Binary search"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": true,
+            "image_sent": false,
+            "concept": "Binary search"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What is its time complexity?",
+      "answer": "Binary search has a time complexity of Big-O of log $n$, where $n$ is the number of elements in the array. This logarithmic efficiency comes from dividing the search space in half with every single step.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.194,
+      "llm_s": 1.61,
+      "tts_s": 0.506,
+      "total_s": 2.31
+    },
+    "f05": {
+      "id": "f05",
+      "group": "followup",
+      "turns": [
+        {
+          "clip": "f05",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.5609640189995844,
+          "log": {
+            "time": "2026-10-20T01:52:23+05:30",
+            "question": "Notice own slope.",
+            "answer": "I did not understand \"Notice own slope.\" Could you clarify or let me know how I can help you with your studies?",
+            "timings_ms": {
+              "stt": 181,
+              "llm": 1041,
+              "tts": 336
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        },
+        {
+          "clip": "f05_2",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.7061837749997721,
+          "log": {
+            "time": "2026-10-20T01:52:27+05:30",
+            "question": "Tell me more.",
+            "answer": "Since you didn't mention a specific topic previously, please let me know what you'd like to dive into—whether it's machine learning, coding, or another engineering subject!",
+            "timings_ms": {
+              "stt": 150,
+              "llm": 1213,
+              "tts": 339
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": true,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": false,
+      "reason": "answer lacks one of ['voltage', 'current', 'resistance']",
+      "transcript": "Tell me more.",
+      "answer": "Since you didn't mention a specific topic previously, please let me know what you'd like to dive into—whether it's machine learning, coding, or another engineering subject!",
+      "tools": [],
+      "stt_s": 0.15,
+      "llm_s": 1.213,
+      "tts_s": 0.339,
+      "total_s": 1.702
+    },
+    "f06": {
+      "id": "f06",
+      "group": "followup",
+      "turns": [
+        {
+          "clip": "f06",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.413640304999717,
+          "log": {
+            "time": "2026-10-20T01:52:32+05:30",
+            "question": "What is a neural network?",
+            "answer": "A neural network is a computing system inspired by the human brain, built from interconnected layers of artificial neurons that learn patterns from data. It maps inputs to outputs through weighted connections and activation functions, forming the backbone of deep learning.",
+            "timings_ms": {
+              "stt": 172,
+              "llm": 1694,
+              "tts": 543
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "A neural network is a computing system inspired by biological brains, made of interconnected layers of artificial neurons that learn patterns from data.",
+                  "name": "Introduction to Neural Networks"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": "Introduction to Neural Networks"
+          }
+        },
+        {
+          "clip": "f06_2",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.5959377649996895,
+          "log": {
+            "time": "2026-10-20T01:52:40+05:30",
+            "question": "How does it learn?",
+            "answer": "It learns by passing data forward, measuring the error between the prediction and the true answer, and using backpropagation with gradient descent to adjust its internal weights.",
+            "timings_ms": {
+              "stt": 162,
+              "llm": 2047,
+              "tts": 382
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "How neural networks learn through forward propagation, loss calculation, and backpropagation.",
+                  "name": "Introduction to Neural Networks"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": true,
+            "image_sent": false,
+            "concept": "Introduction to Neural Networks"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "How does it learn?",
+      "answer": "It learns by passing data forward, measuring the error between the prediction and the true answer, and using backpropagation with gradient descent to adjust its internal weights.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.162,
+      "llm_s": 2.047,
+      "tts_s": 0.382,
+      "total_s": 2.591
+    },
+    "f07": {
+      "id": "f07",
+      "group": "followup",
+      "turns": [
+        {
+          "clip": "f07",
+          "status": 200,
+          "error": null,
+          "wall_s": 3.675538829999823,
+          "log": {
+            "time": "2026-10-20T01:52:49+05:30",
+            "question": "What is an API?",
+            "answer": "An API, or Application Programming Interface, is a set of rules and protocols that lets different software applications communicate with each other. In AI and machine learning, APIs are frequently used to deploy models so developers can send data and receive predictions over the web.",
+            "timings_ms": {
+              "stt": 151,
+              "llm": 2960,
+              "tts": 560
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "An API (Application Programming Interface) allows different software applications to communicate with each other.",
+                  "name": "API"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": "API"
+          }
+        },
+        {
+          "clip": "f07_2",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.0380655250000927,
+          "log": {
+            "time": "2026-10-20T01:52:55+05:30",
+            "question": "Give me an example.",
+            "answer": "An example is OpenAI's GPT API, which allows developers to integrate advanced language models into their own applications by sending text prompts and receiving generated responses over the internet.",
+            "timings_ms": {
+              "stt": 145,
+              "llm": 1479,
+              "tts": 408
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": true,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": false,
+      "reason": "answer lacks one of ['weather', 'request', 'server', 'website']",
+      "transcript": "Give me an example.",
+      "answer": "An example is OpenAI's GPT API, which allows developers to integrate advanced language models into their own applications by sending text prompts and receiving generated responses over the internet.",
+      "tools": [],
+      "stt_s": 0.145,
+      "llm_s": 1.479,
+      "tts_s": 0.408,
+      "total_s": 2.032
+    },
+    "f08": {
+      "id": "f08",
+      "group": "followup",
+      "turns": [
+        {
+          "clip": "f08",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.827632698999878,
+          "log": {
+            "time": "2026-10-20T01:53:00+05:30",
+            "question": "What is Enthropy?",
+            "answer": "In machine learning and information theory, entropy measures uncertainty or randomness in a dataset or probability distribution. Lower entropy means data is predictable, while higher entropy means high unpredictability.",
+            "timings_ms": {
+              "stt": 155,
+              "llm": 2209,
+              "tts": 459
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "Measure of disorder or uncertainty in information theory and thermodynamics.",
+                  "name": "Entropy"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": "Entropy"
+          }
+        },
+        {
+          "clip": "f08_2",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.5703129909998097,
+          "log": {
+            "time": "2026-10-20T01:53:08+05:30",
+            "question": "Which field uses it most?",
+            "answer": "Information theory uses entropy most, serving as the foundational concept for measuring information content, data compression limits, and decision tree splitting criteria like in decision tree algorithms.",
+            "timings_ms": {
+              "stt": 156,
+              "llm": 1996,
+              "tts": 413
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "name": "Entropy",
+                  "summary": "Entropy measures uncertainty or randomness in data and is heavily used in information theory and machine learning."
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": true,
+            "image_sent": false,
+            "concept": "Entropy"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "Which field uses it most?",
+      "answer": "Information theory uses entropy most, serving as the foundational concept for measuring information content, data compression limits, and decision tree splitting criteria like in decision tree algorithms.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.156,
+      "llm_s": 1.996,
+      "tts_s": 0.413,
+      "total_s": 2.565
+    },
+    "f09": {
+      "id": "f09",
+      "group": "followup",
+      "turns": [
+        {
+          "clip": "f09",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.7184280240007865,
+          "log": {
+            "time": "2026-10-20T01:53:16+05:30",
+            "question": "What is the pull-up resistor?",
+            "answer": "A pull-up resistor is connected between a signal line and the positive supply voltage. It ensures the pin reads a defined high logic level when the switch or input is open, preventing a floating state.",
+            "timings_ms": {
+              "stt": 163,
+              "llm": 2053,
+              "tts": 499
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "A resistor used to ensure a known logic level on a pin when otherwise floating.",
+                  "name": "pull-up resistor"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": "pull-up resistor"
+          }
+        },
+        {
+          "clip": "f09_2",
+          "status": 200,
+          "error": null,
+          "wall_s": 3.354524018999655,
+          "log": {
+            "time": "2026-10-20T01:53:25+05:30",
+            "question": "Why is it needed?",
+            "answer": "It is needed because floating inputs pick up electrical noise and cause unpredictable voltage levels. The resistor provides a stable default state so the microcontroller clearly detects a high or low signal.",
+            "timings_ms": {
+              "stt": 166,
+              "llm": 2779,
+              "tts": 404
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "Resistor connected to positive supply to ensure a defined high state and prevent floating inputs.",
+                  "name": "pull-up resistor"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": true,
+            "image_sent": false,
+            "concept": "pull-up resistor"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "Why is it needed?",
+      "answer": "It is needed because floating inputs pick up electrical noise and cause unpredictable voltage levels. The resistor provides a stable default state so the microcontroller clearly detects a high or low signal.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.166,
+      "llm_s": 2.779,
+      "tts_s": 0.404,
+      "total_s": 3.3489999999999998
+    },
+    "f10": {
+      "id": "f10",
+      "group": "followup",
+      "turns": [
+        {
+          "clip": "f10",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.7084279740001875,
+          "log": {
+            "time": "2026-10-20T01:53:32+05:30",
+            "question": "What is recursion?",
+            "answer": "Recursion is a programming and mathematical technique where a function calls itself to solve smaller, similar sub-problems. Every recursive function needs a base case to stop the calls and prevent an infinite loop.",
+            "timings_ms": {
+              "stt": 177,
+              "llm": 2116,
+              "tts": 411
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "name": "recursion",
+                  "summary": "Recursion is a programming and mathematical technique where a function calls itself to solve smaller instances of the same problem."
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": "recursion"
+          }
+        },
+        {
+          "clip": "f10_2",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.86735080499966,
+          "log": {
+            "time": "2026-10-20T01:53:40+05:30",
+            "question": "What is the base case?",
+            "answer": "The base case is the condition in a recursive function that stops further self-calls. It provides a direct answer for the smallest sub-problem, preventing infinite loops and stack overflow errors.",
+            "timings_ms": {
+              "stt": 169,
+              "llm": 2322,
+              "tts": 372
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "Base case in recursion",
+                  "name": "recursion"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": true,
+            "image_sent": false,
+            "concept": "recursion"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What is the base case?",
+      "answer": "The base case is the condition in a recursive function that stops further self-calls. It provides a direct answer for the smallest sub-problem, preventing infinite loops and stack overflow errors.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.169,
+      "llm_s": 2.322,
+      "tts_s": 0.372,
+      "total_s": 2.863
+    },
+    "c01": {
+      "id": "c01",
+      "group": "concept",
+      "turns": [
+        {
+          "clip": "c01",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.732884216000457,
+          "log": {
+            "time": "2026-10-20T01:53:48+05:30",
+            "question": "What is gradient descent?",
+            "answer": "Gradient descent is an optimization algorithm used to train machine learning models by iteratively adjusting parameters to minimize the error or loss function.",
+            "timings_ms": {
+              "stt": 162,
+              "llm": 2249,
+              "tts": 319
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "An iterative optimization algorithm used to minimize a loss function by updating parameters in the direction of the steepest descent.",
+                  "name": "gradient descent"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": "gradient descent"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What is gradient descent?",
+      "answer": "Gradient descent is an optimization algorithm used to train machine learning models by iteratively adjusting parameters to minimize the error or loss function.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.162,
+      "llm_s": 2.249,
+      "tts_s": 0.319,
+      "total_s": 2.73
+    },
+    "c02": {
+      "id": "c02",
+      "group": "concept",
+      "turns": [
+        {
+          "clip": "c02",
+          "status": 200,
+          "error": null,
+          "wall_s": 3.266844933000357,
+          "log": {
+            "time": "2026-10-20T01:53:56+05:30",
+            "question": "What is a capacitor?",
+            "answer": "A capacitor is a passive electronic component that stores electrical energy in an electric field between two conductive plates separated by an insulator.",
+            "timings_ms": {
+              "stt": 163,
+              "llm": 2792,
+              "tts": 308
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "A passive electronic component that stores electrical energy in an electric field.",
+                  "name": "capacitor"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": "capacitor"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What is a capacitor?",
+      "answer": "A capacitor is a passive electronic component that stores electrical energy in an electric field between two conductive plates separated by an insulator.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.163,
+      "llm_s": 2.792,
+      "tts_s": 0.308,
+      "total_s": 3.2629999999999995
+    },
+    "c03": {
+      "id": "c03",
+      "group": "concept",
+      "turns": [
+        {
+          "clip": "c03",
+          "status": 200,
+          "error": null,
+          "wall_s": 3.3844804109994584,
+          "log": {
+            "time": "2026-10-20T01:54:05+05:30",
+            "question": "Explain how a hash table works.",
+            "answer": "A hash table stores key-value pairs. It uses a hash function to convert a key into an array index, determining where the corresponding value is stored for fast lookups.",
+            "timings_ms": {
+              "stt": 179,
+              "llm": 2852,
+              "tts": 349
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "name": "hash table",
+                  "summary": "A hash table stores key-value pairs, using a hash function to compute an index where each value is placed."
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": "hash table"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "Explain how a hash table works.",
+      "answer": "A hash table stores key-value pairs. It uses a hash function to convert a key into an array index, determining where the corresponding value is stored for fast lookups.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.179,
+      "llm_s": 2.852,
+      "tts_s": 0.349,
+      "total_s": 3.38
+    },
+    "c04": {
+      "id": "c04",
+      "group": "concept",
+      "turns": [
+        {
+          "clip": "c04",
+          "status": 200,
+          "error": null,
+          "wall_s": 3.1815817970000353,
+          "log": {
+            "time": "2026-10-20T01:54:12+05:30",
+            "question": "What is the Pythagorean theorem?",
+            "answer": "The Pythagorean theorem states that in a right-angled triangle, the square of the hypotenuse equals the sum of the squares of the other two sides, expressed as $a^2 + b^2 = c^2$.",
+            "timings_ms": {
+              "stt": 160,
+              "llm": 2643,
+              "tts": 375
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "name": "Pythagorean theorem",
+                  "summary": "In a right-angled triangle, the square of the hypotenuse equals the sum of the squares of the other two sides ($a^2 + b^2 = c^2$)."
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": "Pythagorean theorem"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What is the Pythagorean theorem?",
+      "answer": "The Pythagorean theorem states that in a right-angled triangle, the square of the hypotenuse equals the sum of the squares of the other two sides, expressed as $a^2 + b^2 = c^2$.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.16,
+      "llm_s": 2.643,
+      "tts_s": 0.375,
+      "total_s": 3.178
+    },
+    "c05": {
+      "id": "c05",
+      "group": "concept",
+      "turns": [
+        {
+          "clip": "c05",
+          "status": 200,
+          "error": null,
+          "wall_s": 4.173475718999725,
+          "log": {
+            "time": "2026-10-20T01:54:21+05:30",
+            "question": "What is attention in transformers?",
+            "answer": "Attention in transformers is a mechanism that allows the model to weigh the importance of different words in a sequence relative to each other. It computes relationships using queries, keys, and values, enabling the network to capture long-range context and dependencies regardless of distance.",
+            "timings_ms": {
+              "stt": 157,
+              "llm": 3443,
+              "tts": 569
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "name": "LoRA fine-tuning",
+                  "summary": "Attention mechanism in Transformer models enabling them to focus on relevant input parts."
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": "LoRA fine-tuning"
+          }
+        }
+      ],
+      "passed": false,
+      "reason": "concept not added",
+      "transcript": "What is attention in transformers?",
+      "answer": "Attention in transformers is a mechanism that allows the model to weigh the importance of different words in a sequence relative to each other. It computes relationships using queries, keys, and values, enabling the network to capture long-range context and dependencies regardless of distance.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.157,
+      "llm_s": 3.443,
+      "tts_s": 0.569,
+      "total_s": 4.1690000000000005
+    },
+    "c06": {
+      "id": "c06",
+      "group": "concept",
+      "turns": [
+        {
+          "clip": "c06",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.4460189860001265,
+          "log": {
+            "time": "2026-10-20T01:54:28+05:30",
+            "question": "What does a voltage regulator do?",
+            "answer": "A voltage regulator maintains a constant output voltage regardless of fluctuations in the input voltage or connected load current, protecting sensitive electronic components from dangerous power surges.",
+            "timings_ms": {
+              "stt": 158,
+              "llm": 1783,
+              "tts": 502
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "name": "voltage regulator",
+                  "summary": "Maintains a constant output voltage regardless of changes in input voltage or load current."
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": "voltage regulator"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What does a voltage regulator do?",
+      "answer": "A voltage regulator maintains a constant output voltage regardless of fluctuations in the input voltage or connected load current, protecting sensitive electronic components from dangerous power surges.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.158,
+      "llm_s": 1.783,
+      "tts_s": 0.502,
+      "total_s": 2.4429999999999996
+    },
+    "c07": {
+      "id": "c07",
+      "group": "concept",
+      "turns": [
+        {
+          "clip": "c07",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.9551958239999294,
+          "log": {
+            "time": "2026-10-20T01:54:36+05:30",
+            "question": "What is Newton's second law?",
+            "answer": "Newton's second law states that the force acting on an object is equal to its mass multiplied by its acceleration, expressed as $F = ma$. This means a greater mass requires more force to accelerate, and a larger force produces a higher acceleration.",
+            "timings_ms": {
+              "stt": 170,
+              "llm": 2260,
+              "tts": 521
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "Force equals mass times acceleration (F=ma).",
+                  "name": "Newton's second law"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": "Newton's second law"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What is Newton's second law?",
+      "answer": "Newton's second law states that the force acting on an object is equal to its mass multiplied by its acceleration, expressed as $F = ma$. This means a greater mass requires more force to accelerate, and a larger force produces a higher acceleration.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.17,
+      "llm_s": 2.26,
+      "tts_s": 0.521,
+      "total_s": 2.9509999999999996
+    },
+    "c08": {
+      "id": "c08",
+      "group": "concept",
+      "turns": [
+        {
+          "clip": "c08",
+          "status": 200,
+          "error": null,
+          "wall_s": 3.6269594840005084,
+          "log": {
+            "time": "2026-10-20T01:54:45+05:30",
+            "question": "What is overfitting?",
+            "answer": "Overfitting happens when a machine learning model learns the training data too well, memorizing its noise and specific details rather than the underlying pattern. As a result, the model performs poorly on new, unseen validation or test data.",
+            "timings_ms": {
+              "stt": 144,
+              "llm": 3002,
+              "tts": 477
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "Overfitting is when a model learns training data too well, memorizing noise and failing to generalize to unseen data.",
+                  "name": "LoRA fine-tuning"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": "LoRA fine-tuning"
+          }
+        }
+      ],
+      "passed": false,
+      "reason": "concept not added",
+      "transcript": "What is overfitting?",
+      "answer": "Overfitting happens when a machine learning model learns the training data too well, memorizing its noise and specific details rather than the underlying pattern. As a result, the model performs poorly on new, unseen validation or test data.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.144,
+      "llm_s": 3.002,
+      "tts_s": 0.477,
+      "total_s": 3.6229999999999998
+    },
+    "c09": {
+      "id": "c09",
+      "group": "concept",
+      "turns": [
+        {
+          "clip": "c09",
+          "status": 200,
+          "error": null,
+          "wall_s": 6.452230831000634,
+          "log": {
+            "time": "2026-10-20T01:54:56+05:30",
+            "question": "What is a 4 year transform?",
+            "answer": "I could not find a standard AI or engineering definition for a four-year transform, and there are no matching concepts in my list. Did you mean a Fourier transform or another mathematical operation?",
+            "timings_ms": {
+              "stt": 176,
+              "llm": 5891,
+              "tts": 382
+            },
+            "searched": true,
+            "tool_calls": [
+              {
+                "name": "web_search",
+                "args": {
+                  "query": "4 year transform AI ML"
+                },
+                "status": "ok"
+              },
+              {
+                "name": "web_search",
+                "args": {
+                  "query": "\"4 year transform\" OR \"four year transform\" mathematics OR engineering"
+                },
+                "status": "refused"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": false,
+      "reason": "concept not added; log concept is None",
+      "transcript": "What is a 4 year transform?",
+      "answer": "I could not find a standard AI or engineering definition for a four-year transform, and there are no matching concepts in my list. Did you mean a Fourier transform or another mathematical operation?",
+      "tools": [
+        "web_search",
+        "web_search"
+      ],
+      "stt_s": 0.176,
+      "llm_s": 5.891,
+      "tts_s": 0.382,
+      "total_s": 6.449
+    },
+    "c10": {
+      "id": "c10",
+      "group": "concept",
+      "turns": [
+        {
+          "clip": "c10",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.710460355999203,
+          "log": {
+            "time": "2026-10-20T01:55:04+05:30",
+            "question": "What is the difference between TCP and UDP?",
+            "answer": "TCP is connection-oriented and ensures reliable data delivery with error checking, whereas UDP is connectionless and faster, but doesn't guarantee packet delivery or order.",
+            "timings_ms": {
+              "stt": 188,
+              "llm": 2158,
+              "tts": 361
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "log_concept",
+                "args": {
+                  "summary": "TCP is connection-oriented and reliable, while UDP is connectionless and faster without delivery guarantees.",
+                  "name": "TCP vs UDP"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": "TCP vs UDP"
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What is the difference between TCP and UDP?",
+      "answer": "TCP is connection-oriented and ensures reliable data delivery with error checking, whereas UDP is connectionless and faster, but doesn't guarantee packet delivery or order.",
+      "tools": [
+        "log_concept"
+      ],
+      "stt_s": 0.188,
+      "llm_s": 2.158,
+      "tts_s": 0.361,
+      "total_s": 2.707
+    },
+    "c11": {
+      "id": "c11",
+      "group": "concept",
+      "turns": [
+        {
+          "clip": "c11",
+          "status": 200,
+          "error": null,
+          "wall_s": 6.140104099999917,
+          "log": {
+            "time": "2026-10-20T01:55:15+05:30",
+            "question": "When is Diwali?",
+            "answer": "In 2026, the main day of Diwali falls on Sunday, November 8. The full five-day festival runs from November 6 to November 10.",
+            "timings_ms": {
+              "stt": 170,
+              "llm": 5636,
+              "tts": 331
+            },
+            "searched": true,
+            "tool_calls": [
+              {
+                "name": "web_search",
+                "args": {
+                  "query": "Diwali date 2026 Pune"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "When is Diwali?",
+      "answer": "In 2026, the main day of Diwali falls on Sunday, November 8. The full five-day festival runs from November 6 to November 10.",
+      "tools": [
+        "web_search"
+      ],
+      "stt_s": 0.17,
+      "llm_s": 5.636,
+      "tts_s": 0.331,
+      "total_s": 6.1370000000000005
+    },
+    "c12": {
+      "id": "c12",
+      "group": "concept",
+      "turns": [
+        {
+          "clip": "c12",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.423823443999936,
+          "log": {
+            "time": "2026-10-20T01:55:19+05:30",
+            "question": "What time it is now?",
+            "answer": "It is currently 1:55 AM on Tuesday, October 20, 2026, in the Asia/Kolkata time zone.",
+            "timings_ms": {
+              "stt": 213,
+              "llm": 951,
+              "tts": 258
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What time it is now?",
+      "answer": "It is currently 1:55 AM on Tuesday, October 20, 2026, in the Asia/Kolkata time zone.",
+      "tools": [],
+      "stt_s": 0.213,
+      "llm_s": 0.951,
+      "tts_s": 0.258,
+      "total_s": 1.422
+    },
+    "c13": {
+      "id": "c13",
+      "group": "concept",
+      "turns": [
+        {
+          "clip": "c13",
+          "status": 200,
+          "error": null,
+          "wall_s": 5.216730776000077,
+          "log": {
+            "time": "2026-10-20T01:55:27+05:30",
+            "question": "What is the weather in Pune today?",
+            "answer": "In Pune today, it is currently around 23 degrees Celsius with smoky haze. Expect a warm day with temperatures reaching a high of about 33 degrees and hazy sunshine.",
+            "timings_ms": {
+              "stt": 209,
+              "llm": 4591,
+              "tts": 413
+            },
+            "searched": true,
+            "tool_calls": [
+              {
+                "name": "web_search",
+                "args": {
+                  "query": "weather in Pune on 2026-10-20"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What is the weather in Pune today?",
+      "answer": "In Pune today, it is currently around 23 degrees Celsius with smoky haze. Expect a warm day with temperatures reaching a high of about 33 degrees and hazy sunshine.",
+      "tools": [
+        "web_search"
+      ],
+      "stt_s": 0.209,
+      "llm_s": 4.591,
+      "tts_s": 0.413,
+      "total_s": 5.213
+    },
+    "c14": {
+      "id": "c14",
+      "group": "concept",
+      "turns": [
+        {
+          "clip": "c14",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.3950328060000174,
+          "log": {
+            "time": "2026-10-20T01:55:31+05:30",
+            "question": "Tell me a joke.",
+            "answer": "Why do machine learning models make terrible comedians? Because their jokes are always overfitted to the training data and completely lack generalization!",
+            "timings_ms": {
+              "stt": 160,
+              "llm": 902,
+              "tts": 330
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "Tell me a joke.",
+      "answer": "Why do machine learning models make terrible comedians? Because their jokes are always overfitted to the training data and completely lack generalization!",
+      "tools": [],
+      "stt_s": 0.16,
+      "llm_s": 0.902,
+      "tts_s": 0.33,
+      "total_s": 1.3920000000000001
+    },
+    "c15": {
+      "id": "c15",
+      "group": "concept",
+      "turns": [
+        {
+          "clip": "c15",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.0742592099995818,
+          "log": {
+            "time": "2026-10-20T01:55:34+05:30",
+            "question": "Thank you very much.",
+            "answer": "You're very welcome! Let me know if you need help with anything else or want to dive into your studies.",
+            "timings_ms": {
+              "stt": 192,
+              "llm": 664,
+              "tts": 215
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "Thank you very much.",
+      "answer": "You're very welcome! Let me know if you need help with anything else or want to dive into your studies.",
+      "tools": [],
+      "stt_s": 0.192,
+      "llm_s": 0.664,
+      "tts_s": 0.215,
+      "total_s": 1.0710000000000002
+    },
+    "c16": {
+      "id": "c16",
+      "group": "concept",
+      "turns": [
+        {
+          "clip": "c16",
+          "status": 200,
+          "error": null,
+          "wall_s": 6.7610087889997885,
+          "log": {
+            "time": "2026-10-20T01:55:44+05:30",
+            "question": "What is the news today?",
+            "answer": "Today is Dussehra, celebrated across India with festivities and Ravan Dahan events. In sports, Indian shooters won gold and silver at the Asian Para Games in Japan. Additionally, Jio Platforms announced a major IPO opening tomorrow.",
+            "timings_ms": {
+              "stt": 171,
+              "llm": 5985,
+              "tts": 601
+            },
+            "searched": true,
+            "tool_calls": [
+              {
+                "name": "web_search",
+                "args": {
+                  "query": "news today Pune October 20 2026"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What is the news today?",
+      "answer": "Today is Dussehra, celebrated across India with festivities and Ravan Dahan events. In sports, Indian shooters won gold and silver at the Asian Para Games in Japan. Additionally, Jio Platforms announced a major IPO opening tomorrow.",
+      "tools": [
+        "web_search"
+      ],
+      "stt_s": 0.171,
+      "llm_s": 5.985,
+      "tts_s": 0.601,
+      "total_s": 6.757000000000001
+    },
+    "c17": {
+      "id": "c17",
+      "group": "concept",
+      "turns": [
+        {
+          "clip": "c17",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.1929054439997344,
+          "log": {
+            "time": "2026-10-20T01:55:48+05:30",
+            "question": "Add a note to buy shoulder wire.",
+            "answer": "I've saved the note: buy shoulder wire.",
+            "timings_ms": {
+              "stt": 183,
+              "llm": 1837,
+              "tts": 169
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "add_note",
+                "args": {
+                  "text": "buy shoulder wire"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "Add a note to buy shoulder wire.",
+      "answer": "I've saved the note: buy shoulder wire.",
+      "tools": [
+        "add_note"
+      ],
+      "stt_s": 0.183,
+      "llm_s": 1.837,
+      "tts_s": 0.169,
+      "total_s": 2.189
+    },
+    "c18": {
+      "id": "c18",
+      "group": "concept",
+      "turns": [
+        {
+          "clip": "c18",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.4120901900005265,
+          "log": {
+            "time": "2026-10-20T01:55:55+05:30",
+            "question": "How are you today?",
+            "answer": "I'm doing great, thanks for asking! How can I help you with your studies or projects today?",
+            "timings_ms": {
+              "stt": 161,
+              "llm": 1013,
+              "tts": 233
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "How are you today?",
+      "answer": "I'm doing great, thanks for asking! How can I help you with your studies or projects today?",
+      "tools": [],
+      "stt_s": 0.161,
+      "llm_s": 1.013,
+      "tts_s": 0.233,
+      "total_s": 1.407
+    },
+    "c19": {
+      "id": "c19",
+      "group": "concept",
+      "turns": [
+        {
+          "clip": "c19",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.2425745150003422,
+          "log": {
+            "time": "2026-10-20T01:55:59+05:30",
+            "question": "What day is it tomorrow?",
+            "answer": "Tomorrow is Wednesday, October 21, 2026.",
+            "timings_ms": {
+              "stt": 171,
+              "llm": 886,
+              "tts": 181
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "What day is it tomorrow?",
+      "answer": "Tomorrow is Wednesday, October 21, 2026.",
+      "tools": [],
+      "stt_s": 0.171,
+      "llm_s": 0.886,
+      "tts_s": 0.181,
+      "total_s": 1.238
+    },
+    "c20": {
+      "id": "c20",
+      "group": "concept",
+      "turns": [
+        {
+          "clip": "c20",
+          "status": 200,
+          "error": null,
+          "wall_s": 4.925417190999724,
+          "log": {
+            "time": "2026-10-20T01:56:06+05:30",
+            "question": "Who won the cricket match yesterday?",
+            "answer": "There were several cricket matches yesterday, including one where India Women beat Zimbabwe Women by 9 wickets. Could you specify which team or match you are interested in?",
+            "timings_ms": {
+              "stt": 193,
+              "llm": 4335,
+              "tts": 395
+            },
+            "searched": true,
+            "tool_calls": [
+              {
+                "name": "web_search",
+                "args": {
+                  "query": "cricket match result October 19 2026"
+                },
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "Who won the cricket match yesterday?",
+      "answer": "There were several cricket matches yesterday, including one where India Women beat Zimbabwe Women by 9 wickets. Could you specify which team or match you are interested in?",
+      "tools": [
+        "web_search"
+      ],
+      "stt_s": 0.193,
+      "llm_s": 4.335,
+      "tts_s": 0.395,
+      "total_s": 4.923
+    },
+    "q01": {
+      "id": "q01",
+      "group": "quiz",
+      "turns": [
+        {
+          "clip": "quiz_start",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.2244764750003014,
+          "log": {
+            "time": "2026-10-20T01:56:12+05:30",
+            "question": "Please quiz me.",
+            "answer": "Explain LoRA in one sentence.",
+            "timings_ms": {
+              "stt": 174,
+              "llm": 1876,
+              "tts": 170
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "start_quiz",
+                "args": {},
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        },
+        {
+          "clip": "q01",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.1431294029998753,
+          "log": {
+            "time": "2026-10-20T01:56:19+05:30",
+            "question": "It trains small low rank adapter and keeps the main model frozen.",
+            "answer": "Right. 1 of 1 right",
+            "timings_ms": {
+              "stt": 212,
+              "llm": 781,
+              "tts": 141
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "It trains small low rank adapter and keeps the main model frozen.",
+      "answer": "Right. 1 of 1 right",
+      "tools": [],
+      "stt_s": 0.212,
+      "llm_s": 0.781,
+      "tts_s": 0.141,
+      "total_s": 1.134
+    },
+    "q02": {
+      "id": "q02",
+      "group": "quiz",
+      "turns": [
+        {
+          "clip": "quiz_start",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.6562889389997508,
+          "log": {
+            "time": "2026-10-20T01:56:23+05:30",
+            "question": "Please quiz me.",
+            "answer": "Explain Capacitor in one sentence.",
+            "timings_ms": {
+              "stt": 195,
+              "llm": 1348,
+              "tts": 111
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "start_quiz",
+                "args": {},
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        },
+        {
+          "clip": "q02",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.2213764909993188,
+          "log": {
+            "time": "2026-10-20T01:56:31+05:30",
+            "question": "It stores energy in an electric field.",
+            "answer": "Right, it stores energy in an electric field. 1 of 1 right",
+            "timings_ms": {
+              "stt": 218,
+              "llm": 757,
+              "tts": 239
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "It stores energy in an electric field.",
+      "answer": "Right, it stores energy in an electric field. 1 of 1 right",
+      "tools": [],
+      "stt_s": 0.218,
+      "llm_s": 0.757,
+      "tts_s": 0.239,
+      "total_s": 1.214
+    },
+    "q03": {
+      "id": "q03",
+      "group": "quiz",
+      "turns": [
+        {
+          "clip": "quiz_start",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.8715473130005194,
+          "log": {
+            "time": "2026-10-20T01:56:35+05:30",
+            "question": "Please quiz me.",
+            "answer": "Explain Overfitting in one sentence.",
+            "timings_ms": {
+              "stt": 186,
+              "llm": 1576,
+              "tts": 105
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "start_quiz",
+                "args": {},
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        },
+        {
+          "clip": "q03",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.0215083129996856,
+          "log": {
+            "time": "2026-10-20T01:56:43+05:30",
+            "question": "It means the model works well on new data.",
+            "answer": "Wrong. Overfitting means the model does badly on new data. 0 of 1 right",
+            "timings_ms": {
+              "stt": 207,
+              "llm": 1539,
+              "tts": 249
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "It means the model works well on new data.",
+      "answer": "Wrong. Overfitting means the model does badly on new data. 0 of 1 right",
+      "tools": [],
+      "stt_s": 0.207,
+      "llm_s": 1.539,
+      "tts_s": 0.249,
+      "total_s": 1.995
+    },
+    "q04": {
+      "id": "q04",
+      "group": "quiz",
+      "turns": [
+        {
+          "clip": "quiz_start",
+          "status": 200,
+          "error": null,
+          "wall_s": 3.1679263139994873,
+          "log": {
+            "time": "2026-10-20T01:56:49+05:30",
+            "question": "Please quiz me.",
+            "answer": "Explain Ohm's law in one sentence.",
+            "timings_ms": {
+              "stt": 174,
+              "llm": 2886,
+              "tts": 104
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "start_quiz",
+                "args": {},
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        },
+        {
+          "clip": "q04",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.0143534170001658,
+          "log": {
+            "time": "2026-10-20T01:56:54+05:30",
+            "question": "Voltage equals current time resistance.",
+            "answer": "Right 1 of 1 right",
+            "timings_ms": {
+              "stt": 189,
+              "llm": 751,
+              "tts": 68
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "Voltage equals current time resistance.",
+      "answer": "Right 1 of 1 right",
+      "tools": [],
+      "stt_s": 0.189,
+      "llm_s": 0.751,
+      "tts_s": 0.068,
+      "total_s": 1.008
+    },
+    "q05": {
+      "id": "q05",
+      "group": "quiz",
+      "turns": [
+        {
+          "clip": "quiz_start",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.8126888370006782,
+          "log": {
+            "time": "2026-10-20T01:56:59+05:30",
+            "question": "Please quiz me.",
+            "answer": "Explain Binary search in one sentence.",
+            "timings_ms": {
+              "stt": 173,
+              "llm": 1512,
+              "tts": 123
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "start_quiz",
+                "args": {},
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        },
+        {
+          "clip": "q05",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.365416106000339,
+          "log": {
+            "time": "2026-10-20T01:57:07+05:30",
+            "question": "It looks at every item one by one from the start.",
+            "answer": "Wrong. Binary search halves the range in a sorted list, it does not check every item one by one. 0 of 1 right",
+            "timings_ms": {
+              "stt": 217,
+              "llm": 821,
+              "tts": 321
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "It looks at every item one by one from the start.",
+      "answer": "Wrong. Binary search halves the range in a sorted list, it does not check every item one by one. 0 of 1 right",
+      "tools": [],
+      "stt_s": 0.217,
+      "llm_s": 0.821,
+      "tts_s": 0.321,
+      "total_s": 1.359
+    },
+    "q06": {
+      "id": "q06",
+      "group": "quiz",
+      "turns": [
+        {
+          "clip": "quiz_start",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.35821013199984,
+          "log": {
+            "time": "2026-10-20T01:57:12+05:30",
+            "question": "Please quiz me.",
+            "answer": "Explain Photosynthesis in one sentence.",
+            "timings_ms": {
+              "stt": 163,
+              "llm": 2057,
+              "tts": 134
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "start_quiz",
+                "args": {},
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        },
+        {
+          "clip": "q06",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.1475660860005519,
+          "log": {
+            "time": "2026-10-20T01:57:19+05:30",
+            "question": "Plants use light to make sugar and give out oxygen.",
+            "answer": "Right, plants use light to make sugar and oxygen. 1 of 1 right",
+            "timings_ms": {
+              "stt": 203,
+              "llm": 765,
+              "tts": 172
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "Plants use light to make sugar and give out oxygen.",
+      "answer": "Right, plants use light to make sugar and oxygen. 1 of 1 right",
+      "tools": [],
+      "stt_s": 0.203,
+      "llm_s": 0.765,
+      "tts_s": 0.172,
+      "total_s": 1.14
+    },
+    "q07": {
+      "id": "q07",
+      "group": "quiz",
+      "turns": [
+        {
+          "clip": "quiz_start",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.8168847650003954,
+          "log": {
+            "time": "2026-10-20T01:57:23+05:30",
+            "question": "Please quiz me.",
+            "answer": "Explain Transistor in one sentence.",
+            "timings_ms": {
+              "stt": 158,
+              "llm": 1562,
+              "tts": 93
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "start_quiz",
+                "args": {},
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        },
+        {
+          "clip": "q07",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.052010598999914,
+          "log": {
+            "time": "2026-10-20T01:57:32+05:30",
+            "question": "It is a part that only stores charge like a battery.",
+            "answer": "Wrong. A transistor is used as a switch or amplifier, not to store charge like a battery. 0 of 1 right",
+            "timings_ms": {
+              "stt": 205,
+              "llm": 1570,
+              "tts": 270
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "It is a part that only stores charge like a battery.",
+      "answer": "Wrong. A transistor is used as a switch or amplifier, not to store charge like a battery. 0 of 1 right",
+      "tools": [],
+      "stt_s": 0.205,
+      "llm_s": 1.57,
+      "tts_s": 0.27,
+      "total_s": 2.045
+    },
+    "q08": {
+      "id": "q08",
+      "group": "quiz",
+      "turns": [
+        {
+          "clip": "quiz_start",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.8202435230004994,
+          "log": {
+            "time": "2026-10-20T01:57:35+05:30",
+            "question": "Please quiz me.",
+            "answer": "Explain Gradient descent in one sentence.",
+            "timings_ms": {
+              "stt": 154,
+              "llm": 1555,
+              "tts": 107
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "start_quiz",
+                "args": {},
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        },
+        {
+          "clip": "q08",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.0251760230003129,
+          "log": {
+            "time": "2026-10-20T01:57:43+05:30",
+            "question": "It moves the parameter in the direction that lower the loss.",
+            "answer": "Right. 1 of 1 right",
+            "timings_ms": {
+              "stt": 208,
+              "llm": 718,
+              "tts": 92
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "It moves the parameter in the direction that lower the loss.",
+      "answer": "Right. 1 of 1 right",
+      "tools": [],
+      "stt_s": 0.208,
+      "llm_s": 0.718,
+      "tts_s": 0.092,
+      "total_s": 1.018
+    },
+    "q09": {
+      "id": "q09",
+      "group": "quiz",
+      "turns": [
+        {
+          "clip": "quiz_start",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.862739844999851,
+          "log": {
+            "time": "2026-10-20T01:57:47+05:30",
+            "question": "Please quiz me.",
+            "answer": "Explain Recursion in one sentence.",
+            "timings_ms": {
+              "stt": 171,
+              "llm": 1584,
+              "tts": 104
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "start_quiz",
+                "args": {},
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        },
+        {
+          "clip": "q09",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.302761652999834,
+          "log": {
+            "time": "2026-10-20T01:57:55+05:30",
+            "question": "It is a loop that never calls any function.",
+            "answer": "Wrong. Recursion is when a function calls itself until it reaches a base case. 0 of 1 right",
+            "timings_ms": {
+              "stt": 195,
+              "llm": 846,
+              "tts": 253
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "It is a loop that never calls any function.",
+      "answer": "Wrong. Recursion is when a function calls itself until it reaches a base case. 0 of 1 right",
+      "tools": [],
+      "stt_s": 0.195,
+      "llm_s": 0.846,
+      "tts_s": 0.253,
+      "total_s": 1.294
+    },
+    "q10": {
+      "id": "q10",
+      "group": "quiz",
+      "turns": [
+        {
+          "clip": "quiz_start",
+          "status": 200,
+          "error": null,
+          "wall_s": 2.1454876490006427,
+          "log": {
+            "time": "2026-10-20T01:58:00+05:30",
+            "question": "Please quiz me.",
+            "answer": "Explain Entropy in one sentence.",
+            "timings_ms": {
+              "stt": 158,
+              "llm": 1867,
+              "tts": 116
+            },
+            "searched": false,
+            "tool_calls": [
+              {
+                "name": "start_quiz",
+                "args": {},
+                "status": "ok"
+              }
+            ],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        },
+        {
+          "clip": "q10",
+          "status": 200,
+          "error": null,
+          "wall_s": 1.4048506910003198,
+          "log": {
+            "time": "2026-10-20T01:58:07+05:30",
+            "question": "It is the total heat energy stored in a system.",
+            "answer": "Wrong. Entropy is a measure of disorder or uncertainty in a system. 0 of 1 right",
+            "timings_ms": {
+              "stt": 202,
+              "llm": 963,
+              "tts": 231
+            },
+            "searched": false,
+            "tool_calls": [],
+            "error": null,
+            "session_continued": false,
+            "image_sent": false,
+            "concept": null
+          }
+        }
+      ],
+      "passed": true,
+      "reason": "ok",
+      "transcript": "It is the total heat energy stored in a system.",
+      "answer": "Wrong. Entropy is a measure of disorder or uncertainty in a system. 0 of 1 right",
+      "tools": [],
+      "stt_s": 0.202,
+      "llm_s": 0.963,
+      "tts_s": 0.231,
+      "total_s": 1.3960000000000001
+    }
+  },
+  "secrets": []
+}
