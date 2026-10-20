@@ -3,16 +3,21 @@
 Final goal: a learning companion worn as glasses: it sees what I study,
 answers briefly, tracks what I learn and quizzes me, remembers me, and helps
 run my day.
-Current version: **v2 Teacher** (tag v0.2.0); its milestones start at M8.
+Current version: **v3 Memory** (tag v0.3.0); its milestones start at M13.
 Versions v1–v7 are in `docs/roadmap.md`.
 
-v2: push-to-talk PC client (Right Alt = voice, Right Ctrl = voice + screenshot;
+v3: push-to-talk PC client (Right Alt = voice, Right Ctrl = voice + screenshot;
 no F9) → FastAPI server on 127.0.0.1: STT (faster-whisper, local) →
 Gemini 3.5 Flash-Lite with function calling and the screenshot as an image
 (web_search via Tavily; notes, reminders and concepts in SQLite) → TTS (Piper,
 local) → answer WAV back. A 120 s in-memory session keeps the last 5 turns for
 follow-ups; "quiz me" quizzes logged concepts. The client polls for due
-reminders and speaks them.
+reminders and speaks them. New in v3: a profile of fixed slots
+(`config/profile.yaml`, schema in `config/profile_schema.yaml`) is in every
+prompt; memory items (key points of about 12 words, in SQLite) are stored with
+"remember that ...", recalled by question through SQLite FTS5 search, listed,
+forgotten or wiped, and a session writer keeps 0 to 3 key points when a
+session ends.
 
 <!-- Doc paths are in backticks, not @-imports, so they load only when Claude opens them. -->
 ## Doc map (source of truth)
