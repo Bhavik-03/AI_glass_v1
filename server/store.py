@@ -1,5 +1,8 @@
+import re
 import sqlite3
 from contextlib import closing, contextmanager
+from datetime import date, datetime, time
+from zoneinfo import ZoneInfo
 
 from server import config
 
@@ -9,6 +12,19 @@ CANCELLED = "cancelled"
 NEW = "new"
 RIGHT = "right"
 WRONG = "wrong"
+FACT = "fact"
+PROJECT = "project"
+PREFERENCE = "preference"
+SESSION = "session"
+
+DATE_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+# Dropped from a spoken question before it searches memories; negations are not listed.
+STOPWORDS = frozenset(
+    "a an the and or of to in on at for with is are was were be been am i my me it its this"  # noqa: SIM905
+    " that as by from about into these those has have had do does did so than then there"
+    " their what which who will would can could should may might just also very".split()
+)
 
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS notes (
@@ -32,6 +48,21 @@ CREATE TABLE IF NOT EXISTS concepts (
     status TEXT NOT NULL DEFAULT '{NEW}',
     last_quizzed TEXT
 );
+CREATE TABLE IF NOT EXISTS memories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    text TEXT NOT NULL,
+    type TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+    text, content='', tokenize='porter unicode61'
+);
+CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+    INSERT INTO memories_fts (rowid, text) VALUES (new.id, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+    INSERT INTO memories_fts (memories_fts, rowid, text) VALUES ('delete', old.id, old.text);
+END;
 """
 
 
@@ -48,6 +79,112 @@ def init() -> None:
     config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _connect() as con:
         con.executescript(SCHEMA)
+
+
+def _check_length(text: str) -> None:
+    if len(text.split()) > config.MEMORY_MAX_WORDS:
+        raise ValueError(f"memory is over {config.MEMORY_MAX_WORDS} words")
+
+
+def add_memory(text: str, type: str, created_at: str) -> dict:
+    """Store one key point; an item over `config.MEMORY_MAX_WORDS` words is rejected."""
+    _check_length(text)
+    with _connect() as con:
+        cur = con.execute(
+            "INSERT INTO memories (text, type, created_at) VALUES (?, ?, ?)",
+            (text, type, created_at),
+        )
+    return {"id": cur.lastrowid, "text": text, "type": type, "created_at": created_at}
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.lower().replace("'", ""))
+
+
+def _match_query(question: str) -> str:
+    """The question's content words as a quoted FTS5 OR query; '' when none are left."""
+    return " OR ".join(f'"{w}"' for w in _words(question) if w not in STOPWORDS)
+
+
+def _stem(word: str) -> str:
+    for suffix in ("ing", "ed", "es", "s"):
+        if word.endswith(suffix) and len(word) - len(suffix) >= 4:
+            return word[: -len(suffix)]
+    return word
+
+
+def find_same(text: str) -> dict | None:
+    """The stored memory that repeats `text` almost word for word, else None.
+
+    A safety guard, not a deduplicator: Jaccard on stemmed content words at
+    `config.MEMORY_SAME_THRESHOLD` merges near-verbatim repeats only. Paraphrases stay apart.
+    """
+    new = {_stem(w) for w in _words(text) if w not in STOPWORDS}
+    best, best_score = None, 0.0
+    with _connect() as con:
+        rows = con.execute("SELECT id, text, type, created_at FROM memories").fetchall()
+    for row in rows:
+        old = {_stem(w) for w in _words(row["text"]) if w not in STOPWORDS}
+        score = len(new & old) / len(new | old) if new | old else 0.0
+        if score >= config.MEMORY_SAME_THRESHOLD and score > best_score:
+            best, best_score = dict(row), score
+    return best
+
+
+def remember(text: str, type: str, created_at: str) -> dict:
+    """Store a key point unless a near-verbatim repeat is already stored.
+
+    Returns the item and `new`: False with the existing item (unchanged) for a repeat.
+    """
+    _check_length(text)
+    existing = find_same(text)
+    if existing:
+        return {**existing, "new": False}
+    return {**add_memory(text, type, created_at), "new": True}
+
+
+def _valid_bound(con: sqlite3.Connection, value: str | None) -> str | None:
+    """`value` if SQLite can read it as a date-time, else None (no filter).
+
+    SQLite reads a bare date as UTC midnight, so a date-only bound becomes midnight in
+    `config.TIMEZONE` first.
+    """
+    if value is None:
+        return None
+    if DATE_ONLY.fullmatch(value):
+        try:
+            day = date.fromisoformat(value)
+        except ValueError:
+            return None
+        value = datetime.combine(day, time.min, ZoneInfo(config.TIMEZONE)).isoformat()
+    if con.execute("SELECT julianday(?)", (value,)).fetchone()[0] is None:
+        return None
+    return value
+
+
+def search_memories(
+    query: str, k: int, since: str | None = None, until: str | None = None
+) -> list[dict]:
+    """The `k` memories that best match the question, best first.
+
+    `since` (inclusive) and `until` (exclusive) are ISO 8601 and narrow the candidates by
+    `created_at` before ranking; a bound SQLite cannot read is ignored.
+    """
+    match = _match_query(query)
+    if not match:
+        return []
+    with _connect() as con:
+        since, until = _valid_bound(con, since), _valid_bound(con, until)
+        rows = con.execute(
+            "SELECT m.id, m.text, m.type, m.created_at FROM memories_fts"
+            " JOIN memories m ON m.id = memories_fts.rowid"
+            " WHERE memories_fts MATCH ?"
+            " AND (? IS NULL OR julianday(m.created_at) >= julianday(?))"
+            " AND (? IS NULL OR julianday(m.created_at) < julianday(?))"
+            " ORDER BY bm25(memories_fts), m.id DESC LIMIT ?",
+            (match, since, since, until, until, k),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def add_note(text: str, created_at: str) -> dict:

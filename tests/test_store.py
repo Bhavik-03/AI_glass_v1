@@ -1,5 +1,7 @@
 import sqlite3
 
+import pytest
+
 from server import config, store
 
 REAL_CONNECT = sqlite3.connect
@@ -591,3 +593,587 @@ def test_fr14_cancel_and_ack_run_one_update_and_no_select_before_it(db, monkeypa
 
     assert_single_update_without_prior_select(cancel_sql)
     assert_single_update_without_prior_select(ack_sql)
+
+
+WORDS_12 = " ".join(f"w{i}" for i in range(12))
+WORDS_13 = " ".join(f"w{i}" for i in range(13))
+MEM_TIME = "2026-10-20T09:00:00+05:30"
+
+
+def memory_rows(path) -> list[tuple]:
+    con = REAL_CONNECT(path)
+    try:
+        return con.execute("SELECT * FROM memories").fetchall()
+    finally:
+        con.close()
+
+
+def test_fr32_init_creates_memories_table(db):
+    """A memories table is created at startup."""
+    assert "memories" in table_names(db)
+
+
+def test_fr32_memory_max_words_is_12_in_config():
+    """MEMORY_MAX_WORDS (12) comes from config."""
+    assert config.MEMORY_MAX_WORDS == 12
+
+
+def test_fr32_add_memory_sets_all_four_fields(db):
+    """add_memory stores a row with id, text, type and created_at all set."""
+    mem = store.add_memory("I prefer short answers", store.PREFERENCE, MEM_TIME)
+
+    assert set(mem) == {"id", "text", "type", "created_at"}
+    assert mem["id"] is not None
+    assert mem["text"] == "I prefer short answers"
+    assert mem["type"] == "preference"
+    assert mem["created_at"] == MEM_TIME
+    rows = memory_rows(db)
+    assert len(rows) == 1
+    assert "I prefer short answers" in rows[0]
+    assert "preference" in rows[0]
+    assert MEM_TIME in rows[0]
+    assert mem["id"] in rows[0]
+
+
+def test_fr32_type_constants():
+    """The four types are fact, project, preference and session."""
+    assert store.FACT == "fact"
+    assert store.PROJECT == "project"
+    assert store.PREFERENCE == "preference"
+    assert store.SESSION == "session"
+
+
+def test_fr32_twelve_word_item_is_accepted(db):
+    """An item of exactly 12 words is accepted and stored."""
+    mem = store.add_memory(WORDS_12, store.FACT, MEM_TIME)
+
+    assert mem["text"] == WORDS_12
+    assert len(memory_rows(db)) == 1
+
+
+def test_fr32_thirteen_word_item_is_rejected_before_storage(db):
+    """An item over the word limit raises ValueError naming the limit, and nothing is stored."""
+    with pytest.raises(ValueError, match="12"):
+        store.add_memory(WORDS_13, store.FACT, MEM_TIME)
+
+    assert memory_rows(db) == []
+
+
+def test_fr32_word_limit_is_read_from_config(db, monkeypatch):
+    """The word limit is read from config.MEMORY_MAX_WORDS, not hard-coded."""
+    monkeypatch.setattr("server.config.MEMORY_MAX_WORDS", 3)
+
+    store.add_memory("one two three", store.FACT, MEM_TIME)
+    with pytest.raises(ValueError, match="3"):
+        store.add_memory("one two three four", store.FACT, MEM_TIME)
+
+    assert len(memory_rows(db)) == 1
+
+
+def test_fr32_memories_survive_restart(db):
+    """The memories table and its rows survive a restart (init() again on the same database)."""
+    store.add_memory("I study operating systems", store.PROJECT, MEM_TIME)
+
+    store.init()
+
+    rows = memory_rows(db)
+    assert len(rows) == 1
+    assert "I study operating systems" in rows[0]
+
+
+def add_mems(*texts: str) -> list[dict]:
+    return [store.add_memory(t, store.FACT, MEM_TIME) for t in texts]
+
+
+def test_fr37_fts_table_exists_after_init(db):
+    """An FTS5 index over memories.text exists after init()."""
+    assert "memories_fts" in table_names(db)
+
+
+def test_fr37_inserted_item_is_searchable_immediately(db):
+    """An item added with add_memory is found by search_memories (index synced on insert)."""
+    mem = store.add_memory("We discussed annotation tools", store.PROJECT, MEM_TIME)
+
+    found = store.search_memories("annotation", 5)
+
+    assert [m["id"] for m in found] == [mem["id"]]
+
+
+def index_rowids(path, word: str) -> list[int]:
+    """Rowids the FTS5 index itself holds for a word, without joining memories."""
+    con = REAL_CONNECT(path)
+    try:
+        rows = con.execute(
+            "SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?", (f'"{word}"',)
+        )
+        return sorted(r[0] for r in rows)
+    finally:
+        con.close()
+
+
+def test_fr37_delete_from_memories_empties_the_index(db):
+    """DELETE FROM memories removes the rows from the index itself, not only from search."""
+    first, second = add_mems("We discussed annotation tools", "I like annotation work")
+    assert index_rowids(db, "annotation") == [first["id"], second["id"]]
+
+    con = REAL_CONNECT(db)
+    try:
+        con.execute("DELETE FROM memories")
+        con.commit()
+    finally:
+        con.close()
+
+    assert index_rowids(db, "annotation") == []
+    assert store.search_memories("annotation", 5) == []
+
+
+def test_fr37_returns_at_most_k_items(db):
+    """search_memories returns at most k items."""
+    add_mems(*[f"annotation note number {n}" for n in range(6)])
+
+    assert len(store.search_memories("annotation", 5)) == 5
+    assert len(store.search_memories("annotation", 2)) == 2
+
+
+def test_fr37_best_match_first(db):
+    """An item matching two query words ranks before an item matching one."""
+    two, one = add_mems(
+        "annotation guidelines for the dataset",
+        "annotation was discussed briefly",
+    )
+
+    found = store.search_memories("annotation dataset", 5)
+
+    assert [m["id"] for m in found] == [two["id"], one["id"]]
+
+
+def test_fr37_spoken_question_finds_item_with_other_words(db):
+    """A question with words not in the item still returns the item containing 'annotation'."""
+    target, *_ = add_mems(
+        "Annotation guidelines are due on Friday",
+        "My cat is called Biscuit",
+        "I study operating systems at night",
+        "Prefer short spoken answers",
+    )
+
+    found = store.search_memories("what did we discuss about annotation", 5)
+
+    assert [m["id"] for m in found] == [target["id"]]
+
+
+def test_fr37_stemmed_word_matches(db):
+    """Word forms match through stemming ('annotations' finds 'annotation')."""
+    mem, *_ = add_mems("Annotation guidelines are due on Friday", "My cat is Biscuit")
+
+    found = store.search_memories("annotations", 5)
+
+    assert [m["id"] for m in found] == [mem["id"]]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        'what\'s the "annotation" plan',
+        "fine-tuning -x (y) AND OR NOT NEAR*",
+        '"',
+        "'",
+        "*",
+    ],
+)
+def test_fr37_syntax_characters_do_not_raise(db, query):
+    """A question with FTS5 syntax characters (quotes, apostrophes, hyphens) does not raise."""
+    add_mems("The annotation plan and fine-tuning notes")
+
+    result = store.search_memories(query, 5)
+
+    assert isinstance(result, list)
+
+
+def test_fr37_question_with_quotes_still_matches(db):
+    """Quotes and apostrophes around real words are ignored, the words still match."""
+    mem, *_ = add_mems("The annotation plan is ready", "My cat is Biscuit")
+
+    found = store.search_memories('what\'s the "annotation" plan', 5)
+
+    assert [m["id"] for m in found] == [mem["id"]]
+
+
+@pytest.mark.parametrize(
+    "query", ['"', "'", "*", "", "what did we about", "AND OR NOT"]
+)
+def test_fr37_only_syntax_or_stopwords_returns_empty(db, query):
+    """A query with no usable words returns []."""
+    add_mems("The annotation plan is ready")
+
+    assert store.search_memories(query, 5) == []
+
+
+def test_fr37_no_match_returns_empty(db):
+    """A question matching nothing returns []."""
+    add_mems("The annotation plan is ready")
+
+    assert store.search_memories("quantum chromodynamics", 5) == []
+
+
+def test_fr37_each_item_has_four_fields(db):
+    """Each returned item has id, text, type and created_at."""
+    mem = store.add_memory("The annotation plan is ready", store.PROJECT, MEM_TIME)
+
+    found = store.search_memories("annotation", 5)
+
+    assert found == [
+        {
+            "id": mem["id"],
+            "text": "The annotation plan is ready",
+            "type": "project",
+            "created_at": MEM_TIME,
+        }
+    ]
+
+
+def add_at(text: str, created_at: str) -> dict:
+    return store.add_memory(text, store.FACT, created_at)
+
+
+def found_ids(query: str, k: int = 10, **window) -> list[int]:
+    return sorted(m["id"] for m in store.search_memories(query, k, **window))
+
+
+def test_fr38_since_excludes_item_before_and_keeps_item_inside(db):
+    """since drops an item created before it and keeps one created inside the window."""
+    add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    inside = add_at("annotation notes from September", "2026-09-15T10:00:00+05:30")
+
+    assert found_ids("annotation", since="2026-09-01") == [inside["id"]]
+
+
+def test_fr38_until_excludes_item_after_and_keeps_item_inside(db):
+    """until drops an item created after it and keeps one created inside the window."""
+    inside = add_at("annotation notes from September", "2026-09-15T10:00:00+05:30")
+    add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+
+    assert found_ids("annotation", until="2026-10-01") == [inside["id"]]
+
+
+def test_fr38_both_bounds_return_only_item_inside_window(db):
+    """With since and until, only the item inside the window is returned."""
+    add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    inside = add_at("annotation notes from September", "2026-09-15T10:00:00+05:30")
+    add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+
+    assert found_ids("annotation", since="2026-09-01", until="2026-10-01") == [
+        inside["id"]
+    ]
+
+
+def test_fr38_since_is_inclusive(db):
+    """An item created exactly at since is included."""
+    exact = add_at("annotation at the boundary", "2026-09-01T00:00:00+05:30")
+    add_at("annotation just before", "2026-08-31T23:59:59+05:30")
+
+    assert found_ids("annotation", since="2026-09-01T00:00:00+05:30") == [exact["id"]]
+
+
+def test_fr38_until_is_exclusive(db):
+    """An item created exactly at until is excluded; one just before is included."""
+    before = add_at("annotation just before", "2026-09-30T23:59:59+05:30")
+    add_at("annotation at the boundary", "2026-10-01T00:00:00+05:30")
+
+    assert found_ids("annotation", until="2026-10-01T00:00:00+05:30") == [before["id"]]
+
+
+def test_fr38_no_time_returns_both_items(db):
+    """The same question with no since and until returns both items."""
+    a = add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    b = add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+
+    assert found_ids("annotation") == sorted([a["id"], b["id"]])
+
+
+def test_fr38_filter_applies_before_ranking_and_k(db):
+    """Outside items that rank higher cannot crowd the inside items out of the top k."""
+    outside = [
+        add_at("annotation dataset guidelines review", f"2026-08-0{n}T10:00:00+05:30")
+        for n in range(1, 5)
+    ]
+    inside = [
+        add_at("annotation was mentioned", "2026-09-10T10:00:00+05:30"),
+        add_at("annotation came up again", "2026-09-12T10:00:00+05:30"),
+    ]
+    query = "annotation dataset guidelines review"
+    unfiltered = {m["id"] for m in store.search_memories(query, 2)}
+    assert unfiltered <= {o["id"] for o in outside}
+
+    found = store.search_memories(query, 2, since="2026-09-01", until="2026-10-01")
+
+    assert sorted(m["id"] for m in found) == sorted(i["id"] for i in inside)
+
+
+@pytest.mark.parametrize("bad", ["last week", ""])
+def test_fr38_unparseable_since_means_no_filter(db, bad):
+    """An unparseable since is ignored: same results as no filter, not no results."""
+    a = add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    b = add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+
+    assert found_ids("annotation", since=bad) == sorted([a["id"], b["id"]])
+
+
+@pytest.mark.parametrize("bad", ["next month", ""])
+def test_fr38_unparseable_until_means_no_filter(db, bad):
+    """An unparseable until is ignored: same results as no filter, not no results."""
+    a = add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    b = add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+
+    assert found_ids("annotation", until=bad) == sorted([a["id"], b["id"]])
+
+
+def test_fr38_good_since_with_bad_until_applies_only_since(db):
+    """A bad until is ignored while a good since still filters."""
+    add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    late = add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+
+    assert found_ids("annotation", since="2026-09-01", until="soon") == [late["id"]]
+
+
+def test_fr38_good_until_with_bad_since_applies_only_until(db):
+    """A bad since is ignored while a good until still filters."""
+    early = add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+
+    assert found_ids("annotation", since="last week", until="2026-09-01") == [
+        early["id"]
+    ]
+
+
+def test_fr38_bounds_with_other_offset_compare_as_same_moment(db):
+    """A Z bound equals the same moment in +05:30: 2026-09-01T00:00:00Z is 05:30 IST."""
+    before = add_at("annotation before the moment", "2026-09-01T05:29:59+05:30")
+    exact = add_at("annotation at the moment", "2026-09-01T05:30:00+05:30")
+
+    assert found_ids("annotation", since="2026-09-01T00:00:00Z") == [exact["id"]]
+    assert found_ids("annotation", until="2026-09-01T00:00:00Z") == [before["id"]]
+
+
+def test_fr40_threshold_config_is_point_nine():
+    """MEMORY_SAME_THRESHOLD is 0.9 in config."""
+    assert config.MEMORY_SAME_THRESHOLD == 0.9
+
+
+def test_fr40_find_same_none_on_empty_store(db):
+    """find_same returns None when the store is empty."""
+    assert store.find_same("LoRA fine-tuning") is None
+
+
+def test_fr40_find_same_finds_reordered_inflected_repeat(db):
+    """A repeat with the same content words in another order is found."""
+    [first] = add_mems("Annotation project deadline is in March")
+    found = store.find_same("The deadline for the annotation project is March")
+    assert found is not None
+    assert found["id"] == first["id"]
+
+
+def test_fr40_find_same_returns_stored_item_unchanged(db):
+    """find_same returns the stored item with its original text and created_at."""
+    store.add_memory("Studying LoRA fine-tuning", store.FACT, MEM_TIME)
+    found = store.find_same("I am studying LoRA fine tuning")
+    assert found["text"] == "Studying LoRA fine-tuning"
+    assert found["created_at"] == MEM_TIME
+    assert found["type"] == store.FACT
+    assert set(found) == {"id", "text", "type", "created_at"}
+
+
+def test_fr40_find_same_none_for_unrelated_topic(db):
+    """'LoRA fine-tuning' stored: 'attention in transformers' is not found."""
+    add_mems("LoRA fine-tuning")
+    assert store.find_same("attention in transformers") is None
+
+
+def test_fr40_find_same_none_for_opposites(db):
+    """Opposite points that differ by one word are not the same."""
+    add_mems("Prefers answers with code examples")
+    assert store.find_same("Prefers answers without code examples") is None
+
+
+def test_fr40_find_same_none_for_one_word_change(db):
+    """Changing one content word (Rust to Go) is not a repeat."""
+    add_mems("Wants to learn Rust this year")
+    assert store.find_same("Wants to learn Go this year") is None
+
+
+def test_fr40_find_same_uses_config_threshold_lower(db, monkeypatch):
+    """A lower MEMORY_SAME_THRESHOLD makes a partly similar pair match."""
+    add_mems("Wants to learn Rust this year")
+    assert store.find_same("Wants to learn Go this year") is None
+    monkeypatch.setattr(config, "MEMORY_SAME_THRESHOLD", 0.5)
+    assert store.find_same("Wants to learn Go this year") is not None
+
+
+def test_fr40_find_same_uses_config_threshold_above_one(db, monkeypatch):
+    """With the threshold above 1, even identical text does not match."""
+    add_mems("LoRA fine-tuning")
+    monkeypatch.setattr(config, "MEMORY_SAME_THRESHOLD", 1.1)
+    assert store.find_same("LoRA fine-tuning") is None
+
+
+def test_fr40_find_same_picks_best_scoring(db, monkeypatch):
+    """When several stored items match, the best-scoring one wins."""
+    monkeypatch.setattr(config, "MEMORY_SAME_THRESHOLD", 0.5)
+    _, second = add_mems(
+        "Project deadline March annotation",
+        "Project deadline March annotation review team",
+    )
+    found = store.find_same("Project deadline March annotation review team")
+    assert found["id"] == second["id"]
+
+
+def test_fr40_remember_first_add_is_new(db):
+    """remember on an empty store adds a row and returns new True."""
+    item = store.remember("LoRA fine-tuning", store.FACT, MEM_TIME)
+    assert item["new"] is True
+    assert item["text"] == "LoRA fine-tuning"
+    assert item["type"] == store.FACT
+    assert item["created_at"] == MEM_TIME
+    assert len(memory_rows(db)) == 1
+
+
+def test_fr40_remember_near_verbatim_repeat_adds_no_row(db):
+    """A near-verbatim repeat adds no row, keeps the stored item, returns new False."""
+    first = store.remember("Studying LoRA fine-tuning", store.FACT, MEM_TIME)
+    before = memory_rows(db)
+    later = "2026-10-21T09:00:00+05:30"
+    again = store.remember("I am studying LoRA fine tuning", store.FACT, later)
+    assert again["new"] is False
+    assert again["id"] == first["id"]
+    assert again["text"] == "Studying LoRA fine-tuning"
+    assert again["created_at"] == MEM_TIME
+    assert memory_rows(db) == before
+
+
+def test_fr40_remember_unrelated_point_adds_row_and_leaves_first(db):
+    """'LoRA fine-tuning' stored: adding 'attention in transformers' makes a new row."""
+    store.remember("LoRA fine-tuning", store.FACT, MEM_TIME)
+    before = memory_rows(db)
+    item = store.remember("attention in transformers", store.FACT, MEM_TIME)
+    assert item["new"] is True
+    after = memory_rows(db)
+    assert len(after) == 2
+    assert after[0] == before[0]
+
+
+def test_fr40_remember_paraphrase_with_new_content_words_adds_row(db):
+    """A paraphrase that changes content words adds a row."""
+    store.remember("Prefers short answers", store.FACT, MEM_TIME)
+    item = store.remember("Likes brief answers", store.FACT, MEM_TIME)
+    assert item["new"] is True
+    assert len(memory_rows(db)) == 2
+
+
+def test_fr40_remember_over_word_limit_raises_even_if_match(db):
+    """Text over the word limit raises ValueError even when it would match; nothing stored."""
+    store.remember(WORDS_12, store.FACT, MEM_TIME)
+    before = memory_rows(db)
+    with pytest.raises(ValueError, match=str(config.MEMORY_MAX_WORDS)):
+        store.remember(WORDS_13, store.FACT, MEM_TIME)
+    assert memory_rows(db) == before
+
+
+def test_fr38_date_only_since_is_local_midnight_includes_early_morning_item(db):
+    """since='2026-09-01' is midnight IST, so an item at 02:00+05:30 on that day is returned."""
+    early = add_at("annotation early morning", "2026-09-01T02:00:00+05:30")
+
+    assert found_ids("annotation", since="2026-09-01") == [early["id"]]
+
+
+def test_fr38_date_only_until_is_local_midnight_excludes_early_morning_item(db):
+    """until='2026-09-01' is midnight IST, so an item at 02:00+05:30 on that day is excluded."""
+    before = add_at("annotation previous evening", "2026-08-31T20:00:00+05:30")
+    add_at("annotation early morning", "2026-09-01T02:00:00+05:30")
+
+    assert found_ids("annotation", until="2026-09-01") == [before["id"]]
+
+
+def test_fr38_date_only_since_excludes_last_second_of_previous_day(db):
+    """An item at 2026-08-31T23:59:59+05:30 is excluded by since='2026-09-01'."""
+    add_at("annotation last second", "2026-08-31T23:59:59+05:30")
+    after = add_at("annotation first hour", "2026-09-01T01:00:00+05:30")
+
+    assert found_ids("annotation", since="2026-09-01") == [after["id"]]
+
+
+def test_fr38_date_only_until_includes_last_second_of_previous_day(db):
+    """An item at 2026-08-31T23:59:59+05:30 is included by until='2026-09-01'."""
+    last = add_at("annotation last second", "2026-08-31T23:59:59+05:30")
+    add_at("annotation first hour", "2026-09-01T01:00:00+05:30")
+
+    assert found_ids("annotation", until="2026-09-01") == [last["id"]]
+
+
+def test_fr38_date_only_since_is_inclusive_at_local_midnight(db):
+    """An item exactly at 2026-09-01T00:00:00+05:30 is included by since='2026-09-01'."""
+    exact = add_at("annotation at midnight", "2026-09-01T00:00:00+05:30")
+
+    assert found_ids("annotation", since="2026-09-01") == [exact["id"]]
+
+
+def test_fr38_date_only_until_is_exclusive_at_local_midnight(db):
+    """An item exactly at 2026-09-01T00:00:00+05:30 is excluded by until='2026-09-01'."""
+    before = add_at("annotation before midnight", "2026-08-31T23:59:59+05:30")
+    add_at("annotation at midnight", "2026-09-01T00:00:00+05:30")
+
+    assert found_ids("annotation", until="2026-09-01") == [before["id"]]
+
+
+def test_fr38_date_only_window_covers_whole_local_day(db):
+    """since='2026-09-01', until='2026-09-02' returns the whole local day and nothing outside it."""
+    add_at("annotation day before", "2026-08-31T23:59:59+05:30")
+    early = add_at("annotation early", "2026-09-01T02:00:00+05:30")
+    late = add_at("annotation late", "2026-09-01T23:30:00+05:30")
+    add_at("annotation next day", "2026-09-02T00:00:00+05:30")
+
+    assert found_ids("annotation", since="2026-09-01", until="2026-09-02") == sorted(
+        [early["id"], late["id"]]
+    )
+
+
+def test_fr38_bound_with_time_and_offset_is_unchanged(db):
+    """A bound that already carries a time and offset is compared as written."""
+    add_at("annotation at two", "2026-09-01T02:00:00+05:30")
+    three = add_at("annotation at three", "2026-09-01T03:00:00+05:30")
+
+    assert found_ids("annotation", since="2026-09-01T03:00:00+05:30") == [three["id"]]
+
+
+def test_fr38_z_bound_still_compares_as_same_moment(db):
+    """A 'Z' bound is not shifted: 2026-08-31T20:30:00Z is 2026-09-01T02:00:00+05:30."""
+    add_at("annotation before", "2026-09-01T01:59:59+05:30")
+    exact = add_at("annotation exact", "2026-09-01T02:00:00+05:30")
+
+    assert found_ids("annotation", since="2026-08-31T20:30:00Z") == [exact["id"]]
+
+
+def test_fr38_date_only_bound_uses_configured_timezone(db, monkeypatch):
+    """With config.TIMEZONE set to UTC, since='2026-09-01' is UTC midnight, so
+    an item at 2026-09-01T02:00:00+05:30 (2026-08-31T20:30Z) is excluded."""
+    monkeypatch.setattr(config, "TIMEZONE", "UTC")
+    add_at("annotation early morning IST", "2026-09-01T02:00:00+05:30")
+    later = add_at("annotation noon IST", "2026-09-01T12:00:00+05:30")
+
+    assert found_ids("annotation", since="2026-09-01") == [later["id"]]
+
+
+@pytest.mark.parametrize("bad", ["2026-13-45", "2026-02-30"])
+def test_fr38_impossible_date_only_since_means_no_filter(db, bad):
+    """An impossible date-only since is ignored, not raised and not 'no results'."""
+    a = add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    b = add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+
+    assert found_ids("annotation", since=bad) == sorted([a["id"], b["id"]])
+
+
+@pytest.mark.parametrize("bad", ["2026-13-45", "2026-02-30"])
+def test_fr38_impossible_date_only_until_means_no_filter(db, bad):
+    """An impossible date-only until is ignored, not raised and not 'no results'."""
+    a = add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    b = add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+
+    assert found_ids("annotation", until=bad) == sorted([a["id"], b["id"]])

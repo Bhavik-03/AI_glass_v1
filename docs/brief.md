@@ -71,7 +71,7 @@ edits a slot silently.
 
 ### Retrieval
 
-Retrieval sits behind one interface, search_memories(query, k, since), so the ranking
+Retrieval sits behind one interface, search_memories(query, k, since, until), so the ranking
 backend can be replaced without touching anything that calls it.
 
 v3 implements that interface with SQLite FTS5 full-text search. It adds no

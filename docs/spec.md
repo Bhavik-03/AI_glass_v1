@@ -208,7 +208,7 @@ FR-26 onwards are new in v3.
   when the transcript is empty, before the LLM runs; 500 `{"error": "<stage>: <reason>"}`
   when a stage fails; the server answers the next request normally
 
-### FR-17 (changed in v2)
+### FR-17 (changed in v2 and v3)
 
 - Requirement: Log every query on the server
 - Input → Output: Each `/query` → one JSONL line
@@ -437,8 +437,8 @@ FR-26 onwards are new in v3.
 ### FR-37 Recall (changed backend in v3)
 
 - Requirement: Recall goes through one interface,
-  `search_memories(query, k, since=None)`, so the ranking backend can be replaced without
-  touching its callers. v3 implements it with SQLite
+  `search_memories(query, k, since=None, until=None)`, so the ranking backend can be
+  replaced without touching its callers. v3 implements it with SQLite
   FTS5 full-text search, which adds no dependency. At most `MEMORY_RECALL_MAX` (5) items
   reach Gemini. The whole store is never sent, to any model or any tool
 - Input → Output: Question → at most 5 items in the Gemini request
@@ -451,11 +451,15 @@ FR-26 onwards are new in v3.
 ### FR-38 Time filter
 
 - Requirement: A question naming a time ("last week", "yesterday", "in September") filters
-  candidates by date before ranking. A question naming no time searches everything
+  candidates by date before ranking, between `since` and `until`. A bound given as a date
+  only is interpreted as midnight in the configured time zone, not UTC. A question naming no
+  time searches everything
 - Input → Output: Question with a time → date-filtered search
 - Acceptance: With one matching item inside the named window and one outside it, only the
-  one inside is returned; the same question without the time returns both; an unparseable
-  time falls back to searching everything rather than returning nothing
+  one inside is returned, whether the outside one is before `since` or after `until`; the
+  same question without the time returns both; an item stored at 02:00 local time on a day
+  is inside a `since` bound naming that day; an unparseable `since` or `until` falls back
+  to searching everything rather than returning nothing
 
 ### FR-39 Session writer
 
@@ -474,14 +478,18 @@ FR-26 onwards are new in v3.
 ### FR-40 No over-merge
 
 - Requirement: The writer and `remember that` never merge a new item onto an existing one
-  unless it is the same thing. Reusing an existing item's wording for a different point is a
-  failure, not a tidy-up. This is the v2 concept logger's failure mode (issue #116), where
-  "attention in transformers" and "overfitting" were both filed under the existing name
-  "lora fine-tuning"
+  unless it is the same thing. `find_same` is a safety guard, not a deduplicator. At
+  `MEMORY_SAME_THRESHOLD` 0.9 it collapses only near-verbatim repeats; a paraphrase, a
+  synonym or an added word is stored as a second row. Merging those is compaction, which is
+  v4. Reusing an existing item's wording for a different point is a failure, not a tidy-up.
+  This is the v2 concept logger's failure mode (issue #116), where "attention in
+  transformers" and "overfitting" were both filed under the existing name "lora fine-tuning"
 - Input → Output: A new point near an existing one → a new row, not a merge
 - Acceptance: With "LoRA fine-tuning" already stored, storing "attention in transformers"
-  adds a new row and leaves the first unchanged; storing the same point twice in different
-  words updates one row and adds none; in the eval, 0 of 5 near-miss pairs are merged
+  adds a new row and leaves the first unchanged; storing a near-verbatim repeat - the same
+  point with the same content words - adds no row, leaves the stored item unchanged, and
+  reports it back as already remembered; a paraphrase that changes content words is
+  expected to add a row; in the eval, 0 of 5 near-miss pairs are merged
 
 ## Interface contract
 
