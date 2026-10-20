@@ -1177,3 +1177,517 @@ def test_fr38_impossible_date_only_until_means_no_filter(db, bad):
     b = add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
 
     assert found_ids("annotation", until=bad) == sorted([a["id"], b["id"]])
+
+
+def mem_at(text: str, day: int, hour: int = 9) -> dict:
+    return store.add_memory(
+        text, store.FACT, f"2026-09-{day:02d}T{hour:02d}:00:00+05:30"
+    )
+
+
+def recent_ids(k: int, **window) -> list[int]:
+    return [m["id"] for m in store.recent_memories(k, **window)]
+
+
+def test_fr36_recall_and_list_max_are_five_in_config():
+    """MEMORY_RECALL_MAX and MEMORY_LIST_MAX are both 5 in config."""
+    assert config.MEMORY_RECALL_MAX == 5
+    assert config.MEMORY_LIST_MAX == 5
+
+
+def test_fr36_count_memories_empty_store_is_zero(db):
+    """count_memories on an empty store is 0."""
+    assert store.count_memories() == 0
+
+
+def test_fr36_count_memories_counts_every_row_without_window(db):
+    """With no window, count_memories counts all stored items, beyond any limit."""
+    for n in range(1, 9):
+        mem_at(f"separate point number {n}", n)
+
+    assert store.count_memories() == 8
+
+
+def test_fr36_count_memories_respects_window(db):
+    """count_memories counts only items in the window: since inclusive, until exclusive."""
+    for n in range(1, 9):
+        mem_at(f"separate point number {n}", n)
+
+    assert store.count_memories(since="2026-09-03", until="2026-09-06") == 3
+    assert store.count_memories(since="2026-09-06") == 3
+    assert store.count_memories(until="2026-09-03") == 2
+
+
+def test_fr36_count_memories_unreadable_bound_is_ignored(db):
+    """An unreadable since or until is ignored, not an empty result."""
+    for n in range(1, 4):
+        mem_at(f"separate point number {n}", n)
+
+    assert store.count_memories(since="last week", until="soon") == 3
+
+
+def test_fr36_recent_memories_empty_store_gives_empty_list(db):
+    """recent_memories on an empty store returns []."""
+    assert store.recent_memories(5) == []
+
+
+def test_fr36_recent_memories_newest_first_and_limited_to_k(db):
+    """recent_memories returns at most k items, newest first, whatever the insert order."""
+    ids = {
+        n: mem_at(f"separate point number {n}", n)["id"] for n in (4, 1, 7, 3, 6, 2, 5)
+    }
+
+    assert recent_ids(3) == [ids[7], ids[6], ids[5]]
+    assert len(store.recent_memories(5)) == 5
+    assert len(store.recent_memories(50)) == 7
+
+
+def test_fr36_recent_memories_items_have_four_fields(db):
+    """Each recent item has exactly id, text, type and created_at."""
+    mem = store.add_memory("The annotation plan is ready", store.PROJECT, MEM_TIME)
+
+    assert store.recent_memories(5) == [
+        {
+            "id": mem["id"],
+            "text": "The annotation plan is ready",
+            "type": "project",
+            "created_at": MEM_TIME,
+        }
+    ]
+
+
+def test_fr36_recent_memories_ties_higher_id_first(db):
+    """Items with the same created_at come back higher id first."""
+    a = mem_at("first point", 5)
+    b = mem_at("second point", 5)
+    c = mem_at("third point", 5)
+
+    assert recent_ids(5) == [c["id"], b["id"], a["id"]]
+
+
+def test_fr36_recent_memories_window_since_inclusive_until_exclusive(db):
+    """recent_memories keeps items from since (inclusive) up to until (exclusive)."""
+    before = add_at("point before", "2026-09-01T09:59:59+05:30")
+    start = add_at("point at start", "2026-09-01T10:00:00+05:30")
+    inside = add_at("point inside", "2026-09-02T10:00:00+05:30")
+    add_at("point at end", "2026-09-03T10:00:00+05:30")
+
+    got = recent_ids(
+        5, since="2026-09-01T10:00:00+05:30", until="2026-09-03T10:00:00+05:30"
+    )
+
+    assert got == [inside["id"], start["id"]]
+    assert before["id"] not in got
+
+
+def test_fr36_recent_memories_date_only_bounds_are_local_midnight(db):
+    """Date-only bounds mean local midnight: since='2026-09-01' keeps 02:00+05:30, until='2026-09-01' drops it."""
+    late = add_at("previous evening", "2026-08-31T23:59:59+05:30")
+    early = add_at("early morning", "2026-09-01T02:00:00+05:30")
+
+    assert recent_ids(5, since="2026-09-01") == [early["id"]]
+    assert recent_ids(5, until="2026-09-01") == [late["id"]]
+
+
+def test_fr36_recent_memories_orders_mixed_offsets_as_instants(db):
+    """Items stored with +05:30 and Z are ordered by moment in time, not by string."""
+    # 2026-09-01T06:00:00Z is 11:30 IST: later than 10:00+05:30, but "T06" sorts before "T10".
+    ist = add_at("kolkata item", "2026-09-01T10:00:00+05:30")
+    utc = add_at("utc item", "2026-09-01T06:00:00Z")
+    early_utc = add_at("early utc item", "2026-09-01T03:00:00Z")
+
+    assert recent_ids(5) == [utc["id"], ist["id"], early_utc["id"]]
+
+
+def test_fr36_recent_memories_window_compares_mixed_offsets_as_instants(db):
+    """A Z item is placed in the window by its instant: 2026-09-01T06:00:00Z is 11:30 IST."""
+    utc = add_at("utc item", "2026-09-01T06:00:00Z")
+    add_at("kolkata item", "2026-09-01T10:00:00+05:30")
+
+    got = recent_ids(5, since="2026-09-01T11:00:00+05:30")
+
+    assert got == [utc["id"]]
+
+
+def test_fr36_count_matches_counts_all_matches_beyond_any_limit(db):
+    """count_matches counts every matching item (12), not just the top few."""
+    add_mems(*[f"annotation note number {n}" for n in range(12)])
+    add_mems(*[f"unrelated gardening item {n}" for n in range(8)])
+
+    assert store.count_matches("annotation", since=None, until=None) == 12
+    assert len(store.search_memories("annotation", 5)) == 5
+
+
+def test_fr36_count_matches_uses_any_word_match(db):
+    """count_matches counts an item that matches any content word of the question."""
+    add_mems(
+        "annotation guidelines for the dataset",
+        "annotation was discussed briefly",
+        "the dataset is large",
+        "My cat is called Biscuit",
+    )
+
+    assert store.count_matches("annotation dataset") == 3
+
+
+def test_fr36_count_matches_matches_search_memories_for_a_spoken_question(db):
+    """The count agrees with search_memories for a spoken question with stopwords and quotes."""
+    add_mems("Annotation guidelines are due on Friday", "My cat is called Biscuit")
+
+    question = 'what did we discuss about "annotation"'
+
+    assert store.count_matches(question) == len(store.search_memories(question, 10))
+    assert store.count_matches(question) == 1
+
+
+def test_fr36_count_matches_respects_window(db):
+    """count_matches counts only matches inside the window."""
+    add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    add_at("annotation notes from September", "2026-09-15T10:00:00+05:30")
+    add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+    add_at("gardening notes from September", "2026-09-16T10:00:00+05:30")
+
+    assert store.count_matches("annotation") == 3
+    assert (
+        store.count_matches("annotation", since="2026-09-01", until="2026-10-01") == 1
+    )
+    assert store.count_matches("annotation", since="2026-09-01") == 2
+    assert store.count_matches("annotation", until="2026-09-01") == 1
+
+
+def test_fr36_count_matches_unreadable_bound_is_ignored(db):
+    """An unreadable bound is ignored by count_matches, as in search_memories."""
+    add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+
+    assert store.count_matches("annotation", since="last week", until="soon") == 2
+
+
+@pytest.mark.parametrize(
+    "query",
+    ['"', "'", "*", "", "what did we about", "AND OR NOT", "quantum chromodynamics"],
+)
+def test_fr36_count_matches_zero_without_usable_words_or_match(db, query):
+    """A query of only stopwords or syntax, or one matching nothing, counts 0."""
+    add_mems("The annotation plan is ready")
+
+    assert store.count_matches(query) == 0
+
+
+def test_fr36_count_matches_zero_on_empty_store(db):
+    """count_matches on an empty store is 0."""
+    assert store.count_matches("annotation") == 0
+
+
+def test_fr36_count_functions_and_recent_are_read_only(db):
+    """count_memories, recent_memories and count_matches change no row."""
+    add_mems("annotation plan", "annotation review")
+    before = memory_rows(db)
+
+    store.count_memories()
+    store.recent_memories(5)
+    store.count_matches("annotation")
+
+    assert memory_rows(db) == before
+
+
+def memory_texts(path) -> list[str]:
+    con = REAL_CONNECT(path)
+    try:
+        return [r[0] for r in con.execute("SELECT text FROM memories ORDER BY id")]
+    finally:
+        con.close()
+
+
+def table_count(path, table: str) -> int:
+    con = REAL_CONNECT(path)
+    try:
+        return con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+    finally:
+        con.close()
+
+
+def test_fr34_forget_one_match_deletes_it_and_keeps_every_other_row(db):
+    """With exactly one item containing every query word, that row is gone and every other row remains."""
+    add_mems("Gym on Monday", "My cat is called Biscuit", "I study operating systems")
+    assert table_count(db, "memories") == 3
+
+    store.forget_memory("gym Monday")
+
+    assert table_count(db, "memories") == 2
+    assert sorted(memory_texts(db)) == [
+        "I study operating systems",
+        "My cat is called Biscuit",
+    ]
+
+
+def test_fr34_forget_returns_the_deleted_row_with_four_fields(db):
+    """The result is {"deleted": {id, text, type, created_at}} describing the deleted row."""
+    mem = store.add_memory("Gym on Monday", store.PREFERENCE, MEM_TIME)
+    add_mems("My cat is called Biscuit")
+
+    result = store.forget_memory("gym Monday")
+
+    assert result == {
+        "deleted": {
+            "id": mem["id"],
+            "text": "Gym on Monday",
+            "type": "preference",
+            "created_at": MEM_TIME,
+        }
+    }
+
+
+def test_fr34_forget_gym_mondays_deletes_stored_gym_on_monday(db):
+    """ "gym Mondays" deletes a stored "gym on Monday" (same stemming as find_same)."""
+    [mem] = add_mems("gym on Monday")
+
+    result = store.forget_memory("gym Mondays")
+
+    assert result["deleted"]["id"] == mem["id"]
+    assert memory_rows(db) == []
+
+
+def test_fr34_forget_word_the_item_lacks_deletes_nothing(db):
+    """ "gym plan" against "gym on Monday" deletes nothing and returns empty candidates."""
+    add_mems("gym on Monday")
+    before = memory_rows(db)
+
+    result = store.forget_memory("gym plan")
+
+    assert result == {"candidates": []}
+    assert memory_rows(db) == before
+
+
+def test_fr34_forget_two_matches_delete_nothing_and_return_both_in_id_order(db):
+    """With two matching items nothing is deleted and both come back as candidates, oldest id first."""
+    first, second = add_mems("Gym session on Monday", "Gym session on Friday")
+    add_mems("My cat is called Biscuit")
+    before = memory_rows(db)
+
+    result = store.forget_memory("gym session")
+
+    assert list(result) == ["candidates"]
+    assert result["candidates"] == [
+        {
+            "id": first["id"],
+            "text": "Gym session on Monday",
+            "type": "fact",
+            "created_at": MEM_TIME,
+        },
+        {
+            "id": second["id"],
+            "text": "Gym session on Friday",
+            "type": "fact",
+            "created_at": MEM_TIME,
+        },
+    ]
+    assert memory_rows(db) == before
+
+
+def test_fr34_forget_needs_all_words_so_extra_word_narrows_to_one(db):
+    """A match needs ALL query words: "gym Friday" matches only the Friday item among two gym items."""
+    monday, friday = add_mems("Gym session on Monday", "Gym session on Friday")
+
+    result = store.forget_memory("gym Friday")
+
+    assert result["deleted"]["id"] == friday["id"]
+    assert memory_texts(db) == ["Gym session on Monday"]
+    assert store.search_memories("monday", 5)[0]["id"] == monday["id"]
+
+
+def test_fr34_forget_words_split_across_items_match_nothing(db):
+    """When each query word is in a different item but no item has both, nothing is deleted."""
+    add_mems("Gym on Monday", "Dentist appointment on Friday")
+    before = memory_rows(db)
+
+    result = store.forget_memory("gym Friday")
+
+    assert result == {"candidates": []}
+    assert memory_rows(db) == before
+
+
+def test_fr34_forget_no_match_deletes_nothing_and_returns_empty_candidates(db):
+    """With no matching item nothing is deleted and the candidates list is empty."""
+    add_mems("Gym on Monday", "My cat is called Biscuit")
+    before = memory_rows(db)
+
+    result = store.forget_memory("quantum chromodynamics")
+
+    assert result == {"candidates": []}
+    assert memory_rows(db) == before
+
+
+def test_fr34_forget_on_empty_store_returns_empty_candidates(db):
+    """With nothing stored, forget deletes nothing and returns empty candidates."""
+    assert store.forget_memory("gym Monday") == {"candidates": []}
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["", "   ", "the is a", "what did we about", "!!! ???", "'", '"', "*"],
+    ids=[
+        "empty",
+        "blank",
+        "only-stopwords",
+        "only-stopwords-spoken",
+        "only-punctuation",
+        "apostrophe",
+        "quote",
+        "star",
+    ],
+)
+def test_fr34_forget_query_without_content_words_matches_nothing(db, query):
+    """A blank, stopword-only or punctuation-only query matches nothing and never deletes everything."""
+    add_mems("Gym on Monday", "My cat is called Biscuit")
+    before = memory_rows(db)
+
+    result = store.forget_memory(query)
+
+    assert result == {"candidates": []}
+    assert memory_rows(db) == before
+
+
+def test_fr34_forget_removes_the_fts_index_entry_with_the_row(db):
+    """The FTS5 index entry goes with the row: the index holds no rowid for the deleted item."""
+    gym, cat = add_mems("Gym on Monday", "My cat likes Monday")
+    assert index_rowids(db, "gym") == [gym["id"]]
+    assert index_rowids(db, "monday") == sorted([gym["id"], cat["id"]])
+
+    store.forget_memory("gym")
+
+    assert index_rowids(db, "gym") == []
+    assert index_rowids(db, "monday") == [cat["id"]]
+
+
+def test_fr34_forget_ambiguous_leaves_the_index_untouched(db):
+    """An ambiguous query deletes nothing, so the index still holds both items."""
+    first, second = add_mems("Gym session on Monday", "Gym session on Friday")
+
+    store.forget_memory("gym session")
+
+    assert index_rowids(db, "gym") == sorted([first["id"], second["id"]])
+
+
+def test_fr34_forget_uses_the_same_stems_as_find_same(db):
+    """forget matches by the stems find_same uses: a reordered, inflected, stopword-padded query finds the item."""
+    [mem] = add_mems("Annotation project deadline is in March")
+    text = "the deadline for the annotation project is March"
+    assert store.find_same(text)["id"] == mem["id"]
+
+    result = store.forget_memory(text)
+
+    assert result["deleted"]["id"] == mem["id"]
+    assert memory_rows(db) == []
+
+
+def test_fr34_forgotten_item_is_not_returned_by_search_memories(db):
+    """After forget, search_memories no longer returns the deleted item."""
+    gym, other = add_mems("Gym on Monday", "Gym bag is in the car")
+    assert gym["id"] in [m["id"] for m in store.search_memories("gym Monday", 5)]
+
+    store.forget_memory("gym Monday")
+
+    found = [m["id"] for m in store.search_memories("gym Monday", 5)]
+    assert gym["id"] not in found
+    assert found == [other["id"]]
+
+
+def test_fr34_forget_leaves_notes_and_reminders_untouched(db):
+    """Forgetting a memory deletes nothing from the notes and reminders tables."""
+    store.add_note("gym on Monday", MEM_TIME)
+    store.add_reminder("gym on Monday", "2026-10-21T09:00:00+05:30", MEM_TIME)
+    add_mems("Gym on Monday")
+
+    store.forget_memory("gym Monday")
+
+    assert table_count(db, "notes") == 1
+    assert table_count(db, "reminders") == 1
+    assert table_count(db, "memories") == 0
+
+
+def table_rows(path, table: str) -> list[tuple]:
+    con = REAL_CONNECT(path)
+    try:
+        return con.execute(f"SELECT * FROM {table} ORDER BY id").fetchall()
+    finally:
+        con.close()
+
+
+def test_fr35_wipe_deletes_every_memory_row_and_returns_the_count(db):
+    """wipe_memories deletes every memory row and returns how many (8)."""
+    add_mems(*[f"separate point number {n}" for n in range(8)])
+    assert table_count(db, "memories") == 8
+
+    assert store.wipe_memories() == 8
+
+    assert table_count(db, "memories") == 0
+    assert memory_rows(db) == []
+
+
+def test_fr35_wipe_on_empty_store_returns_zero(db):
+    """wipe_memories on an empty store returns 0."""
+    assert store.wipe_memories() == 0
+    assert memory_rows(db) == []
+
+
+def test_fr35_wipe_leaves_no_index_entries(db):
+    """After a wipe the FTS index itself holds no entry for the deleted items."""
+    gym, cat = add_mems("Gym on Monday", "My cat likes Monday")
+    assert index_rowids(db, "monday") == sorted([gym["id"], cat["id"]])
+
+    store.wipe_memories()
+
+    assert index_rowids(db, "gym") == []
+    assert index_rowids(db, "monday") == []
+    assert index_rowids(db, "cat") == []
+
+
+def test_fr35_wiped_items_are_not_found_by_search(db):
+    """After a wipe, search_memories finds nothing."""
+    add_mems("Gym on Monday", "My cat likes Monday")
+
+    store.wipe_memories()
+
+    assert store.search_memories("gym Monday", 5) == []
+    assert store.count_matches("monday") == 0
+
+
+def test_fr35_wipe_leaves_notes_reminders_and_concepts_untouched(db):
+    """Notes, reminders and concepts rows are identical before and after a wipe."""
+    store.add_note("gym on Monday", MEM_TIME)
+    store.add_reminder("gym on Monday", "2026-10-21T09:00:00+05:30", MEM_TIME)
+    store.log_concept("LoRA", "Low-rank adapters", MEM_TIME)
+    add_mems("Gym on Monday", "My cat likes Monday")
+    before = {t: table_rows(db, t) for t in ("notes", "reminders", "concepts")}
+    assert all(len(rows) == 1 for rows in before.values())
+
+    assert store.wipe_memories() == 2
+
+    after = {t: table_rows(db, t) for t in ("notes", "reminders", "concepts")}
+    assert after == before
+
+
+def test_fr35_memories_added_after_a_wipe_work_normally(db):
+    """After a wipe, add_memory, search_memories and find_same work as on a new store."""
+    add_mems("Gym on Monday", "My cat likes Monday")
+    store.wipe_memories()
+
+    mem = store.add_memory(
+        "Annotation project deadline is in March", store.FACT, MEM_TIME
+    )
+
+    assert table_count(db, "memories") == 1
+    assert [m["id"] for m in store.search_memories("annotation", 5)] == [mem["id"]]
+    assert index_rowids(db, "annotation") == [mem["id"]]
+    assert store.find_same("Annotation project deadline is in March")["id"] == mem["id"]
+    assert store.search_memories("gym", 5) == []
+
+
+def test_fr35_second_wipe_returns_zero(db):
+    """A second wipe right after the first deletes nothing and returns 0."""
+    add_mems("Gym on Monday", "My cat likes Monday", "I study operating systems")
+
+    assert store.wipe_memories() == 3
+    assert store.wipe_memories() == 0
+    assert memory_rows(db) == []

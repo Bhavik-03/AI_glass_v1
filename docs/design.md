@@ -148,9 +148,14 @@ Serves FR-32 to FR-38, FR-40.
   cannot.
 - A named time (FR-38) is turned into a date range by Gemini, which passes `since` and
   `until` to the tool. An unparseable bound means no filter rather than no results.
-- Forget (FR-34) searches, and acts only on exactly one match. Two or more matches return
-  the candidates to Gemini, which names them and asks; nothing is deleted until the next turn
-  names one. Deletes are real `DELETE` statements, not a status flag.
+- Forget (FR-34) deletes only when exactly one item contains **every** content word of the
+  query. Recall's any-word match is far too loose for a DELETE, and a wrong deletion is worse
+  than a failed one (brief section 7). It uses the same tokenizer, stopwords and stemmer as
+  `find_same`, so "gym Mondays" and a stored "gym on Monday" agree. No such item says nothing
+  was found; two or more return the candidates to Gemini, which names them and asks, and
+  nothing is deleted until the next turn names one. A word the item lacks ("gym plan"
+  against "gym on Monday") finds nothing, so Gemini searches first and forgets with the
+  item's own words. Deletes are real `DELETE` statements, not a status flag.
 - Over-merge (FR-40) is prevented the way the v2 concept bug taught us it must be: the
   decision is not left to a line in the prompt. `remember` and the writer both pass their
   candidate text through `store.find_same(text)`, which returns a match only above a
@@ -199,7 +204,7 @@ only acts when asked. v3 reuses the poll the client already makes.
 
 ## System instruction
 
-Serves FR-5, FR-6, FR-10, FR-23, FR-24, FR-28, FR-31, FR-33, FR-34, FR-37. A constant in
+Serves FR-5, FR-6, FR-10, FR-23, FR-24, FR-28, FR-31, FR-33, FR-34, FR-35, FR-37. A constant in
 `llm.py`, with values filled in per request. v2's rules are unchanged; v3 adds the first and
 the last four.
 
@@ -224,6 +229,9 @@ the last four.
   and do not delete until answered.
 - Never reuse an existing memory's wording for a different point. Two things that are not the
   same thing are two items.
+- When the user asks to delete everything in any other wording ("delete all my memories",
+  "clear everything"), tell them to say "wipe my memories" exactly. You have no wipe tool, and
+  `forget` never deletes more than one item.
 - When the conversation repeatedly contradicts a profile slot, say so in one sentence and ask
   whether to update it. Never call `update_profile` without a yes in the previous turn, and
   do not ask twice in one session.
@@ -268,7 +276,7 @@ plus four.
 | `start_quiz` | none | `{count, question}` |
 | `remember` | `text`, `type` | `{id, text, type, created_at, new}` or `{error}` |
 | `search_memories` | `query`, `since`, `until` (all optional) | `{count, items: [{id, text, |
-| | | type, created_at}]}` |
+| | | type, created_at}]}`; `count` is the total matches in the window, `items` at most 5 |
 | `forget` | `query` | `{deleted: {...}}`, or `{candidates: [...]}` when more than one |
 | | | matches, or `{error}` |
 | `update_profile` | `slot`, `value` | `{slot, value}` or `{error}` |
@@ -296,8 +304,13 @@ deliberate change to CLAUDE.md's "one line per query" rule, made because the v2 
 (issue #116) was only diagnosable because every call left a line. A writer that stored the
 wrong thing silently would leave nothing to look at.
 
-Memory text never appears in the log, so the log can be read and pasted without leaking what
-is stored. No key or token ever appears.
+No memory item retrieved from the store is written to the log; the log records counts only.
+The user's own spoken words are logged exactly as they are for every other query, which
+includes the text of a "remember that ..." command and the wording of a forget or recall
+question. The protection is that the store is never dumped into the log, not that spoken
+words are hidden. `queries.jsonl` has logged every spoken question since v1, and it is the
+file issue #116 was diagnosed from; redacting memory turns would put a blind spot over the
+newest and riskiest code path. No key or token ever appears.
 
 ## Tech stack
 
@@ -345,6 +358,7 @@ New values; every other v1 and v2 value stays.
 | server/config.py | `MEMORY_RECALL_MAX = 5`, `MEMORY_LIST_MAX = 5` | FR-36, FR-37 |
 | server/config.py | `MEMORY_SAME_THRESHOLD` | FR-40; set by the M13 spike |
 | server/config.py | `WIPE_CONFIRM_PHRASE = "yes wipe everything"` | FR-35 |
+| server/config.py | `WIPE_REQUEST_PHRASE = "wipe my memories"` | FR-35; matched in `main.py` |
 | server/config.py | `WRITER_MAX_POINTS = 3`, `WRITER_TIMEOUT_S = 10` | FR-39 |
 | server/config.py | `WRITER_PENDING_MAX = 3` | expired sessions awaiting the writer |
 | eval/config.py | `V3_QUESTIONS_PATH`, `V3_DATA_DIR`, `V3_SEED_PATH` | paths |
@@ -374,6 +388,11 @@ Serves FR-3, FR-5, FR-16, FR-24, FR-39. v2's rows are unchanged; the writer is n
 
 The writer runs inside the poll, whose client timeout is 20 s; a 10 s writer call fits. A
 writer failure must never fail the poll, because the poll also delivers real reminders.
+
+The wipe and its memory count (`store.count_memories`, `store.wipe_memories`) sit outside
+`run_stage`, like the quiz path's `store.set_quiz_result`, so a database error there returns
+a plain 500, not the `{"error": "<stage>: <reason>"}` shape. The fixed-value rule covers
+stage failures, and wipe is not a stage.
 
 ## Repo structure
 
@@ -503,6 +522,7 @@ v2's decisions still hold. New in v3:
 | | too |
 | Free tier: 15 RPM, 500 RPD | The writer adds a call per session; budget the run in advance |
 | Memory text leaking into a search query | Instruction rule plus the v2 logging of every query |
-| Memory text leaking into the log | The log stores counts, never memory text |
+| Memory text leaking into the log | No retrieved memory item is logged, only counts; spoken |
+| | words are logged as for every query, so the store is never dumped, not hidden |
 | Concept over-merge (issue #116) still open in v2 | Not fixed in v2; FR-40 tests the same |
 | | failure in v3's own writer |

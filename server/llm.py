@@ -30,6 +30,12 @@ offset, based on the time above.
 - Never say an id aloud; ids are only for calling cancel_reminder.
 - Call log_concept for every learning question: any factual or technical "what is X", "how does X work" or "difference between X and Y" question, in any subject, is one ("what is LoRA?"). Other questions are not ("when is Diwali?"). Reuse a listed concept name when it is the same concept.
 - Call start_quiz only when the user asks to be quizzed ("quiz me"). Read the returned question exactly as given. If count is 0, say there is nothing to quiz.
+- Call remember when the user says "remember that ...": shorten it to a key point of at most {memory_words} words, pick the type (fact, project, preference or session), and read the stored text back. If the result has new false, say it is already remembered.
+- Call search_memories for any question about the user, their projects or what you discussed before. For a named time ("last week", "yesterday", "in September") pass since and until as ISO 8601 times with the offset, based on the time above; until is exclusive. Answer only from what comes back; if nothing does, say you do not know and never guess. If count is larger than the items returned, say how many there are and give the closest ones.
+- To forget something, call search_memories to see its exact words, then call forget with some of those words. If forget returns candidates, name them and ask which one; delete nothing until the user answers.
+- Never reuse an existing memory's wording for a different point: two things that are not the same thing are two memories.
+- You cannot wipe all memories. If the user asks to delete or clear everything in any other wording ("delete all my memories", "clear everything"), tell them to say "{wipe_phrase}" exactly.
+- Never put memory content in a web_search query.
 Existing concept names: {concept_names}"""
 
 GRADE_INSTRUCTION = """You grade one spoken answer to a quiz question about a concept.
@@ -58,8 +64,22 @@ def system_instruction(now: datetime, concept_names: Sequence[str] = ()) -> str:
         max_sentences=config.ANSWER_MAX_SENTENCES,
         max_words=config.ANSWER_MAX_WORDS,
         list_items=config.LIST_MAX_ITEMS,
+        memory_words=config.MEMORY_MAX_WORDS,
+        wipe_phrase=config.WIPE_REQUEST_PHRASE,
         concept_names=", ".join(concept_names) or "none yet",
     )
+
+
+def _memories_in(name: str, result: dict) -> int:
+    """How many stored memories a tool result sends to Gemini: the count only (FR-17)."""
+    if name == "search_memories":
+        return len(result.get("items", ()))
+    if name == "forget":
+        return len(result.get("candidates", ())) or int("deleted" in result)
+    if name == "remember":
+        # new false returns the existing stored item.
+        return int(result.get("new") is False)
+    return 0
 
 
 def _get_client() -> genai.Client:
@@ -197,7 +217,10 @@ def _ask(
             searched = searched or (
                 call.name == "web_search" and bool(result.get("results"))
             )
-            tool_calls.append({"name": call.name, "args": call.args, "status": status})
+            logged = {"name": call.name, "args": call.args, "status": status}
+            if status == "ok" and (memories := _memories_in(call.name, result)):
+                logged["memories"] = memories
+            tool_calls.append(logged)
             replies.append(
                 types.Part(
                     function_response=types.FunctionResponse(

@@ -6,12 +6,15 @@ from server import config, search, session, store
 # Larger integers can't be bound as SQLite parameters (OverflowError).
 SQLITE_MAX_INT = 2**63 - 1
 
+MEMORY_TYPES = (store.FACT, store.PROJECT, store.PREFERENCE, store.SESSION)
+
 DECLARATIONS = [
     {
         "name": "web_search",
         "description": (
             "Search the web for live or current information such as news, weather, prices "
-            "or scores. The query must never contain note, reminder, concept or screen content."
+            "or scores. The query must never contain note, reminder, concept or screen content. "
+            "It must never contain memory content either."
         ),
         "parameters_json_schema": {
             "type": "object",
@@ -97,6 +100,77 @@ DECLARATIONS = [
         "parameters_json_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "remember",
+        "description": (
+            "Remember one key point about the user, a project, a preference or a past "
+            f"conversation. text is at most {config.MEMORY_MAX_WORDS} words: shorten it to "
+            "the key point. Repeat the stored text back to the user; when the result has "
+            "new false, say it is already remembered."
+        ),
+        "parameters_json_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "The key point"},
+                "type": {
+                    "type": "string",
+                    "enum": list(MEMORY_TYPES),
+                    "description": "fact about the user, project, preference or session summary",
+                },
+            },
+            "required": ["text", "type"],
+        },
+    },
+    {
+        "name": "search_memories",
+        "description": (
+            "Look up what the user has asked to remember: facts about them, their projects "
+            "and preferences, and past conversations. query is a few words about the topic; "
+            "omit it to list the most recent memories. since and until narrow the search to a "
+            "named time such as last week: ISO 8601, a date (2026-10-14) or a date-time with "
+            "offset; a date alone means midnight in the user's time zone, and until is "
+            f"exclusive. count is the total number of matches; items are the closest "
+            f"{config.MEMORY_RECALL_MAX} at most, so say when count is larger. Answer only "
+            "from what comes back."
+        ),
+        "parameters_json_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "A few words about the topic",
+                },
+                "since": {
+                    "type": "string",
+                    "description": "Start of the window, inclusive",
+                },
+                "until": {
+                    "type": "string",
+                    "description": "End of the window, exclusive",
+                },
+            },
+        },
+    },
+    {
+        "name": "forget",
+        "description": (
+            "Delete one memory. query is a few distinctive words from the stored text, so "
+            "call search_memories first to see its exact words. It deletes only when exactly "
+            "one memory contains all of the words. When it returns candidates, name them to "
+            "the user and ask which; delete nothing until they answer. When it finds nothing, "
+            "say so."
+        ),
+        "parameters_json_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Words from the memory to delete",
+                }
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "start_quiz",
         "description": (
             "Start a quiz on logged concepts. Call it only when the user asks to be quizzed. "
@@ -167,6 +241,51 @@ def _log_concept(args: dict, now: datetime) -> dict:
     )
 
 
+def _remember(args: dict, now: datetime) -> dict:
+    text, kind = args.get("text"), args.get("type")
+    if not isinstance(text, str) or not text.strip():
+        return {"error": "remember needs a non-empty text"}
+    if kind not in MEMORY_TYPES:
+        return {"error": f"remember needs a type: {', '.join(MEMORY_TYPES)}"}
+    try:
+        return store.remember(text.strip(), kind, now.isoformat(timespec="seconds"))
+    except ValueError as e:
+        return {"error": f"{e}; shorten it to a key point"}
+
+
+def _forget(args: dict, now: datetime) -> dict:
+    query = args.get("query")
+    if not isinstance(query, str) or not query.strip():
+        return {"error": "forget needs a non-empty query"}
+    result = store.forget_memory(query)
+    candidates = result.get("candidates")
+    if candidates is None or len(candidates) > 1:
+        return result
+    return {
+        "error": "no memory was found containing all of those words; nothing deleted"
+    }
+
+
+def _search_memories(args: dict, now: datetime) -> dict:
+    query = args.get("query")
+    if query is not None and not isinstance(query, str):
+        return {"error": "search_memories query must be text"}
+    # A bound that is not text is ignored, like one the store cannot read.
+    since, until = (
+        v if isinstance(v, str) else None
+        for v in (args.get("since"), args.get("until"))
+    )
+    if not query or not query.strip():
+        return {
+            "count": store.count_memories(since, until),
+            "items": store.recent_memories(config.MEMORY_LIST_MAX, since, until),
+        }
+    return {
+        "count": store.count_matches(query, since, until),
+        "items": store.search_memories(query, config.MEMORY_RECALL_MAX, since, until),
+    }
+
+
 def _learned_this_week(args: dict, now: datetime) -> dict:
     since = now - timedelta(days=config.LEARNED_DAYS)
     return store.learned_since(
@@ -221,6 +340,9 @@ _HANDLERS = {
     "log_concept": _log_concept,
     "learned_this_week": _learned_this_week,
     "start_quiz": _start_quiz,
+    "remember": _remember,
+    "search_memories": _search_memories,
+    "forget": _forget,
 }
 
 

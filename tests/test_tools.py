@@ -1228,3 +1228,538 @@ def test_fr24_start_quiz_question_comes_from_config_template(db, monkeypatch):
 def test_fr24_quiz_score_text(right, total, text):
     """The end of a quiz speaks the score as '<right> of <total> right'."""
     assert tools.quiz_score_text(right, total) == text
+
+
+# --- remember (FR-33) ---
+
+MEMORY_TYPES = {"fact", "project", "preference", "session"}
+LORA_POINT = "Studying LoRA fine-tuning"
+LORA_REPEAT = "I am studying LoRA fine tuning"
+THIRTEEN_WORDS = (
+    "one two three four five six seven eight nine ten eleven twelve thirteen"
+)
+
+
+def memory_count(db_path):
+    con = sqlite3.connect(db_path)
+    try:
+        return con.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+    finally:
+        con.close()
+
+
+def memory_rows_in_db(db_path):
+    con = sqlite3.connect(db_path)
+    try:
+        return con.execute("SELECT text, created_at FROM memories").fetchall()
+    finally:
+        con.close()
+
+
+def test_fr33_declares_remember_with_required_text_and_type_enum():
+    """DECLARATIONS has one remember entry requiring string 'text' and string 'type' (enum of the four types)."""
+    decl = declaration("remember")
+    assert decl["description"]
+    schema = decl["parameters_json_schema"]
+    assert schema["type"] == "object"
+    assert schema["properties"]["text"]["type"] == "string"
+    assert schema["properties"]["type"]["type"] == "string"
+    assert set(schema["properties"]["type"]["enum"]) == MEMORY_TYPES
+    assert len(schema["properties"]["type"]["enum"]) == 4
+    assert "text" in schema["required"]
+    assert "type" in schema["required"]
+
+
+def test_fr33_remember_stores_exactly_one_row(db, fixed_now):
+    """One remember call stores exactly one row, never two."""
+    tools.run("remember", {"text": LORA_POINT, "type": "fact"}, fixed_now)
+
+    assert memory_count(db) == 1
+
+
+def test_fr33_remember_returns_id_text_type_created_at_new(db, fixed_now):
+    """remember returns exactly {id, text, type, created_at, new} with the stored values and new True."""
+    out = tools.run("remember", {"text": LORA_POINT, "type": "project"}, fixed_now)
+
+    assert set(out) == {"id", "text", "type", "created_at", "new"}
+    assert out["text"] == LORA_POINT
+    assert out["type"] == "project"
+    assert out["created_at"] == FIXED_ISO
+    assert out["new"] is True
+    assert memory_rows_in_db(db) == [(LORA_POINT, FIXED_ISO)]
+
+
+def test_fr33_remember_strips_the_text(db, fixed_now):
+    """The stored and returned text is stripped of surrounding whitespace."""
+    out = tools.run(
+        "remember", {"text": "  " + LORA_POINT + "  ", "type": "fact"}, fixed_now
+    )
+
+    assert out["text"] == LORA_POINT
+    assert memory_rows_in_db(db)[0][0] == LORA_POINT
+
+
+@pytest.mark.parametrize("mem_type", sorted(MEMORY_TYPES))
+def test_fr33_remember_accepts_each_of_the_four_types(db, fixed_now, mem_type):
+    """Each of fact, project, preference and session is accepted and returned as given."""
+    out = tools.run("remember", {"text": LORA_POINT, "type": mem_type}, fixed_now)
+
+    assert out["type"] == mem_type
+    assert out["new"] is True
+    assert memory_count(db) == 1
+
+
+def test_fr33_remember_repeat_returns_existing_item_not_new(db):
+    """A near-verbatim repeat returns new False and the original item (id, text, type, created_at)."""
+    first = tools.run("remember", {"text": LORA_POINT, "type": "fact"}, NOW)
+    later = NOW + timedelta(hours=1)
+
+    out = tools.run("remember", {"text": LORA_REPEAT, "type": "fact"}, later)
+
+    assert set(out) == {"id", "text", "type", "created_at", "new"}
+    assert out["new"] is False
+    assert out["id"] == first["id"]
+    assert out["text"] == LORA_POINT
+    assert out["type"] == first["type"]
+    assert out["created_at"] == first["created_at"]
+
+
+def test_fr33_remember_repeat_stores_no_second_row(db):
+    """After a repeat the table still has one row, with the original created_at."""
+    first = tools.run("remember", {"text": LORA_POINT, "type": "fact"}, NOW)
+
+    tools.run(
+        "remember", {"text": LORA_REPEAT, "type": "fact"}, NOW + timedelta(hours=1)
+    )
+
+    assert memory_rows_in_db(db) == [(LORA_POINT, first["created_at"])]
+
+
+def test_fr33_remember_two_different_points_store_two_rows(db, fixed_now):
+    """Two different points are both new and store two rows."""
+    a = tools.run("remember", {"text": LORA_POINT, "type": "fact"}, fixed_now)
+    b = tools.run(
+        "remember",
+        {"text": "Prefers short spoken answers", "type": "preference"},
+        fixed_now,
+    )
+
+    assert a["new"] is True
+    assert b["new"] is True
+    assert a["id"] != b["id"]
+    assert memory_count(db) == 2
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"text": "", "type": "fact"},
+        {"text": "   ", "type": "fact"},
+        {"type": "fact"},
+        {"text": 5, "type": "fact"},
+        {"text": None, "type": "fact"},
+        {"text": LORA_POINT},
+        {"text": LORA_POINT, "type": None},
+        {"text": LORA_POINT, "type": 5},
+        {"text": LORA_POINT, "type": ""},
+        {"text": LORA_POINT, "type": "hobby"},
+        {"text": THIRTEEN_WORDS, "type": "fact"},
+    ],
+    ids=[
+        "empty-text",
+        "blank-text",
+        "missing-text",
+        "non-string-text",
+        "none-text",
+        "missing-type",
+        "none-type",
+        "non-string-type",
+        "empty-type",
+        "unknown-type",
+        "thirteen-words",
+    ],
+)
+def test_fr33_remember_bad_arguments_return_error_and_store_nothing(
+    db, fixed_now, args
+):
+    """Empty text, an unknown type or text over the word limit returns only {error} and stores nothing."""
+    out = tools.run("remember", args, fixed_now)
+
+    assert list(out) == ["error"]
+    assert isinstance(out["error"], str) and out["error"]
+    assert memory_count(db) == 0
+
+
+def test_fr33_remember_twelve_words_is_accepted(db, fixed_now):
+    """Text of exactly config.MEMORY_MAX_WORDS (12) words is stored."""
+    assert config.MEMORY_MAX_WORDS == 12
+    text = " ".join(THIRTEEN_WORDS.split()[:12])
+
+    out = tools.run("remember", {"text": text, "type": "fact"}, fixed_now)
+
+    assert out["new"] is True
+    assert memory_count(db) == 1
+
+
+def test_fr33_remember_word_limit_error_mentions_the_limit(db, fixed_now):
+    """The over-limit error mentions the word limit so Gemini can shorten the point."""
+    out = tools.run("remember", {"text": THIRTEEN_WORDS, "type": "fact"}, fixed_now)
+
+    assert str(config.MEMORY_MAX_WORDS) in out["error"]
+
+
+# --- search_memories (FR-36, FR-37, FR-38) ---
+
+SEARCH_KEYS = {"id", "text", "type", "created_at"}
+
+
+def mem_on(text, day, hour=9):
+    return store.add_memory(
+        text, store.FACT, f"2026-09-{day:02d}T{hour:02d}:00:00+05:30"
+    )
+
+
+def test_fr36_declares_search_memories_with_three_optional_strings():
+    """DECLARATIONS has one search_memories entry with string properties query, since and until, none required."""
+    decl = declaration("search_memories")
+    assert decl["description"]
+    schema = decl["parameters_json_schema"]
+    assert schema["type"] == "object"
+    for name in ("query", "since", "until"):
+        assert schema["properties"][name]["type"] == "string"
+    assert not schema.get("required")
+
+
+def test_fr37_query_with_twelve_matches_gives_count_twelve_and_five_items(
+    db, fixed_now
+):
+    """With a query matching 12 of 50 stored items, count is 12 and items holds 5."""
+    for n in range(12):
+        store.add_memory(f"annotation note number {n}", store.FACT, FIXED_ISO)
+    for n in range(38):
+        store.add_memory(f"unrelated gardening item {n}", store.FACT, FIXED_ISO)
+
+    out = tools.run("search_memories", {"query": "annotation"}, fixed_now)
+
+    assert set(out) == {"count", "items"}
+    assert out["count"] == 12
+    assert len(out["items"]) == config.MEMORY_RECALL_MAX == 5
+
+
+def test_fr37_best_match_is_first_among_the_items(db, fixed_now):
+    """The item matching more query words comes first in items."""
+    for n in range(11):
+        store.add_memory(f"annotation note number {n}", store.FACT, FIXED_ISO)
+    best = store.add_memory(
+        "annotation guidelines for the dataset", store.FACT, FIXED_ISO
+    )
+
+    out = tools.run("search_memories", {"query": "annotation dataset"}, fixed_now)
+
+    assert out["items"][0]["id"] == best["id"]
+    assert out["count"] == 12
+
+
+def test_fr37_fifty_matching_items_still_give_five_items(db, fixed_now):
+    """With 50 matching items stored, count is 50 and items still holds at most 5."""
+    for n in range(50):
+        store.add_memory(f"annotation note number {n}", store.FACT, FIXED_ISO)
+
+    out = tools.run("search_memories", {"query": "annotation"}, fixed_now)
+
+    assert out["count"] == 50
+    assert len(out["items"]) == 5
+
+
+def test_fr37_query_with_no_match_gives_zero_and_no_items(db, fixed_now):
+    """A query matching nothing gives count 0 and no items."""
+    store.add_memory("The annotation plan is ready", store.FACT, FIXED_ISO)
+
+    out = tools.run("search_memories", {"query": "quantum chromodynamics"}, fixed_now)
+
+    assert out == {"count": 0, "items": []}
+
+
+def test_fr37_items_have_exactly_the_four_keys(db, fixed_now):
+    """Each item, from a query and from a list, carries exactly id, text, type and created_at."""
+    store.add_memory("The annotation plan is ready", store.PROJECT, FIXED_ISO)
+
+    searched = tools.run("search_memories", {"query": "annotation"}, fixed_now)
+    listed = tools.run("search_memories", {}, fixed_now)
+
+    for out in (searched, listed):
+        assert len(out["items"]) == 1
+        assert set(out["items"][0]) == SEARCH_KEYS
+        assert out["items"][0]["text"] == "The annotation plan is ready"
+        assert out["items"][0]["type"] == "project"
+        assert out["items"][0]["created_at"] == FIXED_ISO
+
+
+def test_fr36_no_query_with_eight_items_gives_count_eight_and_five_newest(
+    db, fixed_now
+):
+    """With no query and 8 items, count is 8 and items are the 5 most recent, newest first."""
+    # Inserted out of order so that insertion order cannot pass for recency.
+    ids = {
+        n: mem_on(f"separate point number {n}", n)["id"]
+        for n in (4, 1, 7, 3, 8, 2, 6, 5)
+    }
+
+    out = tools.run("search_memories", {}, fixed_now)
+
+    assert set(out) == {"count", "items"}
+    assert out["count"] == 8
+    assert [m["id"] for m in out["items"]] == [ids[n] for n in (8, 7, 6, 5, 4)]
+
+
+def test_fr36_no_items_stored_gives_count_zero_and_empty_items(db, fixed_now):
+    """With nothing stored, count is 0 and items is empty."""
+    assert tools.run("search_memories", {}, fixed_now) == {"count": 0, "items": []}
+    assert tools.run("search_memories", {"query": "annotation"}, fixed_now) == {
+        "count": 0,
+        "items": [],
+    }
+
+
+@pytest.mark.parametrize("query", [None, "", "   "], ids=["none", "empty", "blank"])
+def test_fr36_none_or_blank_query_behaves_as_no_query(db, fixed_now, query):
+    """A None, empty or whitespace query lists the 5 most recent items with the total count."""
+    ids = [mem_on(f"separate point number {n}", n)["id"] for n in range(1, 9)]
+
+    out = tools.run("search_memories", {"query": query}, fixed_now)
+
+    assert out["count"] == 8
+    assert [m["id"] for m in out["items"]] == ids[::-1][:5]
+
+
+def test_fr38_no_query_window_returns_only_in_window_items_and_total(db, fixed_now):
+    """With since and until and no query, items are only those in the window and count is the in-window total."""
+    for n in range(1, 13):
+        mem_on(f"separate point number {n}", n)
+
+    out = tools.run(
+        "search_memories", {"since": "2026-09-03", "until": "2026-09-11"}, fixed_now
+    )
+
+    assert out["count"] == 8
+    assert [m["created_at"][:10] for m in out["items"]] == [
+        f"2026-09-{d:02d}" for d in (10, 9, 8, 7, 6)
+    ]
+
+
+def test_fr38_query_window_counts_only_in_window_matches(db, fixed_now):
+    """With a query and a window, count and items cover only the in-window matches."""
+    for n in range(1, 10):
+        mem_on(f"annotation note number {n}", n)
+    mem_on("gardening note inside the window", 5)
+
+    out = tools.run(
+        "search_memories",
+        {"query": "annotation", "since": "2026-09-02", "until": "2026-09-08"},
+        fixed_now,
+    )
+
+    assert out["count"] == 6
+    assert len(out["items"]) == 5
+    assert all(
+        "2026-09-02" <= m["created_at"][:10] < "2026-09-08" for m in out["items"]
+    )
+    assert all("annotation" in m["text"] for m in out["items"])
+
+
+def test_fr38_date_only_since_is_local_midnight(db, fixed_now):
+    """since='2026-09-01' is midnight in the local zone: an item at 02:00+05:30 that day counts, 23:59:59 the day before does not."""
+    early = store.add_memory(
+        "annotation early morning", store.FACT, "2026-09-01T02:00:00+05:30"
+    )
+    store.add_memory("annotation last second", store.FACT, "2026-08-31T23:59:59+05:30")
+
+    listed = tools.run("search_memories", {"since": "2026-09-01"}, fixed_now)
+    searched = tools.run(
+        "search_memories", {"query": "annotation", "since": "2026-09-01"}, fixed_now
+    )
+
+    for out in (listed, searched):
+        assert out["count"] == 1
+        assert [m["id"] for m in out["items"]] == [early["id"]]
+
+
+@pytest.mark.parametrize("bad", [5, 1.5, True, ["2026-09-01"], {"a": 1}])
+def test_fr38_non_string_since_and_until_are_ignored(db, fixed_now, bad):
+    """A since or until that is not a string is ignored: no filter, no error."""
+    for n in range(1, 4):
+        mem_on(f"annotation note number {n}", n)
+
+    listed = tools.run("search_memories", {"since": bad, "until": bad}, fixed_now)
+    searched = tools.run(
+        "search_memories",
+        {"query": "annotation", "since": bad, "until": bad},
+        fixed_now,
+    )
+
+    assert listed["count"] == searched["count"] == 3
+    assert len(listed["items"]) == len(searched["items"]) == 3
+
+
+@pytest.mark.parametrize("bad", [5, 1.5, True, ["annotation"], {"a": 1}])
+def test_fr37_non_string_query_returns_only_an_error(db, fixed_now, bad):
+    """A query that is neither None nor a string returns only {error: <reason>}."""
+    store.add_memory("The annotation plan is ready", store.FACT, FIXED_ISO)
+
+    out = tools.run("search_memories", {"query": bad}, fixed_now)
+
+    assert list(out) == ["error"]
+    assert isinstance(out["error"], str) and out["error"]
+
+
+def test_fr36_search_memories_does_not_change_the_row_count(db, fixed_now):
+    """The tool never writes: the memories table has the same rows after searching and listing."""
+    for n in range(1, 7):
+        mem_on(f"annotation note number {n}", n)
+    before = memory_rows_in_db(db)
+
+    tools.run("search_memories", {"query": "annotation"}, fixed_now)
+    tools.run("search_memories", {}, fixed_now)
+    tools.run("search_memories", {"query": 5}, fixed_now)
+
+    assert memory_count(db) == 6
+    assert memory_rows_in_db(db) == before
+
+
+# --- forget (FR-34) ---
+
+
+def stored_memory(text, mem_type="fact"):
+    return store.add_memory(text, mem_type, FIXED_ISO)
+
+
+def test_fr34_declares_forget_with_required_query():
+    """DECLARATIONS has one forget entry whose schema requires a string 'query'."""
+    decl = declaration("forget")
+    assert decl["description"]
+    schema = decl["parameters_json_schema"]
+    assert schema["type"] == "object"
+    assert schema["properties"]["query"]["type"] == "string"
+    assert "query" in schema["required"]
+
+
+def test_fr34_forget_one_match_returns_deleted_item_and_removes_row(db, fixed_now):
+    """Exactly one match returns {deleted: {id, text, type, created_at}} and the row is gone."""
+    gym = stored_memory("Gym on Monday", "preference")
+    stored_memory("My cat is called Biscuit")
+
+    out = tools.run("forget", {"query": "gym Monday"}, fixed_now)
+
+    assert out == {
+        "deleted": {
+            "id": gym["id"],
+            "text": "Gym on Monday",
+            "type": "preference",
+            "created_at": FIXED_ISO,
+        }
+    }
+    assert memory_count(db) == 1
+    assert memory_rows_in_db(db) == [("My cat is called Biscuit", FIXED_ISO)]
+
+
+def test_fr34_forget_gym_mondays_deletes_stored_gym_on_monday(db, fixed_now):
+    """The query "gym Mondays" deletes a stored "gym on Monday" through the tool."""
+    gym = stored_memory("gym on Monday")
+
+    out = tools.run("forget", {"query": "gym Mondays"}, fixed_now)
+
+    assert out["deleted"]["id"] == gym["id"]
+    assert memory_count(db) == 0
+
+
+def test_fr34_forget_ambiguous_returns_candidates_and_deletes_nothing(db, fixed_now):
+    """Two or more matches return {candidates: [...]} naming both items, and nothing is deleted."""
+    first = stored_memory("Gym session on Monday")
+    second = stored_memory("Gym session on Friday")
+
+    out = tools.run("forget", {"query": "gym session"}, fixed_now)
+
+    assert list(out) == ["candidates"]
+    assert [c["id"] for c in out["candidates"]] == [first["id"], second["id"]]
+    assert [c["text"] for c in out["candidates"]] == [
+        "Gym session on Monday",
+        "Gym session on Friday",
+    ]
+    assert memory_count(db) == 2
+
+
+def test_fr34_forget_no_match_returns_only_error_saying_not_found(db, fixed_now):
+    """With no match the result is only {error} saying nothing was found, and nothing is deleted."""
+    stored_memory("Gym on Monday")
+
+    out = tools.run("forget", {"query": "gym plan"}, fixed_now)
+
+    assert list(out) == ["error"]
+    assert isinstance(out["error"], str)
+    assert "found" in out["error"]
+    assert memory_count(db) == 1
+
+
+def test_fr34_forget_on_empty_store_returns_not_found_error(db, fixed_now):
+    """With nothing stored, forget returns only an {error} saying nothing was found."""
+    out = tools.run("forget", {"query": "gym Monday"}, fixed_now)
+
+    assert list(out) == ["error"]
+    assert "found" in out["error"]
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["the is a", "what did we about", "!!! ???", "'"],
+    ids=["stopwords", "spoken-stopwords", "punctuation", "apostrophe"],
+)
+def test_fr34_forget_query_without_content_words_returns_only_error(
+    db, fixed_now, query
+):
+    """A query with no content words returns only a non-empty {error} and deletes nothing."""
+    stored_memory("Gym on Monday")
+    stored_memory("My cat is called Biscuit")
+
+    out = tools.run("forget", {"query": query}, fixed_now)
+
+    assert list(out) == ["error"]
+    assert isinstance(out["error"], str) and out["error"]
+    assert memory_count(db) == 2
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {},
+        {"query": None},
+        {"query": 5},
+        {"query": ["gym"]},
+        {"query": ""},
+        {"query": "   "},
+    ],
+    ids=["missing", "none", "non-string", "list", "empty", "blank"],
+)
+def test_fr34_forget_bad_query_returns_only_error_and_deletes_nothing(
+    db, fixed_now, args
+):
+    """A missing, None, non-string or blank query returns only a non-empty {error} and deletes nothing."""
+    stored_memory("Gym on Monday")
+
+    out = tools.run("forget", args, fixed_now)
+
+    assert list(out) == ["error"]
+    assert isinstance(out["error"], str) and out["error"]
+    assert memory_count(db) == 1
+
+
+def test_fr33_web_search_declaration_forbids_memory_content():
+    """The web_search declaration also says the query must never contain memory content, keeping the old sentence."""
+    description = declaration("web_search")["description"].lower()
+    assert "memory content" in description
+    assert "must never contain note, reminder, concept or screen content" in description
+
+
+@pytest.mark.parametrize("name", ["remember", "search_memories", "forget"])
+def test_fr33_memory_tools_declared_with_description(name):
+    """The remember, search_memories and forget tools are declared, each with a non-empty description."""
+    assert declaration(name)["description"].strip()

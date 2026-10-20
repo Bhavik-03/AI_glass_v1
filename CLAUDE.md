@@ -153,6 +153,7 @@ python3.11 -m venv .venv                                  # create the venv once
 .venv/bin/python -m eval.record --set v2                   # record v2 clips
 .venv/bin/python -m eval.run_eval_v2                       # v2 eval; slow
 .venv/bin/python -m eval.live_log                          # last 10 logged queries
+.venv/bin/python -m eval.rank_probe                        # top-5 ranking probe of search_memories; no Gemini
 ```
 Use bash syntax: forward-slash paths. `&&` works, but one command per line is still preferred for git.
 Client microphone: it stays open while the client runs, frames are discarded unless the key is held,

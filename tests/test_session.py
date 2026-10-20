@@ -346,3 +346,104 @@ def test_fr24_quiz_returns_a_copy():
     assert again["index"] == 0
     assert again["right"] == 0
     assert len(again["concepts"]) == 3
+
+
+def test_fr35_no_wipe_pending_by_default():
+    """With no wipe started, pending_wipe() is False."""
+    assert session.pending_wipe(T0) is False
+
+
+def test_fr35_start_wipe_makes_it_pending():
+    """start_wipe marks a wipe confirmation as pending."""
+    session.start_wipe(T0)
+    assert session.pending_wipe(T0 + secs(1)) is True
+
+
+def test_fr35_pending_just_before_ttl():
+    """The wipe is still pending 1 s before SESSION_TTL_S."""
+    session.start_wipe(T0)
+    assert session.pending_wipe(T0 + secs(config.SESSION_TTL_S - 1)) is True
+
+
+def test_fr35_not_pending_at_exactly_ttl():
+    """At exactly SESSION_TTL_S after the start the wipe has expired (same rule as turns)."""
+    session.start_wipe(T0)
+    assert session.pending_wipe(T0 + secs(config.SESSION_TTL_S)) is False
+
+
+def test_fr35_not_pending_after_ttl():
+    """1 s after SESSION_TTL_S the wipe has expired."""
+    session.start_wipe(T0)
+    assert session.pending_wipe(T0 + secs(config.SESSION_TTL_S + 1)) is False
+
+
+def test_fr35_expiry_clears_the_flag_for_good():
+    """An expired check clears the flag: a later check inside a fresh window is still False."""
+    session.start_wipe(T0)
+    assert session.pending_wipe(T0 + secs(config.SESSION_TTL_S + 1)) is False
+    assert session.pending_wipe(T0 + secs(config.SESSION_TTL_S + 2)) is False
+    assert session.pending_wipe(T0 + secs(1)) is False
+
+
+def test_fr35_end_wipe_clears_it():
+    """end_wipe clears the pending wipe."""
+    session.start_wipe(T0)
+    session.end_wipe()
+    assert session.pending_wipe(T0 + secs(1)) is False
+
+
+def test_fr35_end_wipe_with_nothing_pending_is_safe():
+    """end_wipe with no wipe pending does not raise."""
+    session.end_wipe()
+    assert session.pending_wipe(T0) is False
+
+
+def test_fr35_reset_clears_the_wipe():
+    """reset() clears a pending wipe, so it does not survive into the next session."""
+    session.start_wipe(T0)
+    session.reset()
+    assert session.pending_wipe(T0 + secs(1)) is False
+
+
+def test_fr35_add_turn_and_turns_do_not_clear_the_wipe():
+    """add_turn and turns neither set nor clear the pending wipe."""
+    session.add_turn("q0", "a0", T0)
+    assert session.pending_wipe(T0 + secs(1)) is False
+    session.start_wipe(T0 + secs(2))
+    session.add_turn("q", "a", T0 + secs(3))
+    session.turns(T0 + secs(4))
+    assert session.pending_wipe(T0 + secs(5)) is True
+
+
+def test_fr35_running_quiz_does_not_set_or_clear_the_wipe():
+    """A running quiz neither sets nor clears the pending wipe."""
+    session.start_quiz(CONCEPTS, T0)
+    assert session.pending_wipe(T0 + secs(1)) is False
+    session.start_wipe(T0 + secs(2))
+    session.answer_quiz(True, T0 + secs(3))
+    session.quiz(T0 + secs(4))
+    assert session.pending_wipe(T0 + secs(5)) is True
+
+
+def test_fr35_start_wipe_keeps_turns_image_and_quiz():
+    """Starting a wipe leaves existing turns, the image and a running quiz untouched."""
+    session.add_turn("q", "a", T0, image=IMG)
+    session.start_quiz(CONCEPTS, T0)
+
+    session.start_wipe(T0 + secs(1))
+
+    assert session.turns(T0 + secs(2)) == [{"question": "q", "answer": "a"}]
+    assert session.image(T0 + secs(2)) == IMG
+    assert session.quiz(T0 + secs(2)) == {
+        "concepts": CONCEPTS,
+        "index": 0,
+        "right": 0,
+    }
+
+
+def test_fr35_second_start_wipe_restarts_the_clock():
+    """A second start_wipe restarts the expiry from the new start."""
+    session.start_wipe(T0)
+    session.start_wipe(T0 + secs(100))
+    assert session.pending_wipe(T0 + secs(100 + config.SESSION_TTL_S - 1)) is True
+    assert session.pending_wipe(T0 + secs(100 + config.SESSION_TTL_S)) is False

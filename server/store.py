@@ -113,22 +113,55 @@ def _stem(word: str) -> str:
     return word
 
 
+def _content_stems(text: str) -> set[str]:
+    """The stemmed content words of `text`: what find_same and forget_memory compare."""
+    return {_stem(w) for w in _words(text) if w not in STOPWORDS}
+
+
 def find_same(text: str) -> dict | None:
     """The stored memory that repeats `text` almost word for word, else None.
 
     A safety guard, not a deduplicator: Jaccard on stemmed content words at
     `config.MEMORY_SAME_THRESHOLD` merges near-verbatim repeats only. Paraphrases stay apart.
     """
-    new = {_stem(w) for w in _words(text) if w not in STOPWORDS}
+    new = _content_stems(text)
     best, best_score = None, 0.0
     with _connect() as con:
         rows = con.execute("SELECT id, text, type, created_at FROM memories").fetchall()
     for row in rows:
-        old = {_stem(w) for w in _words(row["text"]) if w not in STOPWORDS}
+        old = _content_stems(row["text"])
         score = len(new & old) / len(new | old) if new | old else 0.0
         if score >= config.MEMORY_SAME_THRESHOLD and score > best_score:
             best, best_score = dict(row), score
     return best
+
+
+def forget_memory(query: str) -> dict:
+    """Delete the one memory that contains every content word of `query`.
+
+    Recall matches on any word, which is far too loose for a DELETE, so forgetting needs
+    all of them (same stems as find_same). Returns {"deleted": item}, or {"candidates":
+    [...]} with nothing deleted: empty when nothing matched, two or more when ambiguous.
+    """
+    wanted = _content_stems(query)
+    with _connect() as con:
+        rows = con.execute(
+            "SELECT id, text, type, created_at FROM memories ORDER BY id"
+        ).fetchall()
+        matches = [
+            dict(r) for r in rows if wanted and wanted <= _content_stems(r["text"])
+        ]
+        if len(matches) == 1:
+            con.execute("DELETE FROM memories WHERE id = ?", (matches[0]["id"],))
+            return {"deleted": matches[0]}
+    return {"candidates": matches}
+
+
+def wipe_memories() -> int:
+    """Delete every memory and its index entries; notes, reminders and concepts stay.
+    Returns how many were deleted (FR-35)."""
+    with _connect() as con:
+        return con.execute("DELETE FROM memories").rowcount
 
 
 def remember(text: str, type: str, created_at: str) -> dict:
@@ -162,6 +195,22 @@ def _valid_bound(con: sqlite3.Connection, value: str | None) -> str | None:
     return value
 
 
+# The window of a memory query; the four parameters come from `_window`.
+IN_WINDOW = (
+    " AND (? IS NULL OR julianday(m.created_at) >= julianday(?))"
+    " AND (? IS NULL OR julianday(m.created_at) < julianday(?))"
+)
+MATCHES = (
+    " FROM memories_fts JOIN memories m ON m.id = memories_fts.rowid"
+    " WHERE memories_fts MATCH ?"
+)
+
+
+def _window(con: sqlite3.Connection, since: str | None, until: str | None) -> tuple:
+    since, until = _valid_bound(con, since), _valid_bound(con, until)
+    return since, since, until, until
+
+
 def search_memories(
     query: str, k: int, since: str | None = None, until: str | None = None
 ) -> list[dict]:
@@ -174,17 +223,51 @@ def search_memories(
     if not match:
         return []
     with _connect() as con:
-        since, until = _valid_bound(con, since), _valid_bound(con, until)
         rows = con.execute(
-            "SELECT m.id, m.text, m.type, m.created_at FROM memories_fts"
-            " JOIN memories m ON m.id = memories_fts.rowid"
-            " WHERE memories_fts MATCH ?"
-            " AND (? IS NULL OR julianday(m.created_at) >= julianday(?))"
-            " AND (? IS NULL OR julianday(m.created_at) < julianday(?))"
-            " ORDER BY bm25(memories_fts), m.id DESC LIMIT ?",
-            (match, since, since, until, until, k),
+            "SELECT m.id, m.text, m.type, m.created_at"
+            + MATCHES
+            + IN_WINDOW
+            + " ORDER BY bm25(memories_fts), m.id DESC LIMIT ?",
+            (match, *_window(con, since, until), k),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def count_matches(
+    query: str, since: str | None = None, until: str | None = None
+) -> int:
+    """How many memories match the question in the window, however many are returned."""
+    match = _match_query(query)
+    if not match:
+        return 0
+    with _connect() as con:
+        return con.execute(
+            "SELECT COUNT(*)" + MATCHES + IN_WINDOW,
+            (match, *_window(con, since, until)),
+        ).fetchone()[0]
+
+
+def recent_memories(
+    k: int, since: str | None = None, until: str | None = None
+) -> list[dict]:
+    """The `k` newest memories in the window, newest first (compared as moments)."""
+    with _connect() as con:
+        rows = con.execute(
+            "SELECT m.id, m.text, m.type, m.created_at FROM memories m WHERE 1 = 1"
+            + IN_WINDOW
+            + " ORDER BY julianday(m.created_at) DESC, m.id DESC LIMIT ?",
+            (*_window(con, since, until), k),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def count_memories(since: str | None = None, until: str | None = None) -> int:
+    """How many memories are in the window."""
+    with _connect() as con:
+        return con.execute(
+            "SELECT COUNT(*) FROM memories m WHERE 1 = 1" + IN_WINDOW,
+            _window(con, since, until),
+        ).fetchone()[0]
 
 
 def add_note(text: str, created_at: str) -> dict:
