@@ -345,7 +345,8 @@ FR-26 onwards are new in v3.
   (fake client); a profile rendering 41 lines fails at load with a clear message naming the
   cap; a confirmed `update_profile` or setup answer that would take the rendered profile
   over the cap is refused, the caller is told, and the stored profile is unchanged; a file
-  with comments, blank lines and empty slots is measured by what it renders, not its length;
+  whose length differs from what it renders - an empty slot renders nothing, a long value
+  renders as several lines - is measured by what it renders;
   an empty profile adds nothing to the instruction
 
 ### FR-29 First-run setup
