@@ -1,6 +1,8 @@
 import re
 import sqlite3
 from contextlib import closing, contextmanager
+from datetime import date, datetime, time
+from zoneinfo import ZoneInfo
 
 from server import config
 
@@ -14,6 +16,8 @@ FACT = "fact"
 PROJECT = "project"
 PREFERENCE = "preference"
 SESSION = "session"
+
+DATE_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 # Dropped from a spoken question before it searches memories; negations are not listed.
 STOPWORDS = frozenset(
@@ -140,11 +144,20 @@ def remember(text: str, type: str, created_at: str) -> dict:
 
 
 def _valid_bound(con: sqlite3.Connection, value: str | None) -> str | None:
-    """`value` if SQLite can read it as a date or date-time, else None (no filter)."""
-    if (
-        value is None
-        or con.execute("SELECT julianday(?)", (value,)).fetchone()[0] is None
-    ):
+    """`value` if SQLite can read it as a date-time, else None (no filter).
+
+    SQLite reads a bare date as UTC midnight, so a date-only bound becomes midnight in
+    `config.TIMEZONE` first.
+    """
+    if value is None:
+        return None
+    if DATE_ONLY.fullmatch(value):
+        try:
+            day = date.fromisoformat(value)
+        except ValueError:
+            return None
+        value = datetime.combine(day, time.min, ZoneInfo(config.TIMEZONE)).isoformat()
+    if con.execute("SELECT julianday(?)", (value,)).fetchone()[0] is None:
         return None
     return value
 

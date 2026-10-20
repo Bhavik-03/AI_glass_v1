@@ -1075,3 +1075,105 @@ def test_fr40_remember_over_word_limit_raises_even_if_match(db):
     with pytest.raises(ValueError, match=str(config.MEMORY_MAX_WORDS)):
         store.remember(WORDS_13, store.FACT, MEM_TIME)
     assert memory_rows(db) == before
+
+
+def test_fr38_date_only_since_is_local_midnight_includes_early_morning_item(db):
+    """since='2026-09-01' is midnight IST, so an item at 02:00+05:30 on that day is returned."""
+    early = add_at("annotation early morning", "2026-09-01T02:00:00+05:30")
+
+    assert found_ids("annotation", since="2026-09-01") == [early["id"]]
+
+
+def test_fr38_date_only_until_is_local_midnight_excludes_early_morning_item(db):
+    """until='2026-09-01' is midnight IST, so an item at 02:00+05:30 on that day is excluded."""
+    before = add_at("annotation previous evening", "2026-08-31T20:00:00+05:30")
+    add_at("annotation early morning", "2026-09-01T02:00:00+05:30")
+
+    assert found_ids("annotation", until="2026-09-01") == [before["id"]]
+
+
+def test_fr38_date_only_since_excludes_last_second_of_previous_day(db):
+    """An item at 2026-08-31T23:59:59+05:30 is excluded by since='2026-09-01'."""
+    add_at("annotation last second", "2026-08-31T23:59:59+05:30")
+    after = add_at("annotation first hour", "2026-09-01T01:00:00+05:30")
+
+    assert found_ids("annotation", since="2026-09-01") == [after["id"]]
+
+
+def test_fr38_date_only_until_includes_last_second_of_previous_day(db):
+    """An item at 2026-08-31T23:59:59+05:30 is included by until='2026-09-01'."""
+    last = add_at("annotation last second", "2026-08-31T23:59:59+05:30")
+    add_at("annotation first hour", "2026-09-01T01:00:00+05:30")
+
+    assert found_ids("annotation", until="2026-09-01") == [last["id"]]
+
+
+def test_fr38_date_only_since_is_inclusive_at_local_midnight(db):
+    """An item exactly at 2026-09-01T00:00:00+05:30 is included by since='2026-09-01'."""
+    exact = add_at("annotation at midnight", "2026-09-01T00:00:00+05:30")
+
+    assert found_ids("annotation", since="2026-09-01") == [exact["id"]]
+
+
+def test_fr38_date_only_until_is_exclusive_at_local_midnight(db):
+    """An item exactly at 2026-09-01T00:00:00+05:30 is excluded by until='2026-09-01'."""
+    before = add_at("annotation before midnight", "2026-08-31T23:59:59+05:30")
+    add_at("annotation at midnight", "2026-09-01T00:00:00+05:30")
+
+    assert found_ids("annotation", until="2026-09-01") == [before["id"]]
+
+
+def test_fr38_date_only_window_covers_whole_local_day(db):
+    """since='2026-09-01', until='2026-09-02' returns the whole local day and nothing outside it."""
+    add_at("annotation day before", "2026-08-31T23:59:59+05:30")
+    early = add_at("annotation early", "2026-09-01T02:00:00+05:30")
+    late = add_at("annotation late", "2026-09-01T23:30:00+05:30")
+    add_at("annotation next day", "2026-09-02T00:00:00+05:30")
+
+    assert found_ids("annotation", since="2026-09-01", until="2026-09-02") == sorted(
+        [early["id"], late["id"]]
+    )
+
+
+def test_fr38_bound_with_time_and_offset_is_unchanged(db):
+    """A bound that already carries a time and offset is compared as written."""
+    add_at("annotation at two", "2026-09-01T02:00:00+05:30")
+    three = add_at("annotation at three", "2026-09-01T03:00:00+05:30")
+
+    assert found_ids("annotation", since="2026-09-01T03:00:00+05:30") == [three["id"]]
+
+
+def test_fr38_z_bound_still_compares_as_same_moment(db):
+    """A 'Z' bound is not shifted: 2026-08-31T20:30:00Z is 2026-09-01T02:00:00+05:30."""
+    add_at("annotation before", "2026-09-01T01:59:59+05:30")
+    exact = add_at("annotation exact", "2026-09-01T02:00:00+05:30")
+
+    assert found_ids("annotation", since="2026-08-31T20:30:00Z") == [exact["id"]]
+
+
+def test_fr38_date_only_bound_uses_configured_timezone(db, monkeypatch):
+    """With config.TIMEZONE set to UTC, since='2026-09-01' is UTC midnight, so
+    an item at 2026-09-01T02:00:00+05:30 (2026-08-31T20:30Z) is excluded."""
+    monkeypatch.setattr(config, "TIMEZONE", "UTC")
+    add_at("annotation early morning IST", "2026-09-01T02:00:00+05:30")
+    later = add_at("annotation noon IST", "2026-09-01T12:00:00+05:30")
+
+    assert found_ids("annotation", since="2026-09-01") == [later["id"]]
+
+
+@pytest.mark.parametrize("bad", ["2026-13-45", "2026-02-30"])
+def test_fr38_impossible_date_only_since_means_no_filter(db, bad):
+    """An impossible date-only since is ignored, not raised and not 'no results'."""
+    a = add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    b = add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+
+    assert found_ids("annotation", since=bad) == sorted([a["id"], b["id"]])
+
+
+@pytest.mark.parametrize("bad", ["2026-13-45", "2026-02-30"])
+def test_fr38_impossible_date_only_until_means_no_filter(db, bad):
+    """An impossible date-only until is ignored, not raised and not 'no results'."""
+    a = add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    b = add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+
+    assert found_ids("annotation", until=bad) == sorted([a["id"], b["id"]])
