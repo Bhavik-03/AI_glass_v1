@@ -70,6 +70,18 @@ def system_instruction(now: datetime, concept_names: Sequence[str] = ()) -> str:
     )
 
 
+def _memories_in(name: str, result: dict) -> int:
+    """How many stored memories a tool result sends to Gemini: the count only (FR-17)."""
+    if name == "search_memories":
+        return len(result.get("items", ()))
+    if name == "forget":
+        return len(result.get("candidates", ())) or int("deleted" in result)
+    if name == "remember":
+        # new false returns the existing stored item.
+        return int(result.get("new") is False)
+    return 0
+
+
 def _get_client() -> genai.Client:
     global _client
     if _client is None:
@@ -205,7 +217,10 @@ def _ask(
             searched = searched or (
                 call.name == "web_search" and bool(result.get("results"))
             )
-            tool_calls.append({"name": call.name, "args": call.args, "status": status})
+            logged = {"name": call.name, "args": call.args, "status": status}
+            if status == "ok" and (memories := _memories_in(call.name, result)):
+                logged["memories"] = memories
+            tool_calls.append(logged)
             replies.append(
                 types.Part(
                     function_response=types.FunctionResponse(

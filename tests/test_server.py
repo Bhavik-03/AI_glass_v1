@@ -2039,3 +2039,106 @@ def test_fr17_wipe_turns_write_one_clean_line_each(fake_stages, silent_wav, log_
         assert line["error"] is None
         assert line["tool_calls"] == []
         assert {"stt", "tts"} <= set(line["timings_ms"])
+
+
+# --- memories_used in every /query log line (FR-17, FR-37) ---
+
+
+def _memory_call(count: int | None, name: str = "search_memories") -> dict:
+    call = {"name": name, "args": {"query": "x"}, "status": "ok"}
+    if count is not None:
+        call["memories"] = count
+    return call
+
+
+def test_fr17_memories_used_sums_counts_of_tool_calls(
+    fake_stages, silent_wav, monkeypatch, log_path
+):
+    """FR-17: memories_used is the sum of the "memories" counts of the tool calls (3 + 2 = 5)."""
+    _fake_llm_tool_calls(monkeypatch, [_memory_call(3), _memory_call(2)])
+    assert _post_query(silent_wav).status_code == 200
+    (line,) = _log_lines(log_path)
+    assert line["memories_used"] == 5
+
+
+def test_fr17_memories_used_zero_without_tool_calls(fake_stages, silent_wav, log_path):
+    """FR-17: a query with no tool calls logs memories_used 0."""
+    assert _post_query(silent_wav).status_code == 200
+    (line,) = _log_lines(log_path)
+    assert line["memories_used"] == 0
+
+
+def test_fr17_memories_used_zero_when_calls_have_no_memories_key(
+    fake_stages, silent_wav, monkeypatch, log_path
+):
+    """FR-17: tool calls without a "memories" key (e.g. add_note, an empty search) log memories_used 0."""
+    other = {"name": "add_note", "args": {"text": "buy milk"}, "status": "ok"}
+    _fake_llm_tool_calls(monkeypatch, [other, _memory_call(None)])
+    assert _post_query(silent_wav).status_code == 200
+    (line,) = _log_lines(log_path)
+    assert line["memories_used"] == 0
+
+
+def test_fr17_memories_used_zero_on_audio_400(fake_stages, log_path):
+    """FR-17: a 400 for missing audio still logs memories_used 0."""
+    assert client.post("/query").status_code == 400
+    (line,) = _log_lines(log_path)
+    assert line["memories_used"] == 0
+
+
+def test_fr17_memories_used_logged_on_llm_failure(
+    fake_stages, silent_wav, monkeypatch, log_path
+):
+    """FR-17: a 500 llm failure whose exception carries tool_calls logs their memories count and the error."""
+    exc = RuntimeError("deadline exceeded")
+    exc.tool_calls = [_memory_call(4)]
+    _make_stage_raise(monkeypatch, fake_stages, "llm", exc)
+    response = _post_query(silent_wav)
+    assert response.status_code == 500
+    assert response.json() == {"error": "llm: deadline exceeded"}
+    (line,) = _log_lines(log_path)
+    assert line["memories_used"] == 4
+    assert line["error"] == "llm: deadline exceeded"
+
+
+def test_fr17_memories_used_zero_on_llm_failure_without_tool_calls(
+    fake_stages, silent_wav, monkeypatch, log_path
+):
+    """FR-17: a 500 llm failure with no tool_calls attribute logs memories_used 0."""
+    _make_stage_raise(monkeypatch, fake_stages, "llm", RuntimeError("boom"))
+    assert _post_query(silent_wav).status_code == 500
+    (line,) = _log_lines(log_path)
+    assert line["memories_used"] == 0
+
+
+def test_fr17_log_line_never_contains_memory_text(
+    fake_stages, silent_wav, monkeypatch, log_path
+):
+    """FR-17: the log line holds only the count of memory items, never any stored memory text."""
+    from server import store
+
+    word = "zyxwvutsrq"
+    store.add_memory(
+        f"I keep a {word} on my desk", store.FACT, "2026-10-09T10:00:00+05:30"
+    )
+    _fake_llm_tool_calls(monkeypatch, [_memory_call(1)])
+    assert _post_query(silent_wav).status_code == 200
+    raw = log_path.read_text(encoding="utf-8")
+    assert word not in raw
+    (line,) = _log_lines(log_path)
+    assert line["memories_used"] == 1
+
+
+def test_fr17_memories_used_is_an_int_in_every_line(
+    fake_stages, silent_wav, monkeypatch, log_path
+):
+    """FR-17: memories_used is an int (not null, not bool) in a success, a 400 and a 500 line."""
+    _fake_llm_tool_calls(monkeypatch, [_memory_call(2)])
+    _post_query(silent_wav)
+    client.post("/query")
+    _make_stage_raise(monkeypatch, fake_stages, "llm", RuntimeError("boom"))
+    _post_query(silent_wav)
+    lines = _log_lines(log_path)
+    assert len(lines) == 3
+    for line in lines:
+        assert type(line["memories_used"]) is int

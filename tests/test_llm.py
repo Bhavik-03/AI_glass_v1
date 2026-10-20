@@ -1498,3 +1498,180 @@ def test_fr35_instruction_names_the_other_wipe_wordings():
     text = llm.system_instruction(fixed_now()).lower()
     assert "delete all my memories" in text
     assert "clear everything" in text
+
+
+# --- memories count on tool calls (FR-37, FR-17). Real store on the temp DB, fake Gemini. ---
+
+
+def _store_annotation_notes(n: int) -> None:
+    from server import store
+
+    for i in range(n):
+        store.add_memory(
+            f"annotation note number {i}", store.FACT, "2026-10-09T10:00:00+05:30"
+        )
+
+
+def _one_call_then_text(monkeypatch, name: str, args: dict):
+    return install_fake(
+        monkeypatch,
+        [named_call_response(name, args, "c1", b"s1"), text_response("done")],
+    )
+
+
+def test_fr37_recall_with_50_memories_sends_at_most_5_items(monkeypatch) -> None:
+    """With 50 memories stored, the recall question's function response carries at most 5 items
+    and the count of all matches."""
+    _store_annotation_notes(50)
+    fake = _one_call_then_text(monkeypatch, "search_memories", {"query": "annotation"})
+    llm.ask("what do I know about annotation?", fixed_now())
+    sent = response_of(fake.models.calls[1]["contents"][2])
+    assert len(sent["items"]) == 5
+    assert sent["count"] == 50
+
+
+def test_fr37_recall_log_entry_counts_5_memories(monkeypatch) -> None:
+    """The ok search_memories call carries "memories": 5, the number of items sent to Gemini."""
+    _store_annotation_notes(50)
+    args = {"query": "annotation"}
+    _one_call_then_text(monkeypatch, "search_memories", args)
+    _, _, tool_calls = llm.ask("what do I know about annotation?", fixed_now())
+    assert tool_calls == [
+        {"name": "search_memories", "args": args, "status": "ok", "memories": 5}
+    ]
+
+
+def test_fr37_search_with_no_match_has_no_memories_key(monkeypatch) -> None:
+    """A search with zero items sends no memory text, so the call has no "memories" key."""
+    _store_annotation_notes(3)
+    _one_call_then_text(monkeypatch, "search_memories", {"query": "quantum"})
+    _, _, tool_calls = llm.ask("what about quantum?", fixed_now())
+    assert tool_calls[0]["status"] == "ok"
+    assert "memories" not in tool_calls[0]
+
+
+def test_fr37_list_mode_without_query_counts_the_5_listed(monkeypatch) -> None:
+    """A search with no query on 8 stored memories lists 5 and counts "memories": 5."""
+    _store_annotation_notes(8)
+    fake = _one_call_then_text(monkeypatch, "search_memories", {})
+    _, _, tool_calls = llm.ask("list my memories", fixed_now())
+    sent = response_of(fake.models.calls[1]["contents"][2])
+    assert len(sent["items"]) == 5
+    assert sent["count"] == 8
+    assert tool_calls[0]["memories"] == 5
+
+
+def test_fr37_remember_new_has_no_memories_key(monkeypatch) -> None:
+    """A remember that stores a new item (new True) sends no stored memory text: no "memories" key."""
+    _one_call_then_text(
+        monkeypatch,
+        "remember",
+        {"text": "Studying LoRA fine-tuning", "type": "fact"},
+    )
+    _, _, tool_calls = llm.ask("remember that I study LoRA", fixed_now())
+    assert tool_calls[0]["status"] == "ok"
+    assert "memories" not in tool_calls[0]
+
+
+def test_fr37_remember_repeat_counts_one_memory(monkeypatch) -> None:
+    """A near-verbatim repeat (new False) returns the existing stored item: "memories": 1."""
+    from server import store
+
+    store.add_memory(
+        "Studying LoRA fine-tuning", store.FACT, "2026-10-09T10:00:00+05:30"
+    )
+    _one_call_then_text(
+        monkeypatch,
+        "remember",
+        {"text": "I am studying LoRA fine tuning", "type": "fact"},
+    )
+    _, _, tool_calls = llm.ask("remember that I study LoRA", fixed_now())
+    assert tool_calls[0]["status"] == "ok"
+    assert tool_calls[0]["memories"] == 1
+
+
+def test_fr37_forget_ambiguous_counts_candidates_and_deletes_nothing(
+    monkeypatch,
+) -> None:
+    """A forget returning 2 candidates counts "memories": 2 and deletes nothing."""
+    from server import store
+
+    store.add_memory("Gym session on Monday", store.FACT, "2026-10-09T10:00:00+05:30")
+    store.add_memory("Gym session on Friday", store.FACT, "2026-10-09T10:00:00+05:30")
+    _one_call_then_text(monkeypatch, "forget", {"query": "gym session"})
+    _, _, tool_calls = llm.ask("forget my gym session", fixed_now())
+    assert tool_calls[0]["memories"] == 2
+    assert store.count_memories() == 2
+
+
+def test_fr37_forget_single_match_counts_one(monkeypatch) -> None:
+    """A forget that deletes its one match returned that item to Gemini: "memories": 1."""
+    from server import store
+
+    store.add_memory("Gym on Monday", store.FACT, "2026-10-09T10:00:00+05:30")
+    _one_call_then_text(monkeypatch, "forget", {"query": "gym Monday"})
+    _, _, tool_calls = llm.ask("forget my gym day", fixed_now())
+    assert tool_calls[0]["status"] == "ok"
+    assert tool_calls[0]["memories"] == 1
+    assert store.count_memories() == 0
+
+
+def test_fr37_failed_call_has_no_memories_key(monkeypatch) -> None:
+    """A failed call (search_memories with a non-string query) has no "memories" key."""
+    _store_annotation_notes(3)
+    _one_call_then_text(monkeypatch, "search_memories", {"query": 5})
+    _, _, tool_calls = llm.ask("what do I know?", fixed_now())
+    assert tool_calls[0]["status"] == "failed"
+    assert "memories" not in tool_calls[0]
+
+
+def test_fr37_refused_call_has_no_memories_key(monkeypatch) -> None:
+    """A search_memories call refused for lack of time has no "memories" key."""
+    _store_annotation_notes(3)
+    _, on_model = scripted_clock(monkeypatch, [1.0, 8.5, 8.5])
+    install_fake(
+        monkeypatch,
+        [
+            named_call_response("list_reminders", {}, "c1", b"s1"),
+            named_call_response(
+                "search_memories", {"query": "annotation"}, "c2", b"s2"
+            ),
+            text_response("unused"),
+        ],
+        on_call=on_model,
+    )
+    with pytest.raises(RuntimeError, match="deadline exceeded") as exc:
+        llm.ask("what do I know?", fixed_now())
+    assert exc.value.tool_calls[1]["status"] == "refused"
+    assert "memories" not in exc.value.tool_calls[1]
+
+
+def test_fr37_two_searches_are_counted_on_their_own_entries(monkeypatch) -> None:
+    """Two search_memories calls in one answer each carry their own count."""
+    from server import store
+
+    for i in range(3):
+        store.add_memory(f"alpha topic {i}", store.FACT, "2026-10-09T10:00:00+05:30")
+    for i in range(2):
+        store.add_memory(f"beta topic {i}", store.FACT, "2026-10-09T10:00:00+05:30")
+    install_fake(
+        monkeypatch,
+        [
+            named_call_response("search_memories", {"query": "alpha"}, "c1", b"s1"),
+            named_call_response("search_memories", {"query": "beta"}, "c2", b"s2"),
+            text_response("done"),
+        ],
+    )
+    _, _, tool_calls = llm.ask("compare alpha and beta", fixed_now())
+    assert [c["memories"] for c in tool_calls] == [3, 2]
+
+
+def test_fr37_store_is_never_sent_with_the_first_request(monkeypatch) -> None:
+    """With 50 memories stored, no memory text is in the system instruction or the first
+    request's text parts; only the instruction and the question are sent."""
+    _store_annotation_notes(50)
+    fake = install_fake(monkeypatch, [text_response("answer")])
+    llm.ask("what is the weather?", fixed_now())
+    call = fake.models.calls[0]
+    assert sent_text(call) == "what is the weather?"
+    assert "annotation note number" not in call["config"].system_instruction

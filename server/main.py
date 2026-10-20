@@ -101,6 +101,11 @@ def _concept(tool_calls: list[dict]) -> str | None:
     return None
 
 
+def _memories_used(tool_calls: list[dict]) -> int:
+    """How many stored memories the tool results sent to Gemini in this query (FR-17)."""
+    return sum(call.get("memories", 0) for call in tool_calls)
+
+
 def _error(status_code: int, message: str, record: dict) -> JSONResponse:
     record["error"] = message
     return JSONResponse(status_code=status_code, content={"error": message})
@@ -293,6 +298,7 @@ def query(
         )
     finally:
         record["concept"] = _concept(record["tool_calls"])
+        record["memories_used"] = _memories_used(record["tool_calls"])
         logger.log_query(record)
 
 
