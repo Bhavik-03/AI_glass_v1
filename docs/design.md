@@ -148,9 +148,14 @@ Serves FR-32 to FR-38, FR-40.
   cannot.
 - A named time (FR-38) is turned into a date range by Gemini, which passes `since` and
   `until` to the tool. An unparseable bound means no filter rather than no results.
-- Forget (FR-34) searches, and acts only on exactly one match. Two or more matches return
-  the candidates to Gemini, which names them and asks; nothing is deleted until the next turn
-  names one. Deletes are real `DELETE` statements, not a status flag.
+- Forget (FR-34) deletes only when exactly one item contains **every** content word of the
+  query. Recall's any-word match is far too loose for a DELETE, and a wrong deletion is worse
+  than a failed one (brief section 7). It uses the same tokenizer, stopwords and stemmer as
+  `find_same`, so "gym Mondays" and a stored "gym on Monday" agree. No such item says nothing
+  was found; two or more return the candidates to Gemini, which names them and asks, and
+  nothing is deleted until the next turn names one. A word the item lacks ("gym plan"
+  against "gym on Monday") finds nothing, so Gemini searches first and forgets with the
+  item's own words. Deletes are real `DELETE` statements, not a status flag.
 - Over-merge (FR-40) is prevented the way the v2 concept bug taught us it must be: the
   decision is not left to a line in the prompt. `remember` and the writer both pass their
   candidate text through `store.find_same(text)`, which returns a match only above a
