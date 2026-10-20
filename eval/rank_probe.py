@@ -39,7 +39,7 @@ PROBES = (
     ),
     (
         "who in my family is taking an entrance test",
-        "Younger sister Meera is preparing for the JEE exam",
+        "Younger sister is preparing for the JEE exam",
     ),
     (
         "the way language networks decide which tokens to focus on",
@@ -70,7 +70,7 @@ PROBES = (
         "which framework do I use for coursework",
         "Switched from TensorFlow to PyTorch for all coursework",
     ),
-    ("where do I live", "Lives in Pune and commutes to college by metro"),
+    ("where do I live", "Lives in Nagpur and commutes to college by metro"),
     (
         "when does the robotics club meet",
         "Part of the college robotics club, meets Thursdays",
