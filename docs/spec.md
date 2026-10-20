@@ -418,7 +418,7 @@ FR-26 onwards are new in v3.
 
 - Requirement: "Wipe my memories" does not wipe. It asks back for the exact phrase
   `WIPE_CONFIRM_PHRASE` ("yes wipe everything"). Only an exact match, ignoring case and
-  trailing punctuation, wipes every memory item. Anything else cancels. The profile is not
+  punctuation, wipes every memory item. Anything else cancels. The profile is not
   touched
 - Input → Output: "Wipe my memories" → a confirmation question, then a wipe or a cancel
 - Acceptance: The first command deletes nothing; the exact phrase then deletes every memory

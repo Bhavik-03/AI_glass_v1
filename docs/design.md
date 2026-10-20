@@ -304,8 +304,13 @@ deliberate change to CLAUDE.md's "one line per query" rule, made because the v2 
 (issue #116) was only diagnosable because every call left a line. A writer that stored the
 wrong thing silently would leave nothing to look at.
 
-Memory text never appears in the log, so the log can be read and pasted without leaking what
-is stored. No key or token ever appears.
+No memory item retrieved from the store is written to the log; the log records counts only.
+The user's own spoken words are logged exactly as they are for every other query, which
+includes the text of a "remember that ..." command and the wording of a forget or recall
+question. The protection is that the store is never dumped into the log, not that spoken
+words are hidden. `queries.jsonl` has logged every spoken question since v1, and it is the
+file issue #116 was diagnosed from; redacting memory turns would put a blind spot over the
+newest and riskiest code path. No key or token ever appears.
 
 ## Tech stack
 
@@ -383,6 +388,11 @@ Serves FR-3, FR-5, FR-16, FR-24, FR-39. v2's rows are unchanged; the writer is n
 
 The writer runs inside the poll, whose client timeout is 20 s; a 10 s writer call fits. A
 writer failure must never fail the poll, because the poll also delivers real reminders.
+
+The wipe and its memory count (`store.count_memories`, `store.wipe_memories`) sit outside
+`run_stage`, like the quiz path's `store.set_quiz_result`, so a database error there returns
+a plain 500, not the `{"error": "<stage>: <reason>"}` shape. The fixed-value rule covers
+stage failures, and wipe is not a stage.
 
 ## Repo structure
 
@@ -512,6 +522,7 @@ v2's decisions still hold. New in v3:
 | | too |
 | Free tier: 15 RPM, 500 RPD | The writer adds a call per session; budget the run in advance |
 | Memory text leaking into a search query | Instruction rule plus the v2 logging of every query |
-| Memory text leaking into the log | The log stores counts, never memory text |
+| Memory text leaking into the log | No retrieved memory item is logged, only counts; spoken |
+| | words are logged as for every query, so the store is never dumped, not hidden |
 | Concept over-merge (issue #116) still open in v2 | Not fixed in v2; FR-40 tests the same |
 | | failure in v3's own writer |
