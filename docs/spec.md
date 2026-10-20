@@ -451,12 +451,14 @@ FR-26 onwards are new in v3.
 ### FR-38 Time filter
 
 - Requirement: A question naming a time ("last week", "yesterday", "in September") filters
-  candidates by date before ranking, between `since` and `until`. A question naming no time
-  searches everything
+  candidates by date before ranking, between `since` and `until`. A bound given as a date
+  only is interpreted as midnight in the configured time zone, not UTC. A question naming no
+  time searches everything
 - Input → Output: Question with a time → date-filtered search
 - Acceptance: With one matching item inside the named window and one outside it, only the
   one inside is returned, whether the outside one is before `since` or after `until`; the
-  same question without the time returns both; an unparseable `since` or `until` falls back
+  same question without the time returns both; an item stored at 02:00 local time on a day
+  is inside a `since` bound naming that day; an unparseable `since` or `until` falls back
   to searching everything rather than returning nothing
 
 ### FR-39 Session writer
