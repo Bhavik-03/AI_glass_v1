@@ -37,7 +37,7 @@ remembers me, and helps me run my day and my habits.
   0 errors in 30 in a row, transcription 26/30 (known gap, issue #38).
 - Docs: `docs/archive/v1/`.
 
-## v2 Teacher · tag v0.2.0 · current
+## v2 Teacher · tag v0.2.0 · done
 
 - **Goal:** the assistant sees what I study, explains briefly at my level, remembers
   which concepts I asked about, and quizzes me when I ask.
@@ -64,8 +64,10 @@ remembers me, and helps me run my day and my habits.
   schedule, cloud deployment, open-source models, a spoken "look" word.
 - **Done when:** targets set in the v2 spec (look answers, follow-ups, concept logging,
   quiz grading, latency).
+- Results (Oct 20, 2026, re-baselined on the RTX 4060): look 18/20, followup 8/10,
+  concept 17/20 (issue #116), quiz 10/10, Look median 4.3 s. Docs: `docs/archive/v2/`.
 
-## v3 Memory · tag v0.3.0
+## v3 Memory · tag v0.3.0 · current
 
 - **Goal:** it knows me and recalls our past conversations, stored as short key points.
 - **At the end I can:** say "remember that ..." or "forget ..."; ask "what did we discuss
@@ -74,9 +76,10 @@ remembers me, and helps me run my day and my habits.
   - Memory items are key points of at most about 12 words, never full transcripts, each
     with a type (fact about me, project, preference, session summary) and a date.
   - A memory writer runs after each session and keeps 0 to 3 key points.
-  - Compaction merges near-duplicates and rolls old session summaries into monthly lines.
   - A profile of key facts is always in the prompt; other memories are searched on demand.
-- **Open decision:** embeddings and the vector store (local model or API), at v3 start.
+- **Decided at v3 start:** retrieval sits behind one interface; SQLite FTS5 is the v3
+  implementation; a local embedding model is the fallback only if the recall eval misses its
+  target.
 - **Done when:** targets set in the v3 spec, including a frozen recall test.
 
 ## v4 Planner and habits · tag v0.4.0
@@ -87,8 +90,9 @@ remembers me, and helps me run my day and my habits.
   say "let's track today's habits" and answer a short check-in ("Gym?" "Yes."); see my
   habit progress and insights on a small website.
 - **Key pieces:** schedule table, recurring reminders, habit table, check-in conversation,
-  a scheduler for alerts, a local dashboard page. Habit details (which habits, insights,
-  rules from Atomic Habits) are brainstormed before v4 starts.
+  a scheduler for alerts, a local dashboard page, and compaction, which merges
+  near-duplicates and rolls old session summaries into monthly lines. Habit details (which
+  habits, insights, rules from Atomic Habits) are brainstormed before v4 starts.
 - **Done when:** targets set in the v4 spec.
 
 ## v5 Cloud · tag v0.5.0
