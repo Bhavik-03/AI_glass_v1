@@ -1,15 +1,13 @@
-Version 2. See roadmap.md.
+Version 3. See roadmap.md.
 
-# AI Assistant v2 Spec: Teacher
+# AI Assistant v3 Spec: Memory
 
-Updated Oct 14, 2026 · Bhavik Fulfagar
+Updated Oct 20, 2026 · Bhavik Fulfagar
 
-v2 adds a study mode to the v1 voice assistant. Right Alt asks by voice as in v1. Right Ctrl
-asks about what is on the screen: one screenshot goes to Gemini with the question. Follow-ups
-work for 120 s after an answer. Learning questions are logged as concepts, "quiz me" asks
-about them and grades each answer, and "what did I learn this week?" lists the new ones.
-Everything stays on the laptop except the Gemini and search calls. Scope and out-of-scope
-items are in brief.md.
+v3 adds memory to the v2 study assistant. A profile of fixed slots (who I am, my goals, how
+I want answers) is in every prompt, and short memory items outlive the 120 s session and are
+recalled by question. Everything stays on the laptop except the Gemini and search calls.
+Scope and out-of-scope items are in brief.md.
 
 ## How it works
 
@@ -36,6 +34,13 @@ Quiz flow: "quiz me" starts a quiz of up to 3 concepts. Each key press after a q
 the answer; the server grades it in one line and asks the next question, then speaks the
 score.
 
+Profile flow: the server loads `config/profile.yaml` at startup and puts the whole profile
+in the system instruction of every Gemini call.
+
+Memory flow: memory commands and recall go through tool functions. The server searches the
+memory table locally and passes at most 5 items to Gemini. When a session ends, a writer
+call keeps 0 to 3 key points.
+
 Reminder flow: every 10 s the client asks `GET /reminders/due`. For each due reminder it
 prints the text, fetches and plays its audio, then acknowledges it. A reminder stays due
 until acknowledged, so none is lost if the client is closed.
@@ -44,7 +49,8 @@ until acknowledged, so none is lost if the client is closed.
 
 Each ID later becomes one or more build tasks and tests. Fixed values (rates, timeouts,
 intervals, limits, sizes, model name, time zone) live in config files. FR-1 to FR-18 keep
-their v1 IDs; a changed one is marked "(changed in v2)". FR-19 onwards are new in v2.
+their v1 IDs and FR-19 to FR-25 their v2 IDs; a changed one is marked "(changed in v3)".
+FR-26 onwards are new in v3.
 
 ### FR-1 (changed in v2)
 
@@ -304,10 +310,177 @@ their v1 IDs; a changed one is marked "(changed in v2)". FR-19 onwards are new i
   gives the count 7 and the names of the 5 most recent; with none, it says so; the answer
   follows the FR-5 limit
 
+### FR-26 Profile schema
+
+- Requirement: The profile's slots are defined in `config/profile_schema.yaml`, not in code.
+  Each slot has a name, a one-line description and the question asked for it at setup.
+  Changing the file changes the slots with no Python change, so a different kind of user
+  gets a different profile. The default schema has ten slots: identity, goal_now, goal_mid,
+  goal_long, interests, exploring, understanding, skillset, style, constraints
+- Input → Output: Schema file → the slots the assistant knows about
+- Acceptance: Adding a slot to the schema file and restarting makes the server accept and
+  store a value for it; removing a slot stops it reaching the prompt; a malformed schema
+  file fails at startup with a clear message, not at the first query
+
+### FR-27 Profile values
+
+- Requirement: Profile values live in `config/profile.yaml`, one line per slot, readable and
+  editable by hand. A value a slot has no schema entry for is ignored with a logged warning,
+  not an error. An empty slot is allowed
+- Input → Output: Values file → the profile the assistant holds
+- Acceptance: Editing the file by hand and restarting changes what the assistant knows; a
+  missing file starts an empty profile and does not crash; a value for an unknown slot is
+  ignored and logged
+
+### FR-28 Profile in every prompt
+
+- Requirement: The whole profile goes into the system instruction of every Gemini call,
+  including the writer call. It is capped at `PROFILE_MAX_LINES` (40). Going over the cap is
+  an error, not a silent truncation
+- Input → Output: Profile → part of every system instruction
+- Acceptance: A query made with a filled profile has every non-empty slot in the request
+  (fake client); a profile of 41 lines fails at load with a clear message naming the cap; an
+  empty profile adds nothing to the instruction
+
+### FR-29 First-run setup
+
+- Requirement: When `config/profile.yaml` is missing or empty, the next question starts
+  setup instead: the assistant asks the six setup slots in schema order (identity, goal_now,
+  goal_long, exploring, style, constraints), one per key press, and writes the answers to
+  the file. The other slots stay empty. Setup can be left by saying "stop setup"; what was
+  answered is kept
+- Input → Output: Spoken answers → `config/profile.yaml`
+- Acceptance: With no profile file, the first query is answered with the first setup
+  question, not a normal answer; six answers fill six slots in the file and the seventh
+  query is answered normally; "stop setup" leaves setup and keeps the slots already
+  answered; in the eval, six spoken answers fill all six slots correctly
+
+### FR-30 Stale goal check
+
+- Requirement: `goal_now` carries the date it was set. When it is more than
+  `GOAL_STALE_DAYS` (31) days old, the assistant adds one line to its next answer saying the
+  month goal may be out of date and asking whether it still holds. It says this at most once
+  per session and never edits the goal itself
+- Input → Output: Stale `goal_now` → one extra line in one answer
+- Acceptance: With `goal_now` set 32 days ago, the next answer carries the line and the
+  following answer in the same session does not; with it set 30 days ago, no line; the
+  stored goal and its date are unchanged either way
+
+### FR-31 Slot update proposals
+
+- Requirement: The assistant may propose a profile change ("you have mentioned interviews
+  three times, should I update your month goal?") and must have a yes before writing. It
+  never edits a slot on its own. A proposal the user declines is not proposed again in the
+  same session
+- Input → Output: Proposal → a write only after a yes
+- Acceptance: A declined proposal writes nothing and is not repeated in that session; an
+  accepted one writes the slot and speaks back what it wrote; no code path writes a slot
+  without a yes, setup (FR-29) excepted
+
+### FR-32 Memory item
+
+- Requirement: A memory item is one key point of at most `MEMORY_MAX_WORDS` (12) words, with
+  a type (fact, project, preference, session), the date it was stored, and its text. Never a
+  transcript. Stored in SQLite in the same database as notes, reminders and concepts
+- Input → Output: Key point → memory row
+- Acceptance: A stored item has all four fields set; an item over the word limit is rejected
+  before storage and the caller is told; the table survives a restart
+
+### FR-33 Remember that
+
+- Requirement: "Remember that ..." stores exactly one item and speaks it back so the user
+  can hear what was stored. Gemini shortens the spoken sentence to a key point within the
+  word limit and picks the type
+- Input → Output: "Remember that ..." → one row, spoken confirmation
+- Acceptance: One command stores exactly one row, never two; the spoken answer contains the
+  stored text; in the eval, 10 commands are stored correctly (within the word limit, right
+  type) in at least 9 cases
+
+### FR-34 Forget
+
+- Requirement: "Forget ..." deletes the one matching item and nothing else. When more than
+  one item matches, the assistant names them and asks which, and deletes nothing until
+  answered. When nothing matches, it says so
+- Input → Output: "Forget ..." → one deletion, or a question
+- Acceptance: With one match, that row is gone and every other row remains; with two
+  matches, nothing is deleted and the answer names both; answering the question then deletes
+  only the named one; with no match, nothing is deleted and the answer says so; in the eval,
+  5 of 5 forget cases delete the right row and only that row
+
+### FR-35 Wipe
+
+- Requirement: "Wipe my memories" does not wipe. It asks back for the exact phrase
+  `WIPE_CONFIRM_PHRASE` ("yes wipe everything"). Only an exact match, ignoring case and
+  trailing punctuation, wipes every memory item. Anything else cancels. The profile is not
+  touched
+- Input → Output: "Wipe my memories" → a confirmation question, then a wipe or a cancel
+- Acceptance: The first command deletes nothing; the exact phrase then deletes every memory
+  row and leaves notes, reminders, concepts and the profile intact; a near miss ("yes wipe
+  it all") deletes nothing and says it was cancelled; the confirmation does not survive into
+  the next session
+
+### FR-36 List memories
+
+- Requirement: "List my memories" speaks up to `MEMORY_LIST_MAX` (5) items, most recent
+  first, and the total count when there are more
+- Input → Output: Question → spoken list
+- Acceptance: With 8 items the answer names the 5 most recent and gives the total; with none
+  it says so; the answer follows the FR-5 limit
+
+### FR-37 Recall (changed backend in v3)
+
+- Requirement: Recall goes through one interface, `search(query, k) -> items`, so the
+  ranking backend can be replaced without touching its callers. v3 implements it with SQLite
+  FTS5 full-text search, which adds no dependency. At most `MEMORY_RECALL_MAX` (5) items
+  reach Gemini. The whole store is never sent, to any model or any tool
+- Input → Output: Question → at most 5 items in the Gemini request
+- Acceptance: A recall question sends at most 5 items (fake client); with 50 items stored,
+  the request still carries at most 5; no code path puts the full store in a request or in a
+  `web_search` query; replacing the search implementation behind the interface needs no
+  change in its callers; in the eval, the right memory is in the top 5 for at least 90% of
+  20 recall questions and the spoken answer is correct for at least 17 of 20
+
+### FR-38 Time filter
+
+- Requirement: A question naming a time ("last week", "yesterday", "in September") filters
+  candidates by date before ranking. A question naming no time searches everything
+- Input → Output: Question with a time → date-filtered search
+- Acceptance: With one matching item inside the named window and one outside it, only the
+  one inside is returned; the same question without the time returns both; an unparseable
+  time falls back to searching everything rather than returning nothing
+
+### FR-39 Session writer
+
+- Requirement: When a session ends, one Gemini call reviews it and keeps 0 to 3 key points.
+  It applies a salience rule: keep only what would still matter in a month. It decides
+  whether a point is worth keeping before deciding how to word it. The assistant speaks only
+  how many it kept ("Noted two things."), never the contents. A failed writer call is logged
+  and loses the points; it never fails the user's query
+- Input → Output: Ended session → 0 to 3 rows, a spoken count
+- Acceptance: A session of small talk keeps 0 points and says nothing; a session with three
+  durable facts keeps up to 3; the spoken line gives the count and no content; a writer call
+  that errors leaves the store unchanged and is logged; in the eval, at least 7 of 10
+  sessions produce points judged useful by the rule in brief.md, and after 10 sessions the
+  store holds no more than 15 items
+
+### FR-40 No over-merge
+
+- Requirement: The writer and `remember that` never merge a new item onto an existing one
+  unless it is the same thing. Reusing an existing item's wording for a different point is a
+  failure, not a tidy-up. This is the v2 concept logger's failure mode (issue #116), where
+  "attention in transformers" and "overfitting" were both filed under the existing name
+  "lora fine-tuning"
+- Input → Output: A new point near an existing one → a new row, not a merge
+- Acceptance: With "LoRA fine-tuning" already stored, storing "attention in transformers"
+  adds a new row and leaves the first unchanged; storing the same point twice in different
+  words updates one row and adds none; in the eval, 0 of 5 near-miss pairs are merged
+
 ## Interface contract
 
 The client uses exactly this API. It is frozen. v2 adds only the optional `image` field, two
-400 errors and `POST /session/reset`; the reminder endpoints and `/health` are unchanged.
+400 errors and `POST /session/reset`; the reminder endpoints and `/health` are unchanged. v3
+adds no endpoint and no field: the profile and memory are server-side and reach Gemini
+through the system instruction and the tool functions.
 
 ```text
 POST /query                          # one question, one answer
@@ -364,59 +537,81 @@ design.md.
 
 ## Quality targets
 
-v2 is done, and tagged v0.2.0, when every target below is met. The v2 eval set is frozen
-after its first run, as in v1.
+v3 is done, and tagged v0.3.0, when every target below is met. The v3 recall set is frozen
+after its first run, as in v1 and v2.
 
 | Metric | Target | How measured |
 | --- | --- | --- |
-| Look (FR-19, FR-20) | ≥ 80% correct | 20 saved screenshots with questions |
-| Follow-ups (FR-21) | ≥ 8 of 10 understood | 10 follow-up cases |
-| Concept logging (FR-23) | ≥ 90% logged or skipped correctly | 20 questions |
-| Quiz grading (FR-24) | ≥ 8 of 10 agree with my judgement | 10 spoken answers |
-| Latency, Look questions | ≤ 8 s median | Client timer + stage timings |
-| Regression | v1 targets met; transcription ≥ 26 of 30 | Re-run of the v1 eval |
+| Recall, right memory in top 5 (FR-37) | ≥ 90% | 20 recall questions, seeded store |
+| Recall, answer correct (FR-37) | ≥ 17 of 20 | The same 20 questions |
+| Remember that (FR-33) | ≥ 9 of 10 stored correctly | 10 spoken commands |
+| Forget (FR-34) | 5 of 5 right row and only that row | 5 forget cases |
+| Invented memories (FR-37) | 0 of 10 | 10 questions about things never stated |
+| Over-merge (FR-40) | 0 of 5 pairs merged | 5 near-miss pairs |
+| Profile setup (FR-29) | 6 of 6 slots filled correctly | One setup run, 6 spoken answers |
+| Store growth (FR-39) | ≤ 15 items after 10 sessions | Count after the writer runs 10 times |
+| Auto-writer usefulness (FR-39) | ≥ 7 of 10 sessions | The scoring rule in brief.md |
+| Latency | ≤ 5.3 s median | Client timer + stage timings |
+| Regression | v1 and v2 targets met | Re-runs of both eval sets |
+
+The 5.3 s latency target is the v2 Look median of 4.3 s measured on this machine on
+2026-10-20, plus 1 s. It is not derived from the old laptop.
 
 Regression: a re-run of the v1 eval meets every v1 target except transcription, which must
-be no worse than v1's 26 of 30.
+be no worse than 26 of 30 (issue #38); a re-run of the v2 eval meets every v2 target except
+concept logging, which is known to be flaky and must be no worse than 17 of 20 (issue #116).
 
-Latency budget and worst case are as in v1 (FR-5). An image adds screenshot capture, resize
-and upload on the client and image input on the Gemini call. The log shows which stage broke
-the budget.
+Latency budget and worst case are as in v1 (FR-5). v3 adds a local search before the Gemini
+call and a longer system instruction; neither uses the GPU. The writer call happens after
+the answer has been spoken and is outside the user's latency path.
 
 ## Test plan
 
-pytest covers the server with Gemini, whisper and Piper faked, a fake screen grab and a
-temporary SQLite database. The evaluation below uses the real models.
+pytest covers the server with Gemini, whisper and Piper faked, and a temporary SQLite
+database. The evaluation below uses the real models.
 
-1. Write the v2 eval set before its first run, then freeze it (only an obvious error in a
-   question may be fixed, logged in plan.md). It holds 20 Look questions with saved
-   screenshots, 10 follow-up cases, 20 concept questions and 10 quiz answers I have judged
-   right or wrong myself. Each row has a pass rule.
-   - The eval keeps its own saved screenshots; the product never saves one.
+1. Write the v3 recall set before its first run, then freeze it (only an obvious error in a
+   question may be fixed, logged in plan.md). It holds a seeded store, 20 recall questions,
+   10 remember commands, 5 forget cases, 10 questions about things never stated, 5 near-miss
+   pairs and one setup run of 6 answers. Each row has a pass rule.
+   - The seeded store is the eval's own, never `data/assistant.db`.
    - Spoken questions are recorded once as WAV files, not in git, as in v1.
-2. Call `POST /session/reset` before each question (FR-22), so rows do not leak context into
-   each other. Follow-up cases run as sequences inside one session.
-3. Run against a clean evaluation state, with the notes, reminders and concepts backed up
-   and restored, as in v1. Pace the calls to stay under 15 Gemini requests per minute.
+2. Call `POST /session/reset` before each question (FR-22).
+3. Run against a clean state, with notes, reminders, concepts, memories and the profile
+   backed up and restored, as in v1 and v2. Pace the calls to stay under 15 Gemini requests
+   per minute. The writer adds one call per session, so budget for it against the 500-a-day
+   limit.
 4. Grading:
-   - Look: pass on the expected content of the answer for that screenshot.
-   - Follow-ups: pass when the answer uses the earlier turn or image.
-   - Concept logging: pass when the concept is logged or skipped as expected, with no
-     duplicate row.
-   - Quiz: the grade (right or wrong) is compared with my own judgement.
-5. Report accuracy per group, median and worst latency for Look questions, and the result of
-   the v1 eval re-run.
-6. Re-run the whole set whenever the model, prompt or tool declarations change.
+   - Recall: pass when the expected item is in the 5 sent to Gemini, and separately when the
+     spoken answer is correct.
+   - Remember: pass when one row is stored, within the word limit, right type.
+   - Forget: pass when the named row is gone and every other row remains.
+   - Invented memories: pass when the answer says it does not know, and fails when it states
+     something that was never stored.
+   - Over-merge: pass when the near-miss pair ends as two rows.
+   - Setup: pass when each of the six slots holds what was said.
+   - Auto-writer: scored against the rule in brief.md, immediately after each session, never
+     batched.
+5. Report per-group accuracy, median and worst latency, store size after the 10 writer
+   sessions, and the results of both regression re-runs.
+6. Re-run the whole set whenever the model, prompt, tool declarations or the search
+   implementation change.
 
 The home city for weather questions comes from the server config.
 
 ## Open decisions
 
-None.
+- Whether to add a local embedding model behind the FR-37 interface. Decided after the first
+  recall run: if "right memory in top 5" is below 90%, the failing questions decide it.
+  Until then v3 adds no dependency.
 
 ## Decisions settled in Design
 
-- [ ] How concepts, the quiz and the weekly list reach Gemini (tools or server logic)
-- [ ] How "quiz me" and "stop quiz" are detected
-- [ ] How the image is passed to Gemini and kept in the session
-- [ ] Screenshot library and JPEG quality
+- [ ] How the profile reaches the system instruction, and where the 40-line cap is enforced
+- [ ] Where `config/` sits in the project structure, and whether CLAUDE.md's structure
+      section is updated in the same change
+- [ ] Whether memory commands and recall are tool functions or server logic
+- [ ] The FTS5 table design, and how items are tokenised for search
+- [ ] What counts as a session ending, and what triggers the writer call
+- [ ] How setup (FR-29) interrupts the normal query path
+- [ ] How the eval seeds its store and near-miss pairs
