@@ -9,6 +9,10 @@ CANCELLED = "cancelled"
 NEW = "new"
 RIGHT = "right"
 WRONG = "wrong"
+FACT = "fact"
+PROJECT = "project"
+PREFERENCE = "preference"
+SESSION = "session"
 
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS notes (
@@ -32,6 +36,12 @@ CREATE TABLE IF NOT EXISTS concepts (
     status TEXT NOT NULL DEFAULT '{NEW}',
     last_quizzed TEXT
 );
+CREATE TABLE IF NOT EXISTS memories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    text TEXT NOT NULL,
+    type TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -48,6 +58,18 @@ def init() -> None:
     config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _connect() as con:
         con.executescript(SCHEMA)
+
+
+def add_memory(text: str, type: str, created_at: str) -> dict:
+    """Store one key point; an item over `config.MEMORY_MAX_WORDS` words is rejected."""
+    if len(text.split()) > config.MEMORY_MAX_WORDS:
+        raise ValueError(f"memory is over {config.MEMORY_MAX_WORDS} words")
+    with _connect() as con:
+        cur = con.execute(
+            "INSERT INTO memories (text, type, created_at) VALUES (?, ?, ?)",
+            (text, type, created_at),
+        )
+    return {"id": cur.lastrowid, "text": text, "type": type, "created_at": created_at}
 
 
 def add_note(text: str, created_at: str) -> dict:

@@ -1,5 +1,7 @@
 import sqlite3
 
+import pytest
+
 from server import config, store
 
 REAL_CONNECT = sqlite3.connect
@@ -591,3 +593,89 @@ def test_fr14_cancel_and_ack_run_one_update_and_no_select_before_it(db, monkeypa
 
     assert_single_update_without_prior_select(cancel_sql)
     assert_single_update_without_prior_select(ack_sql)
+
+
+WORDS_12 = " ".join(f"w{i}" for i in range(12))
+WORDS_13 = " ".join(f"w{i}" for i in range(13))
+MEM_TIME = "2026-10-20T09:00:00+05:30"
+
+
+def memory_rows(path) -> list[tuple]:
+    con = REAL_CONNECT(path)
+    try:
+        return con.execute("SELECT * FROM memories").fetchall()
+    finally:
+        con.close()
+
+
+def test_fr32_init_creates_memories_table(db):
+    """A memories table is created at startup."""
+    assert "memories" in table_names(db)
+
+
+def test_fr32_memory_max_words_is_12_in_config():
+    """MEMORY_MAX_WORDS (12) comes from config."""
+    assert config.MEMORY_MAX_WORDS == 12
+
+
+def test_fr32_add_memory_sets_all_four_fields(db):
+    """add_memory stores a row with id, text, type and created_at all set."""
+    mem = store.add_memory("I prefer short answers", store.PREFERENCE, MEM_TIME)
+
+    assert set(mem) == {"id", "text", "type", "created_at"}
+    assert mem["id"] is not None
+    assert mem["text"] == "I prefer short answers"
+    assert mem["type"] == "preference"
+    assert mem["created_at"] == MEM_TIME
+    rows = memory_rows(db)
+    assert len(rows) == 1
+    assert "I prefer short answers" in rows[0]
+    assert "preference" in rows[0]
+    assert MEM_TIME in rows[0]
+    assert mem["id"] in rows[0]
+
+
+def test_fr32_type_constants():
+    """The four types are fact, project, preference and session."""
+    assert store.FACT == "fact"
+    assert store.PROJECT == "project"
+    assert store.PREFERENCE == "preference"
+    assert store.SESSION == "session"
+
+
+def test_fr32_twelve_word_item_is_accepted(db):
+    """An item of exactly 12 words is accepted and stored."""
+    mem = store.add_memory(WORDS_12, store.FACT, MEM_TIME)
+
+    assert mem["text"] == WORDS_12
+    assert len(memory_rows(db)) == 1
+
+
+def test_fr32_thirteen_word_item_is_rejected_before_storage(db):
+    """An item over the word limit raises ValueError naming the limit, and nothing is stored."""
+    with pytest.raises(ValueError, match="12"):
+        store.add_memory(WORDS_13, store.FACT, MEM_TIME)
+
+    assert memory_rows(db) == []
+
+
+def test_fr32_word_limit_is_read_from_config(db, monkeypatch):
+    """The word limit is read from config.MEMORY_MAX_WORDS, not hard-coded."""
+    monkeypatch.setattr("server.config.MEMORY_MAX_WORDS", 3)
+
+    store.add_memory("one two three", store.FACT, MEM_TIME)
+    with pytest.raises(ValueError, match="3"):
+        store.add_memory("one two three four", store.FACT, MEM_TIME)
+
+    assert len(memory_rows(db)) == 1
+
+
+def test_fr32_memories_survive_restart(db):
+    """The memories table and its rows survive a restart (init() again on the same database)."""
+    store.add_memory("I study operating systems", store.PROJECT, MEM_TIME)
+
+    store.init()
+
+    rows = memory_rows(db)
+    assert len(rows) == 1
+    assert "I study operating systems" in rows[0]
