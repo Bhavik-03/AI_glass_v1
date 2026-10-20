@@ -26,7 +26,7 @@ Me, single user, no accounts. Same voice-in, voice-out laptop setup as v2.
 The profile is a fixed set of named slots, not a loose pile of facts. The slots
 are defined in config/profile_schema.yaml, not in code, so a different kind of
 user gets a different schema without a Python change. Values live in
-config/profile.yaml and are hand-editable.
+data/profile.yaml and are hand-editable.
 
 Default slots: identity, goal_now, goal_mid, goal_long, interests, exploring,
 understanding, skillset, style, constraints.

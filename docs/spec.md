@@ -324,7 +324,7 @@ FR-26 onwards are new in v3.
 
 ### FR-27 Profile values
 
-- Requirement: Profile values live in `config/profile.yaml`, one line per slot, readable and
+- Requirement: Profile values live in `data/profile.yaml`, one line per slot, readable and
   editable by hand. A value a slot has no schema entry for is ignored with a logged warning,
   not an error. An empty slot is allowed
 - Input → Output: Values file → the profile the assistant holds
@@ -344,12 +344,12 @@ FR-26 onwards are new in v3.
 
 ### FR-29 First-run setup
 
-- Requirement: When `config/profile.yaml` is missing or empty, the next question starts
+- Requirement: When `data/profile.yaml` is missing or empty, the next question starts
   setup instead: the assistant asks the six setup slots in schema order (identity, goal_now,
   goal_long, exploring, style, constraints), one per key press, and writes the answers to
   the file. The other slots stay empty. Setup can be left by saying "stop setup"; what was
   answered is kept
-- Input → Output: Spoken answers → `config/profile.yaml`
+- Input → Output: Spoken answers → `data/profile.yaml`
 - Acceptance: With no profile file, the first query is answered with the first setup
   question, not a normal answer; six answers fill six slots in the file and the seventh
   query is answered normally; "stop setup" leaves setup and keeps the slots already

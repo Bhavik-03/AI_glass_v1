@@ -1,18 +1,21 @@
-Version 2. See roadmap.md.
+Version 3. See roadmap.md.
 
-# AI Assistant v2 Design: Teacher
+# AI Assistant v3 Design: Memory
 
-Updated Oct 14, 2026 · Bhavik Fulfagar
+Updated Oct 20, 2026 · Bhavik Fulfagar
 
 One FastAPI process on the laptop runs speech-to-text and text-to-speech locally, calls Gemini
-for the answer, keeps notes, reminders and concepts in SQLite, and holds one short session in
-memory. A push-to-talk Python client on the same laptop calls it with two keys: Right Alt for
-voice and Right Ctrl for voice plus a screenshot. Requirements are in spec.md.
+for the answer, keeps notes, reminders, concepts and memories in SQLite, and holds one short
+session in memory. v3 adds two things on top of v2: a profile of fixed slots that goes into
+every prompt, and short memory items that outlive the session and are found again by
+searching. A push-to-talk Python client on the same laptop calls it with two keys: Right Alt
+for voice and Right Ctrl for voice plus a screenshot. Requirements are in spec.md.
 
 ## Architecture
 
 Serves all FRs. The `/query` handler is the only place that knows the order of the stages;
-each stage is a small module, so any of them can be swapped without touching the others.
+each stage is a small module, so any of them can be swapped without touching the others. v3
+adds one module, `profile.py`, and widens `store.py`; nothing else moves.
 
 ```mermaid
 flowchart LR
@@ -22,161 +25,156 @@ flowchart LR
         M["main<br/>/query, /session/reset,<br/>/reminders/*, /health, log"]
         M --> STT["STT<br/>whisper small.en, GPU"]
         M --> SES["session<br/>last 5 turns, image, quiz"]
-        M --> LLM["LLM<br/>Gemini API + tool loop,<br/>quiz grading"]
-        LLM --> T["tools<br/>store: SQLite · search: Tavily"]
+        M --> PRF["profile<br/>schema + values,<br/>40-line cap"]
+        M --> LLM["LLM<br/>Gemini API + tool loop,<br/>quiz grading, session writer"]
+        LLM --> T["tools<br/>store: SQLite + FTS5 · search: Tavily"]
         M --> TTS["TTS<br/>Piper → 16 kHz WAV"]
     end
 ```
 
 | Block | Job |
 | --- | --- |
-| PC client | Right Alt records voice; Right Ctrl records voice and takes one screenshot at |
-| | key press; plays start, thinking and error sounds; sends the WAV (and JPEG) and |
-| | plays the answer. Every 10 s, when idle, polls and plays due reminders. |
-| main.py | Validates audio and image, runs the stages in order, times each one, routes a |
-| | quiz answer, returns the WAV or an error, writes the log line. Serves |
-| | `/session/reset`, the reminder endpoints and `/health`. |
+| PC client | Unchanged from v2. Right Alt records voice; Right Ctrl records voice and |
+| | takes one screenshot at key press; plays start, thinking and error sounds; |
+| | sends the WAV (and JPEG) and plays the answer. Every 10 s, when idle, polls |
+| | and plays what is due. |
+| main.py | Validates audio and image, runs the stages in order, times each one, routes |
+| | a quiz answer or a setup answer, returns the WAV or an error, writes the log |
+| | line. Serves `/session/reset`, the reminder endpoints and `/health`. Runs the |
+| | session writer when the reminder poll finds an expired session. |
 | STT (`stt.py`) | Question WAV → text with faster-whisper `small.en`, loaded once at startup. |
-| Session (`session.py`) | New. One in-memory session behind a lock: last 5 turns, the most |
-| | recent image, the quiz state, and their expiry. |
-| LLM (`llm.py`) | Sends the question, session turns and image to Gemini with the system |
-| | instruction and tool declarations; runs the tool-call loop; grades a quiz answer. |
-| Tools (`tools.py`) | The nine declarations, the dispatcher (always returns a result dict) and |
-| | the spoken texts (reminders, quiz questions, score). |
+| Session (`session.py`) | One in-memory session behind a lock: last 5 turns, the most recent |
+| | image, the quiz state, the setup state, and their expiry. |
+| Profile (`profile.py`) | NEW. Loads the schema and the values at startup, enforces the |
+| | 40-line cap, renders the profile block for the system instruction, writes a |
+| | slot after a confirmed update or a setup answer. |
+| LLM (`llm.py`) | Sends the question, session turns, profile and image to Gemini with the |
+| | system instruction and tool declarations; runs the tool-call loop; grades a |
+| | quiz answer; runs the session writer call. |
+| Tools (`tools.py`) | The declarations, the dispatcher (always returns a result dict) and the |
+| | spoken texts (reminders, quiz questions, score, setup questions). |
 | Search (`search.py`) | Query → top web results from the Tavily Search API; raises on failure. |
-| Store (`store.py`) | SQLite: notes, reminders and concepts. |
+| Store (`store.py`) | SQLite: notes, reminders, concepts and memories, plus the FTS5 index. |
 | TTS (`tts.py`) | Answer text → speech with Piper, resampled to 16 kHz mono 16-bit. |
 | Logger (`logger.py`) | One JSONL line per query, failed ones included. |
 | Gemini API, Tavily Search API | The only parts that need the internet. |
 
-## Live search through a `web_search` tool
+## Unchanged from v2
 
-Serves FR-5, FR-7. Unchanged from v1.
+These parts are not touched by v3 and are described in `docs/archive/v2/design.md`:
+live search through a `web_search` tool (FR-5, FR-7), Look and the screenshot path
+(FR-19, FR-20), the concept tracker (FR-23, FR-25), and the quiz (FR-24).
 
-The M3 spike (Oct 10, 2026, results in archive/v1/plan.md) showed that Google Search
-grounding has no API quota on our free tier: every request with the `google_search` tool
-returned 429. On `gemini-3.5-flash-lite` with our key, plain calls and function calling work.
-So Gemini never searches itself; the server searches for it.
+One v2 risk is now a measured defect rather than a worry: Gemini reusing an existing concept
+name for a different concept (issue #116, found in the 2026-10-20 re-baseline). The memory
+writer has the same shape, so FR-40 makes not doing it a tested requirement rather than an
+instruction and a hope.
 
-- Model: `gemini-3.5-flash-lite` (free tier: 15 requests per minute, 500 per day). Timeout
-  10 s per call, the minimum the API accepts (8 s is rejected).
-- Every request carries the function declarations, with no built-in tools. Function calling
-  uses `VALIDATED` mode.
-- When Gemini calls `web_search`, `tools` passes the query to `search.py`, which calls the
-  Tavily Search API (basic depth, a few top results, timeout from config). The results go
-  back as `{results: [{title, url, content}]}`; a failure goes back as `{error}`.
-- `searched` is true when `web_search` ran and returned results.
-- When Gemini returns function calls, the server runs them and sends back all response parts
-  unchanged (including `id` and `thought_signature`) plus the results, up to 3 rounds.
-- Deadline: the LLM stage has a 15 s deadline (`LLM_DEADLINE_S`). Before each Gemini call,
-  `llm` checks that the call's full timeout fits in the time left. The first search always
-  runs; a later tool round runs only if elapsed + its tool timeout (0 s local tools, 5 s
-  search) + 10 s <= `LLM_FINAL_DEADLINE_S` (18 s), else its calls get an error result
-  marked refused. When the deadline stops the model, `llm` makes one last Gemini call with
-  function calling mode NONE if elapsed <= `LLM_FINAL_START_MAX_S` (8 s); only if that is
-  not possible or fails does it raise `llm: deadline exceeded`. The worst case is STT 1 s +
-  LLM 18 s + TTS 1 s = 20 s, under the client's 25 s.
-- Privacy rule: `web_search` sends only the search query to Tavily. Never send notes,
-  reminders, concepts, screenshot content or (from v3) memory content as a query. Tavily's
-  terms let it use queries and results to improve its models.
-- Backup provider: Exa (`exa-py`, $10 free credit a month, no card). Switching changes only
-  `search.py` and its config.
-- SDK details change between versions: check the current `google-genai` and `tavily-python`
-  docs before changing `llm.py` and `search.py`.
+## Profile
 
-## Look: screenshot with the question
+Serves FR-26 to FR-29, FR-31.
 
-Serves FR-19, FR-20, FR-16, FR-17.
+- `config/profile_schema.yaml` defines the slots: name, a one-line description, and the
+  question asked at setup. It is committed to git: it is structure, not personal data.
+- `data/profile.yaml` holds the values. It is **gitignored**, like `assistant.db`, because
+  it holds identity, goals and weak spots. The repo is private today, but git history is
+  permanent and the repo may not always be.
+- `profile.py` loads both at startup. A malformed schema raises at startup with a clear
+  message. A value whose slot is not in the schema is ignored and logged, not an error. A
+  missing values file means an empty profile, which triggers setup.
+- The rendered profile block is built once per request and placed in the system instruction.
+  Empty slots are left out entirely, so an empty profile adds nothing.
+- The 40-line cap (`PROFILE_MAX_LINES`) is enforced **at load**, not at render, so an
+  oversized profile fails once at startup instead of silently on every query.
+- Setup (FR-29) runs when the values file is missing or empty. The session holds the setup
+  state, like the quiz state: each key press answers the current slot, and `SETUP_STOP_PHRASE`
+  ("stop setup") leaves setup keeping what was answered. While setup runs, `/query` skips the
+  Gemini call entirely — the next question is an answer to a setup slot, not a question.
+- A slot update outside setup (FR-31) needs a yes. The assistant proposes through its answer;
+  the session holds the pending proposal; the next turn's yes commits it. A declined proposal
+  is remembered for the session so it is not asked twice.
 
-- Client: on Right Ctrl press, Pillow `ImageGrab` takes one screenshot of the screen; the
-  client shrinks it so the longest side is at most 1280 px, encodes it as JPEG in memory and
-  sends it as the `image` field with the audio. It is never written to disk.
-- Server: `main.py` checks the image before any stage: over 2 MB gives 400
-  `image too large`; a file Pillow cannot open as JPEG or PNG gives 400
-  `image is not a readable image`.
-- `llm` sends the image to Gemini as an image part next to the question text, and the
-  session keeps it as the most recent image (FR-21).
-- The log records `image_sent` true or false, never the image.
-- Pillow is a new dependency, pending approval. The first task of the Look milestone is a
-  spike that confirms the capture, the resize, the JPEG size and the Gemini image part.
+## Memory and recall
 
-## Sessions
+Serves FR-32 to FR-38, FR-40.
 
-Serves FR-21, FR-22, FR-17.
+- A memory item is a row: text (≤ 12 words), type (`fact`, `project`, `preference`,
+  `session`), and the date stored. The word limit is checked in `store.py` before insert, so
+  no path can store a long item.
+- Recall goes through one function, `store.search_memories(query, k, since=None)`. That
+  signature is the interface the spec freezes; the implementation behind it is replaceable.
+- v3 implements it with **SQLite FTS5**, which ships with SQLite and adds no dependency. A
+  contentless FTS5 table indexes the item text and stays in sync with the memories table
+  through triggers, so there is one source of truth.
+- At most 5 items (`MEMORY_RECALL_MAX`) are passed to Gemini. The full store is never sent,
+  to Gemini or to Tavily. This is a size rule first: the store grows forever, a prompt
+  cannot.
+- A named time (FR-38) is turned into a date range by Gemini, which passes `since` to the
+  tool. An unparseable time means no filter rather than no results.
+- Forget (FR-34) searches, and acts only on exactly one match. Two or more matches return
+  the candidates to Gemini, which names them and asks; nothing is deleted until the next turn
+  names one. Deletes are real `DELETE` statements, not a status flag.
+- Over-merge (FR-40) is prevented the way the v2 concept bug taught us it must be: the
+  decision is not left to a line in the prompt. `remember` and the writer both pass their
+  candidate text through `store.find_same(text)`, which returns a match only above a
+  similarity floor; anything below it is a new row. The prompt also says it, but the store
+  is what enforces it.
 
-- `session.py` holds one session in memory, guarded by a `threading.Lock` (`/query` is a
-  plain `def` and runs in FastAPI's thread pool).
-- It keeps only the final question and answer text of the last 5 turns plus the most recent
-  image (bytes and type), never tool calls or tool results.
-- The session ends 120 s after the last answer (`SESSION_TTL_S`); while a quiz runs, it
-  waits up to 300 s for each answer instead (FR-24). An expired session is cleared on the
-  next read.
-- `llm` sends the saved turns as earlier user and model text contents, then the new question
-  with the new image, or else the most recent saved image.
-- `POST /session/reset` clears the turns, the image and any running quiz; returns 200
-  `{"status": "ok"}`. The eval calls it before each question.
-- The log records `session_continued` true when the question used saved turns.
-- Restarting the server clears the session; nothing of it is stored.
+## Session writer
 
-## Concepts
+Serves FR-39.
 
-Serves FR-23, FR-25, FR-17.
+The session ends 120 s after the last answer, but nothing runs at that moment: the server
+only acts when asked. v3 reuses the poll the client already makes.
 
-- New tool `log_concept(name, summary)`. Gemini calls it for learning questions only (the
-  system instruction gives "what is LoRA?" as a learning question and "when is Diwali?" as
-  not one).
-- The system instruction lists the existing concept names, so Gemini reuses a name for the
-  same concept. `store` matches names case-insensitively: a match updates `last_asked`
-  (and the summary), a new name adds a row with status `new`.
-- New tool `learned_this_week()` returns the count of concepts first asked in the last 7
-  days and the names of the 5 most recent.
-- The log records the concept name logged in that query, if any.
-- No embeddings.
-
-## Quiz
-
-Serves FR-24.
-
-- Gemini calls the tool `start_quiz()` when I say "quiz me". The server picks up to 3
-  concepts (status new, oldest first asked first; then status wrong, oldest last quizzed
-  first), stores the quiz state in the session and returns the first question. With no
-  concept to quiz it returns a count of 0, and Gemini says so.
-- The question is a fixed template: "Explain <name> in one sentence." The system instruction
-  tells Gemini to read it exactly.
-- While a quiz runs, `main.py` routes the next `/query` as an answer, whatever the key:
-  1. STT as usual.
-  2. If the transcript contains "stop quiz" (lowercase, no punctuation), the quiz ends; the
-     statuses so far stay; the answer is "Quiz stopped." No Gemini call.
-  3. Else one Gemini grading call (`llm.grade`), no tools, JSON output
-     `{correct, feedback}`, with the concept name, its summary and my answer.
-  4. `store` sets the status to right or wrong and the date last quizzed.
-  5. The spoken answer is the one-line feedback plus the next question, or plus the score
-     ("2 of 3 right") after the last one, which ends the quiz.
-- If no answer comes within 300 s, the quiz ends quietly; that concept keeps its status.
-- A grading failure is a 500 `llm: <reason>`; the quiz stays on the same question.
+- Every 10 s the idle client calls `GET /reminders/due`. If that call finds the session
+  expired and unwritten, the server runs the writer before answering the poll.
+- The writer is one Gemini call with no tools, a 10 s timeout and JSON output, in the same
+  shape as the v2 quiz grader: it gets the session's turns and the profile, and returns 0 to
+  3 key points.
+- Each returned point goes through the same word-limit and `find_same` checks as `remember`.
+- The spoken line ("Noted two things.") is delivered as a **notice row** in the reminders
+  table, which the poll already knows how to fetch, speak and acknowledge. This is why v3
+  needs no new endpoint and no new field: a notice is reminder-shaped. The table gets a
+  `kind` column (`reminder` or `notice`) used only inside `store.py`; `list_reminders`
+  filters to `kind = 'reminder'` so notices never appear in "what are my reminders?".
+- The writer never blocks a user query: it runs on the poll, after the answer has been
+  spoken, so it is outside the latency path in spec.md.
+- **Known limitation, stated rather than hidden:** the writer only runs while the client is
+  open. Close the client straight after a conversation and that session's points are lost.
+  A background timer in the server would fix it and is not worth the machinery in v3.
 
 ## System instruction
 
-Serves FR-5, FR-6, FR-10, FR-23, FR-24. A constant in `llm.py`, with values filled in per
-request.
+Serves FR-5, FR-6, FR-10, FR-23, FR-24, FR-28, FR-31, FR-33, FR-34, FR-37. A constant in
+`llm.py`, with values filled in per request. v2's rules are unchanged; v3 adds the first and
+the last four.
 
+- The profile block, rendered by `profile.py`, at the top. Use it to pitch the answer at my
+  level and weigh advice against my goals.
 - Current date, weekday and time in the configured time zone (Asia/Kolkata); home city.
 - Answer in at most 3 sentences and at most 60 words. A list says the total count and the
-  first 5 items (newest notes, soonest reminders); "tell me more" gives the next 5 or one
-  more short layer, within the same limit.
-- Call `web_search` when a question needs live information; put the date or the home city
-  in the query when needed; never put notes, reminders, concepts or screen content in it.
-- Use the tools for notes and reminders; turn relative times into an exact ISO 8601 time
-  with offset; repeat `due_spoken`, never an ISO timestamp or an id.
+  first 5 items.
+- Call `web_search` when a question needs live information; never put notes, reminders,
+  concepts, screen content or memory content in the query.
+- Use the tools for notes and reminders; repeat `due_spoken`, never an ISO timestamp or an id.
 - After any action, repeat it back with the stored values; on a tool error, say what went
   wrong.
-- Call `log_concept` for learning questions only; the existing concept names are listed.
-- Call `start_quiz` on "quiz me" and read the returned question exactly.
+- Call `log_concept` for learning questions only; call `start_quiz` on "quiz me".
 - With an image, answer about what is in it.
+- Call `remember` for "remember that ...", shortening to a key point within the word limit
+  and picking the type; read back what was stored.
+- Call `search_memories` for a question about me or about what we have discussed. With a
+  named time, pass `since`. Answer only from what comes back; if nothing does, say you do
+  not know rather than guessing.
+- Call `forget` to delete; when it returns more than one candidate, name them and ask which,
+  and do not delete until answered.
+- Never reuse an existing memory's wording for a different point. Two things that are not the
+  same thing are two items.
 
 ## Storage
 
-Serves FR-8, FR-9, FR-12 to FR-14, FR-23 to FR-25.
+Serves FR-8, FR-9, FR-12 to FR-14, FR-23 to FR-25, FR-32 to FR-38.
 
 One SQLite file at `data/assistant.db` (path in config, gitignored), opened by `store.py`;
 tables are created at startup.
@@ -184,188 +182,232 @@ tables are created at startup.
 | Table | Columns |
 | --- | --- |
 | notes | id, text, created_at |
-| reminders | id, text, due_at, created_at, status (pending, delivered, cancelled) |
+| reminders | id, text, due_at, created_at, status (pending, delivered, cancelled), |
+| | kind (reminder, notice) |
 | concepts | id, name (unique, case-insensitive), summary, first_asked, last_asked, |
-| | status (new, right, wrong), last_quizzed (empty until quizzed) |
+| | status (new, right, wrong), last_quizzed |
+| memories | id, text, type (fact, project, preference, session), created_at |
+| memories_fts | FTS5 contentless index over memories.text, kept in sync by triggers |
 
-Times are stored as ISO 8601 strings with the configured offset. A reminder is due when
-`status = pending` and `due_at ≤ now`; only `POST /reminders/{id}/ack` sets `delivered`, so a
-reminder survives a client crash. It is "missed" when it was due 60 s or more before the
-audio is fetched (threshold in config). Concepts are never deleted.
+Times are ISO 8601 strings with the configured offset. `kind` is new in v3 and defaults to
+`reminder`, so existing rows need no migration. A wipe (FR-35) deletes every row in
+`memories`; the triggers clear the index with it. Notes, reminders, concepts and the profile
+are untouched by a wipe.
 
 ## Tool functions
 
-Serves FR-7 to FR-10, FR-23 to FR-25. The v1 six plus three new ones.
+Serves FR-7 to FR-10, FR-23 to FR-25, FR-31, FR-33, FR-34, FR-36, FR-37, FR-38. The v2 nine
+plus four.
 
 | Tool | Arguments | Result sent back to Gemini |
 | --- | --- | --- |
 | `web_search` | `query` | `{results: [{title, url, content}]}` or `{error}` |
 | `add_note` | `text` | `{id, text, created_at}` |
-| `list_notes` | none | `{notes: [{id, text, created_at}]}` |
+| `list_notes` | none | `{notes: [...]}` |
 | `add_reminder` | `text`, `due_at` | `{id, text, due_at, due_spoken}` or `{error}` |
-| `list_reminders` | none | `{reminders: [{id, text, due_at, due_spoken}]}` |
-| `cancel_reminder` | `id` | `{id, text, due_at, status: "cancelled"}` or `{error}` |
+| `list_reminders` | none | `{reminders: [...]}` (notices excluded) |
+| `cancel_reminder` | `id` | `{id, text, due_at, status}` or `{error}` |
 | `log_concept` | `name`, `summary` | `{name, summary, status, new}` or `{error}` |
 | `learned_this_week` | none | `{count, names}` |
-| `start_quiz` | none | `{count, question}` (`question` empty when `count` is 0) |
+| `start_quiz` | none | `{count, question}` |
+| `remember` | `text`, `type` | `{id, text, type, created_at}` or `{error}` |
+| `search_memories` | `query` (optional), `since` (optional) | `{count, items: [{id, text, type, created_at}]}` |
+| `forget` | `query` | `{deleted: {...}}`, or `{candidates: [...]}` when more than one matches, or `{error}` |
+| `update_profile` | `slot`, `value` | `{slot, value}` or `{error}` |
+
+Four decisions behind that list, each one keeping the count down. Thirteen declarations
+already go into every request, and a longer list is itself a source of wrong tool choices.
+
+- `search_memories` with no `query` is "list my memories" (FR-36), so listing needs no tool
+  of its own.
+- Wipe (FR-35) is **not** a tool. The confirmation phrase is matched in `main.py` against the
+  transcript, exactly as `QUIZ_STOP_PHRASE` already is. Destructive and exact-match is server
+  logic, not something a language model should be able to decide to call.
+- `update_profile` is only reachable after a yes; `main.py` refuses the call when no proposal
+  is pending.
+- Setup answers never reach Gemini at all.
 
 ## Logging
 
-Serves FR-17. One JSONL line per `/query`: time, question, answer, per-stage timings,
-`searched`, tool calls, error, plus `image_sent`, `session_continued` and `concept`. Each
-tool call has name, arguments and `status`: ok, failed, or refused (no time left, issue #59).
-No key or token ever appears; error text is cut and keys are redacted as in v1.
+Serves FR-17. One JSONL line per `/query`, as in v2, plus three fields: `memories_used` (how
+many items were passed, never their text), `memory_written` (how many the writer kept, on the
+poll line) and `profile_lines`. Memory text never appears in the log, so the log can be read
+and pasted without leaking what is stored. No key or token ever appears.
 
 ## Tech stack
 
-Everything is Python. Only the Gemini and web search calls leave the laptop.
+Everything is Python. Only the Gemini and web search calls leave the laptop. v3 adds no
+dependency.
 
 | Part | Choice | Why |
 | --- | --- | --- |
 | Server | Python 3.11, FastAPI + Uvicorn, 127.0.0.1 | File uploads; no other device |
-| STT | faster-whisper `small.en`, CUDA, float16 | Fast on the RTX 3050 (4 GB) |
+| STT | faster-whisper `small.en`, CUDA, float16 | Measured 26/30; `medium.en` scored 27/30 at +1.1 s, so the swap waits for v6 |
 | LLM | `gemini-3.5-flash-lite`, `google-genai`, minimal thinking | Tools and images, free tier |
 | Web search | Tavily through `tavily-python` | 1,000 free credits a month |
 | Storage | SQLite through `sqlite3` | One local file |
-| Time | `zoneinfo` + `tzdata` | Exact times on Windows |
+| Memory search | SQLite FTS5 | Built in; no dependency, no model, no VRAM |
+| Profile files | PyYAML | Already in the venv as a transitive dependency; confirm before use |
+| Time | `zoneinfo` + `tzdata` | Exact times |
 | TTS | Piper (`piper-tts`), one English voice | Fast and offline |
-| Client | sounddevice, pynput (Right Alt, Right Ctrl), httpx | Small, already pinned |
-| Screenshot and image check | Pillow (new, pending approval) | Capture, resize, JPEG, verify |
+| Client | sounddevice, pynput, httpx | Unchanged from v2 |
+| Screenshot | Pillow | Capture, resize, JPEG, verify |
 | Config | `.env` for keys; `server/config.py`, `client_pc/config.py` | Keys never in git |
-| Tests | pytest with fakes; `run_eval.py` and `run_eval_v2.py` | One command per eval |
+| Tests | pytest with fakes; three eval runners | One command per eval |
+| Compute | RTX 4060 Laptop GPU, 8 GB | Holds Whisper; memory search is CPU and SQLite |
+
+If PyYAML is not already present, the profile files become JSON rather than adding a
+dependency. Check before building M13.
 
 ## Config
 
-New values; every other v1 value stays.
+New values; every other v1 and v2 value stays.
 
 | File | Value | Setting |
 | --- | --- | --- |
-| client_pc/config.py | `VOICE_KEY = "alt_r"` | replaces `PTT_KEY = "f9"` |
-| client_pc/config.py | `LOOK_KEY = "ctrl_r"` | |
-| client_pc/config.py | `SCREENSHOT_MAX_SIDE_PX = 1280` | |
-| client_pc/config.py | `SCREENSHOT_JPEG_QUALITY` | set by the Look spike |
-| server/config.py | `IMAGE_MAX_BYTES = 2_000_000` | 2 MB |
-| server/config.py | `SESSION_TTL_S = 120`, `SESSION_MAX_TURNS = 5` | |
-| server/config.py | `ANSWER_MAX_SENTENCES = 3`, `ANSWER_MAX_WORDS = 60` | |
-| server/config.py | `LIST_MAX_ITEMS = 5` | |
-| server/config.py | `QUIZ_MAX_CONCEPTS = 3`, `QUIZ_ANSWER_WAIT_S = 300` | |
-| server/config.py | `QUIZ_QUESTION = "Explain {name} in one sentence."` | |
-| server/config.py | `QUIZ_STOP_PHRASE = "stop quiz"` | |
-| server/config.py | `LEARNED_DAYS = 7`, `LEARNED_MAX_NAMES = 5` | |
-| eval/config.py | `V2_QUESTIONS_PATH`, `V2_DATA_DIR`, `V2_SCREENSHOT_DIR` | paths |
-| eval/config.py | `LOOK_MEDIAN_MAX_S = 8` | v2 targets in spec.md |
+| server/config.py | `PROFILE_SCHEMA_PATH = "config/profile_schema.yaml"` | committed |
+| server/config.py | `PROFILE_VALUES_PATH = "data/profile.yaml"` | gitignored |
+| server/config.py | `PROFILE_MAX_LINES = 40` | checked at load |
+| server/config.py | `SETUP_SLOTS = [identity, goal_now, goal_long, exploring, style, constraints]` | FR-29 |
+| server/config.py | `SETUP_STOP_PHRASE = "stop setup"` | |
+| server/config.py | `GOAL_STALE_DAYS = 31` | FR-30 |
+| server/config.py | `MEMORY_MAX_WORDS = 12` | FR-32 |
+| server/config.py | `MEMORY_RECALL_MAX = 5`, `MEMORY_LIST_MAX = 5` | FR-36, FR-37 |
+| server/config.py | `MEMORY_SAME_THRESHOLD` | FR-40; set by the M13 spike |
+| server/config.py | `WIPE_CONFIRM_PHRASE = "yes wipe everything"` | FR-35 |
+| server/config.py | `WRITER_MAX_POINTS = 3`, `WRITER_TIMEOUT_S = 10` | FR-39 |
+| eval/config.py | `V3_QUESTIONS_PATH`, `V3_DATA_DIR`, `V3_SEED_PATH` | paths |
+| eval/config.py | `V3_MEDIAN_MAX_S = 5.3` | v3 target in spec.md |
+
+`MEMORY_SAME_THRESHOLD` is the one value that cannot be guessed. The first M13 task is a
+spike that measures it against the five near-miss pairs, the way the Look spike set the JPEG
+quality.
 
 ## Timeouts and errors
 
-Serves FR-3, FR-5, FR-16, FR-24. Each timeout is shorter than the one above it.
+Serves FR-3, FR-5, FR-16, FR-24, FR-39. v2's rows are unchanged; the writer is new.
 
 | Layer | Timeout | On failure |
 | --- | --- | --- |
 | LLM stage | 15 s deadline; last call by 8 s, ends by 18 s | Last call; else `llm` 500 |
 | Gemini call | 10 s, at most 3 tool rounds | Error naming the `llm` stage |
 | Quiz grading call | 10 s, one call, no tools | `llm` 500; quiz stays on question |
+| Session writer call | 10 s, one call, no tools | Logged; points lost; poll answers normally |
+| Memory search | none (local SQLite + FTS5) | `{"error": ...}` to Gemini |
 | `web_search` | 5 s | `{"error": ...}` to Gemini |
-| Notes, reminders, concepts | none (local SQLite) | `{"error": ...}` to Gemini |
 | Server `/query` | none of its own | 400 bad audio or image; 500 stage |
-| Session | 120 s after last answer | Cleared quietly |
-| Quiz answer | 300 s | Quiz ends quietly |
+| Session | 120 s after last answer | Cleared, then written |
 | Client query | 25 s (`QUERY_TIMEOUT_S`) | Error sound; next key press works |
 | Client reminder poll | 20 s (`POLL_TIMEOUT_S`) | Skipped; retried next poll |
 
+The writer runs inside the poll, whose client timeout is 20 s; a 10 s writer call fits. A
+writer failure must never fail the poll, because the poll also delivers real reminders.
+
 ## Repo structure
 
-One file per block, so each task touches as few files as possible. New in v2 are marked.
+New in v3 are marked. Only two paths are added.
 
 ```text
 ai-glasses/
 ├── CLAUDE.md  README.md  requirements.txt  .env.example  .gitignore
+├── config/                # NEW: committed, structure not data
+│   └── profile_schema.yaml
 ├── docs/
-│   ├── roadmap.md        # final goal and versions v1–v7
-│   ├── brief.md  spec.md  design.md  plan.md   # current version (v2)
-│   ├── hardware_plan.md  # older hardware reference, for v7
-│   └── archive/          # vN/ copies of finished versions' docs
+│   ├── roadmap.md
+│   ├── brief.md  spec.md  design.md  plan.md   # current version (v3)
+│   ├── hardware_plan.md
+│   └── archive/           # vN/ copies of finished versions' docs
 ├── server/
-│   ├── main.py           # /query, /session/reset, /reminders/*, /health; stage order
-│   ├── config.py         # all server settings; reads .env
-│   ├── stt.py            # faster-whisper
-│   ├── llm.py            # Gemini + tool-call loop + system instruction + quiz grading
-│   ├── session.py        # NEW: in-memory session, last 5 turns, image, quiz state
-│   ├── tools.py          # tool declarations, dispatch, spoken texts
-│   ├── search.py         # Tavily web search for the web_search tool
-│   ├── store.py          # SQLite: notes, reminders, concepts
-│   ├── tts.py            # Piper + resample to 16 kHz
-│   └── logger.py         # JSONL line
-├── client_pc/
-│   ├── client.py         # two keys, screenshot, sounds, reminder polling
-│   └── config.py         # server address, keys, screenshot size, timeouts, poll
+│   ├── main.py            # stage order; wipe phrase; setup routing; writer on poll
+│   ├── config.py
+│   ├── stt.py
+│   ├── llm.py             # Gemini + tool loop + system instruction + grading + writer
+│   ├── session.py         # turns, image, quiz state, setup state, pending proposal
+│   ├── profile.py         # NEW: schema + values, cap, render, write
+│   ├── tools.py
+│   ├── search.py
+│   ├── store.py           # notes, reminders, concepts, memories, FTS5
+│   ├── tts.py
+│   └── logger.py
+├── client_pc/             # unchanged in v3
+│   ├── client.py
+│   └── config.py
 ├── tests/
-│   ├── conftest.py       # fakes, a fake screen grab, a temporary database
-│   ├── test_server.py    # endpoint tests
-│   └── test_<module>.py  # one module's own logic (NEW: test_session.py)
+│   ├── conftest.py
+│   ├── test_server.py
+│   └── test_<module>.py   # NEW: test_profile.py
 ├── eval/
-│   ├── questions.json    # frozen v1 30-question set, for the regression run
-│   ├── questions_v2.json # NEW: frozen v2 set (Look, follow-ups, concepts, quiz)
-│   ├── config.py         # eval paths, pacing, targets
-│   ├── record.py         # records the v1 clips, and the v2 clips with a set option
-│   ├── run_eval.py       # v1 eval: accuracy + latency
-│   ├── run_eval_v2.py    # NEW: v2 eval, reuses run_eval.py helpers
-│   ├── live_questions.md # 10 questions to speak with the key
-│   ├── live_log.py       # prints the last 10 logged queries
-│   └── results/          # <date>.md and .json per run
-├── data/                 # gitignored
+│   ├── questions.json     # frozen v1 set
+│   ├── questions_v2.json  # frozen v2 set
+│   ├── questions_v3.json  # NEW: frozen v3 set
+│   ├── seed_v3.json       # NEW: the seeded store the recall questions are asked against
+│   ├── config.py
+│   ├── record.py          # --set v3 added
+│   ├── run_eval.py
+│   ├── run_eval_v2.py
+│   ├── run_eval_v3.py     # NEW: reuses run_eval.py helpers
+│   ├── live_questions.md
+│   ├── live_log.py
+│   └── results/
+├── data/                  # gitignored
 │   ├── assistant.db
-│   ├── eval/             # v1 clips
-│   └── eval_v2/          # NEW: v2 clips, and screenshots/ for the Look questions
-├── models/               # Piper voice files, gitignored
-└── logs/                 # queries.jsonl, gitignored
+│   ├── profile.yaml       # NEW: personal; never committed
+│   ├── eval/  eval_v2/
+│   └── eval_v3/           # NEW: v3 clips
+├── models/                # gitignored
+└── logs/                  # gitignored
 ```
+
+`CLAUDE.md`'s "Project structure" section must be updated in the same milestone that creates
+`config/`, or the two disagree.
 
 ## Eval
 
-Serves the v2 quality targets in spec.md.
+Serves the v3 quality targets in spec.md.
 
-- The v1 set (`eval/questions.json`) stays frozen and is re-run unchanged for the regression
-  target with `run_eval.py`.
-- The v2 set is `eval/questions_v2.json`, frozen after its first run. Each row names its
-  clip and, for Look, its screenshot file.
-- v2 clips and the saved screenshots live in `data/eval_v2/` (gitignored, like the v1 clips):
-  screenshots of my study material may hold private or copyrighted content.
-- `eval/record.py` gets an option `--set v2` that uses
-  `eval/questions_v2.json` and saves clips to `data/eval_v2/`
-  (no new recorder file).
-- `run_eval_v2.py` calls `POST /session/reset` before each row (follow-up cases run as one
-  sequence), backs up and restores notes, reminders and concepts as `run_eval.py` does, paces
-  Gemini calls, and writes `eval/results/<date>_v2.md` and `.json`.
+- The v1 and v2 sets stay frozen and are re-run unchanged for the regression targets.
+- The v3 set is `eval/questions_v3.json`, frozen after its first run: 20 recall questions,
+  10 remember commands, 5 forget cases, 10 questions about things never stated, 5 near-miss
+  pairs, and one setup run of 6 answers.
+- `eval/seed_v3.json` is the store the recall questions are asked against. It is committed,
+  because it is invented test data, not my real memories. `data/assistant.db` is never used.
+- `run_eval_v3.py` backs up and restores the memories table **and `data/profile.yaml`**, not
+  just notes, reminders and concepts. A run that leaves a test profile behind would change
+  every later answer.
+- Quota: the writer adds one call per session, and the 10 writer sessions are 10 extra calls
+  on top of the question rows. Budget the v3 run against the 500-a-day limit before starting;
+  the 2026-10-20 re-baseline showed how little headroom a same-day second run has.
 
 ## Key decisions
 
+v2's decisions still hold. New in v3:
+
 | Decision | Chosen | Instead of | Why |
 | --- | --- | --- | --- |
-| Live info | `web_search` run by the server | Search grounding | No grounding quota |
-| Server shape | One process, models loaded at startup | Separate services | Simplest |
-| Transport | One HTTP POST per question, full WAV | Streaming | Fits push-to-talk |
-| Reminder delivery | Poll, fetch audio, then ack | Server push | Nothing lost |
-| Storage | SQLite file on the laptop | A hosted database | Private, no setup |
-| Network | 127.0.0.1 only | Wi-Fi | Auth comes with v5 |
-| Audio format | 16 kHz mono 16-bit everywhere | Each tool's rate | One format |
-| Look image | One JPEG, ≤ 1280 px, per question | Video, full size | Cost, latency |
-| Session | In memory, text of 5 turns + image | Stored, with tools | Small, private |
-| Concepts | Gemini tool + names in the prompt | Embeddings | No new model |
-| Quiz flow | Server owns state; one grading call | Gemini runs it | Predictable |
-| Quiz question | Fixed template | Gemini writes it | Same every time |
+| Recall | SQLite FTS5 behind one interface | Embeddings now | No dependency; the eval decides whether more is needed |
+| Retrieval contract | `search(query, k, since)` | Direct SQL in callers | The backend can change without touching callers |
+| Profile shape | Fixed slots in a schema file | Free-form facts | "What is the profile" is answerable, and another user re-skins it |
+| Profile values | `data/profile.yaml`, gitignored | `config/profile.yaml` | Identity, goals and weak spots do not belong in git history |
+| Profile size | Hard 40-line cap, fails at load | Silent truncation | A silently cut profile is a silently wrong answer |
+| Slot writes | Proposed, confirmed by a yes | Silent self-editing | A quietly corrupted always-on prompt is near impossible to debug |
+| Writer trigger | On the existing reminder poll | A background timer | No new machinery; accepts that it needs the client open |
+| Writer delivery | A notice row in the reminders table | A new endpoint or field | Keeps the frozen API contract |
+| Over-merge guard | In `store.py` | In the prompt only | Issue #116 is what a prompt-only rule buys |
+| Wipe | Phrase matched in `main.py` | A `wipe` tool | A model should not be able to choose to delete everything |
+| Compaction | Not in v3 | Merge and roll up now | Tuning it needs months of real data; v4 |
 
 ## Risks and mitigations
 
 | Risk | Mitigation |
 | --- | --- |
-| Free tier: 15 RPM, 500 RPD | Pace evals; a quiz adds one call per answer |
-| Images slow the Gemini call | 1280 px JPEG; Look latency in the log and the eval |
-| Look on a private screen | Never used there (brief); screenshots never saved |
-| Gemini logs a non-learning question | Examples in the instruction; eval measures it |
-| Gemini makes a duplicate concept | Names listed in the prompt; case-insensitive match |
-| Concept list grows long in the prompt | Fine for v2; v3 adds search |
-| "Stop quiz" misheard during a quiz | It is graded as wrong; I can ask again |
-| Right Alt reported as AltGr by pynput | Checked in the client key spike |
-| Follow-up loses context after 120 s | Expected by FR-21; the eval resets per row |
-| Private content leaks into search queries | Instruction rule; every query is logged |
-| Tavily changes its free plan | Swap `search.py` for Exa |
+| FTS5 misses paraphrased recalls | Exactly what the recall target measures; embeddings are the planned fallback |
+| `MEMORY_SAME_THRESHOLD` set too high or low | Measured by an M13 spike against the 5 near-miss pairs, not guessed |
+| Writer never runs because the client is closed | Stated as a known limitation; a timer is a v4 option |
+| 13 tool declarations confuse tool choice | Wipe and listing were kept out; the eval measures wrong calls |
+| Profile grows past 40 lines | Fails at load with the cap named, not at query time |
+| Personal profile committed by accident | Values live under the already-gitignored `data/` |
+| A test run leaves a seeded profile behind | `run_eval_v3.py` backs up and restores the profile too |
+| Free tier: 15 RPM, 500 RPD | The writer adds a call per session; budget the run in advance |
+| Memory text leaking into a search query | Instruction rule plus the v2 logging of every query |
+| Memory text leaking into the log | The log stores counts, never memory text |
+| Concept over-merge (issue #116) still open in v2 | Not fixed in v2; FR-40 tests the same failure in v3's own writer |
