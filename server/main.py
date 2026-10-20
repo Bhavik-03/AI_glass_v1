@@ -106,10 +106,40 @@ def _error(status_code: int, message: str, record: dict) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"error": message})
 
 
+def _normalised(transcript: str) -> str:
+    """Lower case, punctuation removed, single spaces: the form phrases are matched in."""
+    return " ".join(re.sub(r"[^\w\s]", "", transcript.lower()).split())
+
+
 def _is_stop(transcript: str) -> bool:
     """Whether the transcript says the stop phrase, ignoring case and punctuation (FR-24)."""
-    words = re.sub(r"[^\w\s]", "", transcript.lower()).split()
-    return config.QUIZ_STOP_PHRASE in " ".join(words)
+    return config.QUIZ_STOP_PHRASE in _normalised(transcript)
+
+
+def _wipe_request(record: dict, asked_at: datetime) -> Response:
+    """Ask back for the confirmation phrase; nothing is deleted yet (FR-35)."""
+    record["answer"] = f'Say "{config.WIPE_CONFIRM_PHRASE}" to wipe all your memories.'
+    wav = run_stage("tts", record["timings_ms"], tts.synthesize, record["answer"])
+    # Pending only after the question was spoken, so a failure leaves nothing waiting.
+    session.start_wipe(asked_at)
+    return Response(content=wav, media_type="audio/wav")
+
+
+def _wipe_confirm(record: dict) -> Response:
+    """The turn after a wipe request: the exact phrase wipes, anything else cancels. The
+    wipe happens only after the answer is spoken, so a failure can be retried (FR-35)."""
+    timings = record["timings_ms"]
+    confirmed = _normalised(record["question"]) == config.WIPE_CONFIRM_PHRASE
+    if confirmed:
+        count = store.count_memories()
+        record["answer"] = f"Wiped {count} {'memory' if count == 1 else 'memories'}."
+    else:
+        record["answer"] = "Cancelled. Nothing was deleted."
+    wav = run_stage("tts", timings, tts.synthesize, record["answer"])
+    if confirmed:
+        store.wipe_memories()
+    session.end_wipe()
+    return Response(content=wav, media_type="audio/wav")
 
 
 def _quiz_answer(record: dict, quiz: dict, asked_at: datetime) -> Response:
@@ -165,6 +195,11 @@ def _answer(data: bytes | None, image: bytes | None, record: dict) -> Response:
         asked_at = now()
         if quiz := session.quiz(asked_at):
             return _quiz_answer(record, quiz, asked_at)
+        if session.pending_wipe(asked_at):
+            return _wipe_confirm(record)
+        spoken = f" {_normalised(record['question'])} "
+        if f" {config.WIPE_REQUEST_PHRASE} " in spoken:
+            return _wipe_request(record, asked_at)
         turns = session.turns(asked_at)
         record["session_continued"] = bool(turns)
         # A text follow-up is about the screenshot saved with an earlier turn (FR-21).

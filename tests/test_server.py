@@ -1713,3 +1713,329 @@ def test_fr22_reset_clears_running_quiz(fake_stages, silent_wav):
     assert _post_query(silent_wav).status_code == 200
     assert fake_stages["order"] == ["stt", "llm", "tts"]
     assert fake_stages["grade"] == []
+
+
+# --- wipe memories: request and confirmation (FR-35) ---
+
+WIPE_REQUEST = "wipe my memories"
+WIPE_CONFIRM = "yes wipe everything"
+
+
+def _store_memories(n: int) -> None:
+    from server import store
+
+    for i in range(n):
+        store.add_memory(f"fact number {i}", store.FACT, "2026-10-09T10:00:00+05:30")
+
+
+def _say(fake_stages, silent_wav, transcript: str):
+    fake_stages["transcript"] = transcript
+    return _post_query(silent_wav)
+
+
+def _request_wipe(fake_stages, silent_wav) -> None:
+    assert _say(fake_stages, silent_wav, WIPE_REQUEST).status_code == 200
+
+
+def _other_rows() -> tuple:
+    from server import store
+
+    store.add_note("buy milk", "2026-10-09T10:00:00+05:30")
+    store.add_reminder(
+        "call mom", "2026-10-09T18:00:00+05:30", "2026-10-09T10:00:00+05:30"
+    )
+    store.log_concept("LoRA", "low rank adapters", "2026-10-09T10:00:00+05:30")
+    return _snapshot_other_rows()
+
+
+def _snapshot_other_rows() -> tuple:
+    from server import store
+
+    return (store.list_notes(), store.list_pending(), store.concept_names())
+
+
+def test_fr35_wipe_phrases_default_in_config():
+    """FR-35: config.WIPE_REQUEST_PHRASE is 'wipe my memories' and
+    config.WIPE_CONFIRM_PHRASE is 'yes wipe everything'."""
+    assert config.WIPE_REQUEST_PHRASE == WIPE_REQUEST
+    assert config.WIPE_CONFIRM_PHRASE == WIPE_CONFIRM
+
+
+def test_fr35_request_asks_back_for_the_confirmation_phrase(fake_stages, silent_wav):
+    """FR-35: 'wipe my memories' answers 200 audio/wav with a spoken text that
+    contains the confirmation phrase."""
+    response = _say(fake_stages, silent_wav, "Wipe my memories.")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.content == FAKE_TTS_WAV
+    assert fake_stages["order"] == ["stt", "tts"]
+    assert WIPE_CONFIRM in fake_stages["tts"][0].lower()
+
+
+def test_fr35_request_deletes_nothing(fake_stages, silent_wav):
+    """FR-35: the request turn deletes no memory."""
+    from server import store
+
+    _store_memories(8)
+    _request_wipe(fake_stages, silent_wav)
+    assert store.count_memories() == 8
+
+
+def test_fr35_request_leaves_the_wipe_pending(fake_stages, silent_wav):
+    """FR-35: after the request turn the wipe is pending at the query time."""
+    from server import session
+
+    _request_wipe(fake_stages, silent_wav)
+    assert session.pending_wipe(FIXED_NOW) is True
+
+
+def test_fr35_request_does_not_call_ask(fake_stages, silent_wav):
+    """FR-35: Gemini (llm.ask) is not called on the request turn."""
+    _request_wipe(fake_stages, silent_wav)
+    assert fake_stages["llm"] == []
+    assert fake_stages["grade"] == []
+
+
+def test_fr35_request_phrase_embedded_also_asks_back(fake_stages, silent_wav):
+    """FR-35: a transcript that contains the request phrase ('Please wipe my
+    memories') also asks back and deletes nothing."""
+    from server import session, store
+
+    _store_memories(3)
+    response = _say(fake_stages, silent_wav, "Please, wipe my memories!")
+    assert response.status_code == 200
+    assert fake_stages["llm"] == []
+    assert WIPE_CONFIRM in fake_stages["tts"][0].lower()
+    assert session.pending_wipe(FIXED_NOW) is True
+    assert store.count_memories() == 3
+
+
+def test_fr35_request_adds_no_session_turn(fake_stages, silent_wav):
+    """FR-35: the request turn adds no turn to the session."""
+    from server import session
+
+    _request_wipe(fake_stages, silent_wav)
+    assert session.turns(FIXED_NOW) == []
+
+
+@pytest.mark.parametrize(
+    "transcript",
+    ["Yes wipe everything.", "YES WIPE EVERYTHING", "Yes, wipe everything!"],
+    ids=["period", "upper", "comma-bang"],
+)
+def test_fr35_exact_phrase_wipes_every_memory_and_says_how_many(
+    fake_stages, silent_wav, transcript
+):
+    """FR-35: the exact confirmation phrase (ignoring case and punctuation)
+    wipes every memory and says how many were wiped."""
+    from server import session, store
+
+    _store_memories(8)
+    _request_wipe(fake_stages, silent_wav)
+    response = _say(fake_stages, silent_wav, transcript)
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.content == FAKE_TTS_WAV
+    assert fake_stages["tts"][-1] == "Wiped 8 memories."
+    assert store.count_memories() == 0
+    assert session.pending_wipe(FIXED_NOW) is False
+    assert fake_stages["llm"] == []
+
+
+def test_fr35_confirm_with_one_memory_says_memory_singular(fake_stages, silent_wav):
+    """FR-35: exactly one stored memory is announced as 'Wiped 1 memory.'"""
+    from server import store
+
+    _store_memories(1)
+    _request_wipe(fake_stages, silent_wav)
+    _say(fake_stages, silent_wav, WIPE_CONFIRM)
+    assert fake_stages["tts"][-1] == "Wiped 1 memory."
+    assert store.count_memories() == 0
+
+
+def test_fr35_confirm_with_no_memories_says_zero(fake_stages, silent_wav):
+    """FR-35: with nothing stored the answer is 'Wiped 0 memories.'"""
+    _request_wipe(fake_stages, silent_wav)
+    _say(fake_stages, silent_wav, WIPE_CONFIRM)
+    assert fake_stages["tts"][-1] == "Wiped 0 memories."
+
+
+def test_fr35_wipe_leaves_notes_reminders_and_concepts(fake_stages, silent_wav):
+    """FR-35: a wipe leaves notes, reminders and concepts untouched."""
+    _store_memories(4)
+    before = _other_rows()
+    assert all(before)
+    _request_wipe(fake_stages, silent_wav)
+    _say(fake_stages, silent_wav, WIPE_CONFIRM)
+    assert _snapshot_other_rows() == before
+
+
+@pytest.mark.parametrize(
+    "transcript",
+    ["yes wipe it all", "yes wipe everything now", "wipe everything", "yes"],
+)
+def test_fr35_near_miss_cancels_and_deletes_nothing(
+    fake_stages, silent_wav, transcript
+):
+    """FR-35: anything but the exact phrase deletes nothing, says it was
+    cancelled and clears the pending wipe; Gemini is not called."""
+    from server import session, store
+
+    _store_memories(5)
+    before = _other_rows()
+    _request_wipe(fake_stages, silent_wav)
+    response = _say(fake_stages, silent_wav, transcript)
+    assert response.status_code == 200
+    assert response.content == FAKE_TTS_WAV
+    assert "cancelled" in fake_stages["tts"][-1].lower()
+    assert store.count_memories() == 5
+    assert _snapshot_other_rows() == before
+    assert session.pending_wipe(FIXED_NOW) is False
+    assert fake_stages["llm"] == []
+
+
+def test_fr35_cancel_gives_no_second_chance(fake_stages, silent_wav):
+    """FR-35: after a cancel the old confirmation phrase is an ordinary
+    question: it goes to llm.ask and deletes nothing."""
+    from server import store
+
+    _store_memories(5)
+    _request_wipe(fake_stages, silent_wav)
+    _say(fake_stages, silent_wav, "yes wipe it all")
+    assert _say(fake_stages, silent_wav, WIPE_CONFIRM).status_code == 200
+    assert [q for q, _ in fake_stages["llm"]] == [WIPE_CONFIRM]
+    assert fake_stages["tts"][-1] == FAKE_ANSWER
+    assert store.count_memories() == 5
+
+
+def test_fr35_plain_question_after_cancel_goes_to_ask(fake_stages, silent_wav):
+    """FR-35: after a cancel a normal question is answered by llm.ask."""
+    _request_wipe(fake_stages, silent_wav)
+    _say(fake_stages, silent_wav, "no thanks")
+    assert _say(fake_stages, silent_wav, "what time is it").status_code == 200
+    assert [q for q, _ in fake_stages["llm"]] == ["what time is it"]
+    assert fake_stages["tts"][-1] == FAKE_ANSWER
+
+
+def test_fr35_confirm_phrase_without_request_is_an_ordinary_question(
+    fake_stages, silent_wav
+):
+    """FR-35: the confirmation phrase with no prior request goes to llm.ask
+    and deletes nothing."""
+    from server import store
+
+    _store_memories(3)
+    assert _say(fake_stages, silent_wav, WIPE_CONFIRM).status_code == 200
+    assert [q for q, _ in fake_stages["llm"]] == [WIPE_CONFIRM]
+    assert fake_stages["tts"][-1] == FAKE_ANSWER
+    assert store.count_memories() == 3
+
+
+def test_fr35_ordinary_question_unchanged_without_wipe_words(fake_stages, silent_wav):
+    """FR-35: a normal question still runs stt, llm.ask, tts."""
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["order"] == ["stt", "llm", "tts"]
+
+
+def test_fr35_pending_wipe_expires_at_session_ttl(fake_stages, silent_wav, clock):
+    """FR-35: at exactly SESSION_TTL_S after the request the wipe has expired:
+    the confirmation phrase is an ordinary question and nothing is deleted."""
+    from server import store
+
+    _store_memories(3)
+    _request_wipe(fake_stages, silent_wav)
+    clock.at(config.SESSION_TTL_S)
+    assert _say(fake_stages, silent_wav, WIPE_CONFIRM).status_code == 200
+    assert [q for q, _ in fake_stages["llm"]] == [WIPE_CONFIRM]
+    assert store.count_memories() == 3
+
+
+def test_fr35_confirm_just_before_ttl_still_wipes(fake_stages, silent_wav, clock):
+    """FR-35: one second before SESSION_TTL_S the confirmation still wipes."""
+    from server import store
+
+    _store_memories(3)
+    _request_wipe(fake_stages, silent_wav)
+    clock.at(config.SESSION_TTL_S - 1)
+    _say(fake_stages, silent_wav, WIPE_CONFIRM)
+    assert fake_stages["tts"][-1] == "Wiped 3 memories."
+    assert store.count_memories() == 0
+
+
+def test_fr35_session_reset_clears_pending_wipe(fake_stages, silent_wav):
+    """FR-35: POST /session/reset clears a pending wipe, so the confirmation
+    phrase is an ordinary question afterwards."""
+    from server import session, store
+
+    _store_memories(3)
+    _request_wipe(fake_stages, silent_wav)
+    assert client.post("/session/reset").status_code == 200
+    assert session.pending_wipe(FIXED_NOW) is False
+    _say(fake_stages, silent_wav, WIPE_CONFIRM)
+    assert [q for q, _ in fake_stages["llm"]] == [WIPE_CONFIRM]
+    assert store.count_memories() == 3
+
+
+def test_fr35_tts_failure_on_confirm_returns_500_and_wipes_nothing(
+    fake_stages, silent_wav, monkeypatch
+):
+    """FR-35: if speaking the result fails the response is 500
+    {"error": "tts: no voice"}, no memory is deleted and the wipe is still
+    pending."""
+    from server import session, store
+
+    def fail(text):
+        raise RuntimeError("no voice")
+
+    _store_memories(4)
+    _request_wipe(fake_stages, silent_wav)
+    monkeypatch.setattr("server.tts.synthesize", fail)
+    response = _say(fake_stages, silent_wav, WIPE_CONFIRM)
+    assert response.status_code == 500
+    assert response.json() == {"error": "tts: no voice"}
+    assert store.count_memories() == 4
+    assert session.pending_wipe(FIXED_NOW) is True
+
+
+def test_fr35_retry_after_tts_failure_wipes(fake_stages, silent_wav, monkeypatch):
+    """FR-35: after a failed confirmation turn, repeating the phrase within
+    the window wipes everything."""
+    from server import store
+
+    def fail(text):
+        raise RuntimeError("no voice")
+
+    _store_memories(4)
+    _request_wipe(fake_stages, silent_wav)
+    working = server.tts.synthesize
+    monkeypatch.setattr("server.tts.synthesize", fail)
+    assert _say(fake_stages, silent_wav, WIPE_CONFIRM).status_code == 500
+    monkeypatch.setattr("server.tts.synthesize", working)
+    assert _say(fake_stages, silent_wav, WIPE_CONFIRM).status_code == 200
+    assert fake_stages["tts"][-1] == "Wiped 4 memories."
+    assert store.count_memories() == 0
+
+
+def test_fr17_wipe_turns_write_one_clean_line_each(fake_stages, silent_wav, log_path):
+    """FR-17: the request, the confirmation and a cancel each write one line
+    with question = transcript, answer = spoken text, timings, error null and
+    tool_calls []."""
+    _store_memories(2)
+    _request_wipe(fake_stages, silent_wav)
+    _say(fake_stages, silent_wav, WIPE_CONFIRM)
+    _request_wipe(fake_stages, silent_wav)
+    _say(fake_stages, silent_wav, "yes wipe it all")
+    lines = _log_lines(log_path)
+    assert len(lines) == 4
+    assert [line["question"] for line in lines] == [
+        WIPE_REQUEST,
+        WIPE_CONFIRM,
+        WIPE_REQUEST,
+        "yes wipe it all",
+    ]
+    assert [line["answer"] for line in lines] == fake_stages["tts"]
+    assert lines[1]["answer"] == "Wiped 2 memories."
+    for line in lines:
+        assert line["error"] is None
+        assert line["tool_calls"] == []
+        assert {"stt", "tts"} <= set(line["timings_ms"])
