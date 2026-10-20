@@ -204,7 +204,7 @@ only acts when asked. v3 reuses the poll the client already makes.
 
 ## System instruction
 
-Serves FR-5, FR-6, FR-10, FR-23, FR-24, FR-28, FR-31, FR-33, FR-34, FR-37. A constant in
+Serves FR-5, FR-6, FR-10, FR-23, FR-24, FR-28, FR-31, FR-33, FR-34, FR-35, FR-37. A constant in
 `llm.py`, with values filled in per request. v2's rules are unchanged; v3 adds the first and
 the last four.
 
@@ -229,6 +229,9 @@ the last four.
   and do not delete until answered.
 - Never reuse an existing memory's wording for a different point. Two things that are not the
   same thing are two items.
+- When the user asks to delete everything in any other wording ("delete all my memories",
+  "clear everything"), tell them to say "wipe my memories" exactly. You have no wipe tool, and
+  `forget` never deletes more than one item.
 - When the conversation repeatedly contradicts a profile slot, say so in one sentence and ask
   whether to update it. Never call `update_profile` without a yes in the previous turn, and
   do not ask twice in one session.
@@ -273,7 +276,7 @@ plus four.
 | `start_quiz` | none | `{count, question}` |
 | `remember` | `text`, `type` | `{id, text, type, created_at, new}` or `{error}` |
 | `search_memories` | `query`, `since`, `until` (all optional) | `{count, items: [{id, text, |
-| | | type, created_at}]}` |
+| | | type, created_at}]}`; `count` is the total matches in the window, `items` at most 5 |
 | `forget` | `query` | `{deleted: {...}}`, or `{candidates: [...]}` when more than one |
 | | | matches, or `{error}` |
 | `update_profile` | `slot`, `value` | `{slot, value}` or `{error}` |
@@ -350,6 +353,7 @@ New values; every other v1 and v2 value stays.
 | server/config.py | `MEMORY_RECALL_MAX = 5`, `MEMORY_LIST_MAX = 5` | FR-36, FR-37 |
 | server/config.py | `MEMORY_SAME_THRESHOLD` | FR-40; set by the M13 spike |
 | server/config.py | `WIPE_CONFIRM_PHRASE = "yes wipe everything"` | FR-35 |
+| server/config.py | `WIPE_REQUEST_PHRASE = "wipe my memories"` | FR-35; matched in `main.py` |
 | server/config.py | `WRITER_MAX_POINTS = 3`, `WRITER_TIMEOUT_S = 10` | FR-39 |
 | server/config.py | `WRITER_PENDING_MAX = 3` | expired sessions awaiting the writer |
 | eval/config.py | `V3_QUESTIONS_PATH`, `V3_DATA_DIR`, `V3_SEED_PATH` | paths |
