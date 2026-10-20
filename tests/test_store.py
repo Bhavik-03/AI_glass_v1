@@ -829,3 +829,126 @@ def test_fr37_each_item_has_four_fields(db):
             "created_at": MEM_TIME,
         }
     ]
+
+
+def add_at(text: str, created_at: str) -> dict:
+    return store.add_memory(text, store.FACT, created_at)
+
+
+def found_ids(query: str, k: int = 10, **window) -> list[int]:
+    return sorted(m["id"] for m in store.search_memories(query, k, **window))
+
+
+def test_fr38_since_excludes_item_before_and_keeps_item_inside(db):
+    """since drops an item created before it and keeps one created inside the window."""
+    add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    inside = add_at("annotation notes from September", "2026-09-15T10:00:00+05:30")
+
+    assert found_ids("annotation", since="2026-09-01") == [inside["id"]]
+
+
+def test_fr38_until_excludes_item_after_and_keeps_item_inside(db):
+    """until drops an item created after it and keeps one created inside the window."""
+    inside = add_at("annotation notes from September", "2026-09-15T10:00:00+05:30")
+    add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+
+    assert found_ids("annotation", until="2026-10-01") == [inside["id"]]
+
+
+def test_fr38_both_bounds_return_only_item_inside_window(db):
+    """With since and until, only the item inside the window is returned."""
+    add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    inside = add_at("annotation notes from September", "2026-09-15T10:00:00+05:30")
+    add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+
+    assert found_ids("annotation", since="2026-09-01", until="2026-10-01") == [
+        inside["id"]
+    ]
+
+
+def test_fr38_since_is_inclusive(db):
+    """An item created exactly at since is included."""
+    exact = add_at("annotation at the boundary", "2026-09-01T00:00:00+05:30")
+    add_at("annotation just before", "2026-08-31T23:59:59+05:30")
+
+    assert found_ids("annotation", since="2026-09-01T00:00:00+05:30") == [exact["id"]]
+
+
+def test_fr38_until_is_exclusive(db):
+    """An item created exactly at until is excluded; one just before is included."""
+    before = add_at("annotation just before", "2026-09-30T23:59:59+05:30")
+    add_at("annotation at the boundary", "2026-10-01T00:00:00+05:30")
+
+    assert found_ids("annotation", until="2026-10-01T00:00:00+05:30") == [before["id"]]
+
+
+def test_fr38_no_time_returns_both_items(db):
+    """The same question with no since and until returns both items."""
+    a = add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    b = add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+
+    assert found_ids("annotation") == sorted([a["id"], b["id"]])
+
+
+def test_fr38_filter_applies_before_ranking_and_k(db):
+    """Outside items that rank higher cannot crowd the inside items out of the top k."""
+    outside = [
+        add_at("annotation dataset guidelines review", f"2026-08-0{n}T10:00:00+05:30")
+        for n in range(1, 5)
+    ]
+    inside = [
+        add_at("annotation was mentioned", "2026-09-10T10:00:00+05:30"),
+        add_at("annotation came up again", "2026-09-12T10:00:00+05:30"),
+    ]
+    query = "annotation dataset guidelines review"
+    unfiltered = {m["id"] for m in store.search_memories(query, 2)}
+    assert unfiltered <= {o["id"] for o in outside}
+
+    found = store.search_memories(query, 2, since="2026-09-01", until="2026-10-01")
+
+    assert sorted(m["id"] for m in found) == sorted(i["id"] for i in inside)
+
+
+@pytest.mark.parametrize("bad", ["last week", ""])
+def test_fr38_unparseable_since_means_no_filter(db, bad):
+    """An unparseable since is ignored: same results as no filter, not no results."""
+    a = add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    b = add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+
+    assert found_ids("annotation", since=bad) == sorted([a["id"], b["id"]])
+
+
+@pytest.mark.parametrize("bad", ["next month", ""])
+def test_fr38_unparseable_until_means_no_filter(db, bad):
+    """An unparseable until is ignored: same results as no filter, not no results."""
+    a = add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    b = add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+
+    assert found_ids("annotation", until=bad) == sorted([a["id"], b["id"]])
+
+
+def test_fr38_good_since_with_bad_until_applies_only_since(db):
+    """A bad until is ignored while a good since still filters."""
+    add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    late = add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+
+    assert found_ids("annotation", since="2026-09-01", until="soon") == [late["id"]]
+
+
+def test_fr38_good_until_with_bad_since_applies_only_until(db):
+    """A bad since is ignored while a good until still filters."""
+    early = add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+
+    assert found_ids("annotation", since="last week", until="2026-09-01") == [
+        early["id"]
+    ]
+
+
+def test_fr38_bounds_with_other_offset_compare_as_same_moment(db):
+    """A Z bound equals the same moment in +05:30: 2026-09-01T00:00:00Z is 05:30 IST."""
+    before = add_at("annotation before the moment", "2026-09-01T05:29:59+05:30")
+    exact = add_at("annotation at the moment", "2026-09-01T05:30:00+05:30")
+
+    assert found_ids("annotation", since="2026-09-01T00:00:00Z") == [exact["id"]]
+    assert found_ids("annotation", until="2026-09-01T00:00:00Z") == [before["id"]]

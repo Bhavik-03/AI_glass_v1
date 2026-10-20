@@ -95,17 +95,37 @@ def _match_query(question: str) -> str:
     return " OR ".join(f'"{w}"' for w in words if w not in STOPWORDS)
 
 
-def search_memories(query: str, k: int) -> list[dict]:
-    """The `k` memories that best match the question's content words, best first."""
+def _valid_bound(con: sqlite3.Connection, value: str | None) -> str | None:
+    """`value` if SQLite can read it as a date or date-time, else None (no filter)."""
+    if (
+        value is None
+        or con.execute("SELECT julianday(?)", (value,)).fetchone()[0] is None
+    ):
+        return None
+    return value
+
+
+def search_memories(
+    query: str, k: int, since: str | None = None, until: str | None = None
+) -> list[dict]:
+    """The `k` memories that best match the question, best first.
+
+    `since` (inclusive) and `until` (exclusive) are ISO 8601 and narrow the candidates by
+    `created_at` before ranking; a bound SQLite cannot read is ignored.
+    """
     match = _match_query(query)
     if not match:
         return []
     with _connect() as con:
+        since, until = _valid_bound(con, since), _valid_bound(con, until)
         rows = con.execute(
             "SELECT m.id, m.text, m.type, m.created_at FROM memories_fts"
             " JOIN memories m ON m.id = memories_fts.rowid"
-            " WHERE memories_fts MATCH ? ORDER BY bm25(memories_fts), m.id DESC LIMIT ?",
-            (match, k),
+            " WHERE memories_fts MATCH ?"
+            " AND (? IS NULL OR julianday(m.created_at) >= julianday(?))"
+            " AND (? IS NULL OR julianday(m.created_at) < julianday(?))"
+            " ORDER BY bm25(memories_fts), m.id DESC LIMIT ?",
+            (match, since, since, until, until, k),
         ).fetchall()
     return [dict(row) for row in rows]
 
