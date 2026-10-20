@@ -13,7 +13,7 @@ Gemini 3.5 Flash-Lite with function calling and the screenshot as an image
 local) → answer WAV back. A 120 s in-memory session keeps the last 5 turns for
 follow-ups; "quiz me" quizzes logged concepts. The client polls for due
 reminders and speaks them. New in v3: a profile of fixed slots
-(`config/profile.yaml`, schema in `config/profile_schema.yaml`) is in every
+(`data/profile.json`, gitignored; schema in `config/profile_schema.json`) is in every
 prompt; memory items (key points of about 12 words, in SQLite) are stored with
 "remember that ...", recalled by question through SQLite FTS5 search, listed,
 forgotten or wiped, and a session writer keeps 0 to 3 key points when a
@@ -40,6 +40,8 @@ Docs win over code. If docs are unclear or contradict each other, stop and ask; 
 ```text
 ai-glasses/
 ├── CLAUDE.md  README.md  requirements.txt  .env.example  .gitignore  .gitattributes
+├── config/                # committed structure, never personal data
+│   └── profile_schema.json  # the profile's slots: name, description, setup question
 ├── docs/                  # roadmap, brief, spec, design, plan, hardware_plan, archive/
 ├── server/
 │   ├── main.py            # FastAPI app: /query, /session/reset,
@@ -50,7 +52,8 @@ ai-glasses/
 │   ├── session.py         # in-memory session: 5 turns, image, quiz state
 │   ├── tools.py           # tool declarations, dispatch, spoken reminder text
 │   ├── search.py          # Tavily web search for the web_search tool
-│   ├── store.py           # SQLite: notes, reminders and concepts
+│   ├── profile.py         # profile schema + values, 40-line cap, render, write
+│   ├── store.py           # SQLite: notes, reminders, concepts, memories + FTS5
 │   ├── tts.py             # Piper + resample to 16 kHz
 │   └── logger.py          # JSONL line
 ├── client_pc/
@@ -68,11 +71,16 @@ ai-glasses/
 │   ├── record.py          # records the 30 clips into data/eval/
 │   ├── run_eval.py        # runs the eval: accuracy + latency
 │   ├── run_eval_v2.py     # runs the v2 eval; reuses run_eval.py helpers
+│   ├── questions_v3.json  # v3 eval set, frozen after its first run
+│   ├── seed_v3.json       # the seeded store the v3 recall questions run against
+│   ├── run_eval_v3.py     # runs the v3 eval; reuses run_eval.py helpers
 │   ├── live_questions.md  # 10 questions to speak with the key
 │   ├── live_log.py        # prints the last 10 logged queries
 │   └── results/           # <date>.md and .json per run
 ├── data/                  # assistant.db; eval/ clips; gitignored
-│   └── eval_v2/           # v2 clips and screenshots/ for Look questions
+│   ├── profile.json       # profile VALUES: personal, never committed
+│   ├── eval_v2/           # v2 clips and screenshots/ for Look questions
+│   └── eval_v3/           # v3 clips
 ├── models/                # Piper voice files, gitignored
 ├── logs/                  # queries.jsonl, gitignored
 └── .claude/               # Claude Code setup: skills, agents, settings
@@ -109,6 +117,9 @@ ai-glasses/
 - Every query, failed ones included, writes one JSONL line: question, answer, per-stage timings,
   searched or not, tool calls (each ok, failed or refused), error,
   image sent or not (never the image), session continued or not, concept logged
+- From v3 the session writer also writes one JSONL line, even though it runs on the reminder
+  poll and not on a query: how many points it kept, its timing and any error. It never writes
+  memory text
 
 ## Code rules
 - Files go only where "Project structure" shows. No new files or folders without asking.

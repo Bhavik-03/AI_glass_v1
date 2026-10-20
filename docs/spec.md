@@ -34,7 +34,7 @@ Quiz flow: "quiz me" starts a quiz of up to 3 concepts. Each key press after a q
 the answer; the server grades it in one line and asks the next question, then speaks the
 score.
 
-Profile flow: the server loads `config/profile.yaml` at startup and puts the whole profile
+Profile flow: the server loads `data/profile.json` at startup and puts the whole profile
 in the system instruction of every Gemini call.
 
 Memory flow: memory commands and recall go through tool functions. The server searches the
@@ -312,7 +312,7 @@ FR-26 onwards are new in v3.
 
 ### FR-26 Profile schema
 
-- Requirement: The profile's slots are defined in `config/profile_schema.yaml`, not in code.
+- Requirement: The profile's slots are defined in `config/profile_schema.json`, not in code.
   Each slot has a name, a one-line description and the question asked for it at setup.
   Changing the file changes the slots with no Python change, so a different kind of user
   gets a different profile. The default schema has ten slots: identity, goal_now, goal_mid,
@@ -324,7 +324,7 @@ FR-26 onwards are new in v3.
 
 ### FR-27 Profile values
 
-- Requirement: Profile values live in `data/profile.yaml`, one line per slot, readable and
+- Requirement: Profile values live in `data/profile.json`, one line per slot, readable and
   editable by hand. A value a slot has no schema entry for is ignored with a logged warning,
   not an error. An empty slot is allowed
 - Input → Output: Values file → the profile the assistant holds
@@ -344,12 +344,12 @@ FR-26 onwards are new in v3.
 
 ### FR-29 First-run setup
 
-- Requirement: When `data/profile.yaml` is missing or empty, the next question starts
+- Requirement: When `data/profile.json` is missing or empty, the next question starts
   setup instead: the assistant asks the six setup slots in schema order (identity, goal_now,
   goal_long, exploring, style, constraints), one per key press, and writes the answers to
   the file. The other slots stay empty. Setup can be left by saying "stop setup"; what was
   answered is kept
-- Input → Output: Spoken answers → `data/profile.yaml`
+- Input → Output: Spoken answers → `data/profile.json`
 - Acceptance: With no profile file, the first query is answered with the first setup
   question, not a normal answer; six answers fill six slots in the file and the seventh
   query is answered normally; "stop setup" leaves setup and keeps the slots already
@@ -429,8 +429,9 @@ FR-26 onwards are new in v3.
 
 ### FR-37 Recall (changed backend in v3)
 
-- Requirement: Recall goes through one interface, `search(query, k) -> items`, so the
-  ranking backend can be replaced without touching its callers. v3 implements it with SQLite
+- Requirement: Recall goes through one interface,
+  `search_memories(query, k, since=None)`, so the ranking backend can be replaced without
+  touching its callers. v3 implements it with SQLite
   FTS5 full-text search, which adds no dependency. At most `MEMORY_RECALL_MAX` (5) items
   reach Gemini. The whole store is never sent, to any model or any tool
 - Input → Output: Question → at most 5 items in the Gemini request
@@ -592,9 +593,16 @@ database. The evaluation below uses the real models.
    - Setup: pass when each of the six slots holds what was said.
    - Auto-writer: scored against the rule in brief.md, immediately after each session, never
      batched.
-5. Report per-group accuracy, median and worst latency, store size after the 10 writer
+5. The 10 writer sessions run as their own phase, after the question rows and with no
+   `POST /session/reset` between them. The writer fires on the reminder poll when a session
+   expires, so each session must be allowed to lapse its 120 s TTL before the poll is
+   called. Budget about 20 minutes of wall clock for this phase.
+6. `MEMORY_SAME_THRESHOLD` is tuned against its own pairs, written for the M13 spike and
+   never placed in `questions_v3.json`. Tuning it on the five near-miss pairs the eval then
+   scores would make that target measure nothing.
+7. Report per-group accuracy, median and worst latency, store size after the 10 writer
    sessions, and the results of both regression re-runs.
-6. Re-run the whole set whenever the model, prompt, tool declarations or the search
+8. Re-run the whole set whenever the model, prompt, tool declarations or the search
    implementation change.
 
 The home city for weather questions comes from the server config.
@@ -607,11 +615,11 @@ The home city for weather questions comes from the server config.
 
 ## Decisions settled in Design
 
-- [ ] How the profile reaches the system instruction, and where the 40-line cap is enforced
-- [ ] Where `config/` sits in the project structure, and whether CLAUDE.md's structure
+- [x] How the profile reaches the system instruction, and where the 40-line cap is enforced
+- [x] Where `config/` sits in the project structure, and whether CLAUDE.md's structure
       section is updated in the same change
-- [ ] Whether memory commands and recall are tool functions or server logic
-- [ ] The FTS5 table design, and how items are tokenised for search
-- [ ] What counts as a session ending, and what triggers the writer call
-- [ ] How setup (FR-29) interrupts the normal query path
-- [ ] How the eval seeds its store and near-miss pairs
+- [x] Whether memory commands and recall are tool functions or server logic
+- [x] The FTS5 table design, and how items are tokenised for search
+- [x] What counts as a session ending, and what triggers the writer call
+- [x] How setup (FR-29) interrupts the normal query path
+- [x] How the eval seeds its store and near-miss pairs

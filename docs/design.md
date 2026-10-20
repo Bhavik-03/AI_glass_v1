@@ -70,13 +70,34 @@ name for a different concept (issue #116, found in the 2026-10-20 re-baseline). 
 writer has the same shape, so FR-40 makes not doing it a tested requirement rather than an
 instruction and a hope.
 
+## Sessions
+
+Serves FR-21, FR-22, FR-29, FR-31, FR-39. v2's behaviour is unchanged; v3 adds two pieces of
+state and one consequence.
+
+- `session.py` holds one session in memory, guarded by a `threading.Lock`.
+- It keeps the final question and answer text of the last 5 turns plus the most recent image,
+  never tool calls or tool results.
+- The session ends 120 s after the last answer (`SESSION_TTL_S`); while a quiz runs it waits
+  up to 300 s per answer. An expired session is cleared on the next read.
+- NEW: it also holds the **setup state** (which slot is being asked, and the answers so far)
+  and any **pending slot proposal** (the slot, the proposed value, and whether it was already
+  declined this session). Both sit behind the same lock as the quiz state.
+- NEW: a session is marked **unwritten** when it expires, so the writer runs exactly once per
+  session and never twice.
+- `POST /session/reset` clears the turns, the image, a running quiz, the setup state and any
+  pending proposal. It also marks the session written, so a reset session is never written
+  afterwards. This is what keeps eval rows from leaking memories into each other.
+- Restarting the server clears the session. Setup answers already written to disk survive;
+  an unfinished setup restarts from the first unanswered slot.
+
 ## Profile
 
 Serves FR-26 to FR-29, FR-31.
 
-- `config/profile_schema.yaml` defines the slots: name, a one-line description, and the
+- `config/profile_schema.json` defines the slots: name, a one-line description, and the
   question asked at setup. It is committed to git: it is structure, not personal data.
-- `data/profile.yaml` holds the values. It is **gitignored**, like `assistant.db`, because
+- `data/profile.json` holds the values. It is **gitignored**, like `assistant.db`, because
   it holds identity, goals and weak spots. The repo is private today, but git history is
   permanent and the repo may not always be.
 - `profile.py` loads both at startup. A malformed schema raises at startup with a clear
@@ -84,8 +105,11 @@ Serves FR-26 to FR-29, FR-31.
   missing values file means an empty profile, which triggers setup.
 - The rendered profile block is built once per request and placed in the system instruction.
   Empty slots are left out entirely, so an empty profile adds nothing.
-- The 40-line cap (`PROFILE_MAX_LINES`) is enforced **at load**, not at render, so an
-  oversized profile fails once at startup instead of silently on every query.
+- The 40-line cap (`PROFILE_MAX_LINES`) is enforced **at load and at every write**. At load
+  it fails fast at startup rather than silently on every query. At write, a confirmed
+  `update_profile` or setup answer that would take the profile over the cap is refused and
+  the caller is told; without that check a write could succeed and then stop the server
+  starting next time.
 - Setup (FR-29) runs when the values file is missing or empty. The session holds the setup
   state, like the quiz state: each key press answers the current slot, and `SETUP_STOP_PHRASE`
   ("stop setup") leaves setup keeping what was answered. While setup runs, `/query` skips the
@@ -119,6 +143,13 @@ Serves FR-32 to FR-38, FR-40.
   candidate text through `store.find_same(text)`, which returns a match only above a
   similarity floor; anything below it is a new row. The prompt also says it, but the store
   is what enforces it.
+- `find_same` is a floor, not a guarantee, and the design should not pretend otherwise. It
+  compares words, so it catches the obvious collisions and will miss the same point phrased
+  differently — the same weakness FTS5 has for recall. What gets through is what the FR-40
+  target measures.
+- `MEMORY_SAME_THRESHOLD` is tuned by the M13 spike against **its own pairs**, written for
+  the spike and never placed in `questions_v3.json`. Tuning it on the five near-miss pairs
+  the eval then scores would make that target measure nothing.
 
 ## Session writer
 
@@ -171,6 +202,9 @@ the last four.
   and do not delete until answered.
 - Never reuse an existing memory's wording for a different point. Two things that are not the
   same thing are two items.
+- When the conversation repeatedly contradicts a profile slot, say so in one sentence and ask
+  whether to update it. Never call `update_profile` without a yes in the previous turn, and
+  do not ask twice in one session.
 
 ## Storage
 
@@ -211,8 +245,10 @@ plus four.
 | `learned_this_week` | none | `{count, names}` |
 | `start_quiz` | none | `{count, question}` |
 | `remember` | `text`, `type` | `{id, text, type, created_at}` or `{error}` |
-| `search_memories` | `query` (optional), `since` (optional) | `{count, items: [{id, text, type, created_at}]}` |
-| `forget` | `query` | `{deleted: {...}}`, or `{candidates: [...]}` when more than one matches, or `{error}` |
+| `search_memories` | `query` (optional), `since` (optional) | `{count, items: [{id, text, |
+| | | type, created_at}]}` |
+| `forget` | `query` | `{deleted: {...}}`, or `{candidates: [...]}` when more than one |
+| | | matches, or `{error}` |
 | `update_profile` | `slot`, `value` | `{slot, value}` or `{error}` |
 
 Four decisions behind that list, each one keeping the count down. Thirteen declarations
@@ -229,10 +265,17 @@ already go into every request, and a longer list is itself a source of wrong too
 
 ## Logging
 
-Serves FR-17. One JSONL line per `/query`, as in v2, plus three fields: `memories_used` (how
-many items were passed, never their text), `memory_written` (how many the writer kept, on the
-poll line) and `profile_lines`. Memory text never appears in the log, so the log can be read
-and pasted without leaking what is stored. No key or token ever appears.
+Serves FR-17. One JSONL line per `/query`, as in v2, plus two fields: `memories_used` (how
+many items were passed, never their text) and `profile_lines`.
+
+The session writer also writes **one line of its own**, even though it runs on the reminder
+poll and not on a query: how many points it kept, its timing and any error. This is a
+deliberate change to CLAUDE.md's "one line per query" rule, made because the v2 concept bug
+(issue #116) was only diagnosable because every call left a line. A writer that stored the
+wrong thing silently would leave nothing to look at.
+
+Memory text never appears in the log, so the log can be read and pasted without leaking what
+is stored. No key or token ever appears.
 
 ## Tech stack
 
@@ -242,12 +285,14 @@ dependency.
 | Part | Choice | Why |
 | --- | --- | --- |
 | Server | Python 3.11, FastAPI + Uvicorn, 127.0.0.1 | File uploads; no other device |
-| STT | faster-whisper `small.en`, CUDA, float16 | Measured 26/30; `medium.en` scored 27/30 at +1.1 s, so the swap waits for v6 |
+| STT | faster-whisper `small.en`, CUDA, float16 | Measured 26/30; `medium.en` scored |
+| | | 27/30 at +1.1 s, so the swap waits for v6 |
 | LLM | `gemini-3.5-flash-lite`, `google-genai`, minimal thinking | Tools and images, free tier |
 | Web search | Tavily through `tavily-python` | 1,000 free credits a month |
 | Storage | SQLite through `sqlite3` | One local file |
 | Memory search | SQLite FTS5 | Built in; no dependency, no model, no VRAM |
-| Profile files | PyYAML | Already in the venv as a transitive dependency; confirm before use |
+| Profile files | JSON, `json` from the stdlib | PyYAML is transitive only; a direct |
+| | | dependency needs approval, and v3 adds none |
 | Time | `zoneinfo` + `tzdata` | Exact times |
 | TTS | Piper (`piper-tts`), one English voice | Fast and offline |
 | Client | sounddevice, pynput, httpx | Unchanged from v2 |
@@ -256,8 +301,10 @@ dependency.
 | Tests | pytest with fakes; three eval runners | One command per eval |
 | Compute | RTX 4060 Laptop GPU, 8 GB | Holds Whisper; memory search is CPU and SQLite |
 
-If PyYAML is not already present, the profile files become JSON rather than adding a
-dependency. Check before building M13.
+Checked on 2026-10-20: PyYAML 6.0.3 is in the venv, but only because ctranslate2 and
+huggingface_hub pull it in, and it is not in `requirements.txt`. Both profile files are
+therefore JSON. The cost is real and small: no comments in the schema file, and quotes when
+hand-editing.
 
 ## Config
 
@@ -265,10 +312,11 @@ New values; every other v1 and v2 value stays.
 
 | File | Value | Setting |
 | --- | --- | --- |
-| server/config.py | `PROFILE_SCHEMA_PATH = "config/profile_schema.yaml"` | committed |
-| server/config.py | `PROFILE_VALUES_PATH = "data/profile.yaml"` | gitignored |
+| server/config.py | `PROFILE_SCHEMA_PATH = "config/profile_schema.json"` | committed |
+| server/config.py | `PROFILE_VALUES_PATH = "data/profile.json"` | gitignored |
 | server/config.py | `PROFILE_MAX_LINES = 40` | checked at load |
-| server/config.py | `SETUP_SLOTS = [identity, goal_now, goal_long, exploring, style, constraints]` | FR-29 |
+| server/config.py | `SETUP_SLOTS` = identity, goal_now, goal_long, exploring, style, | FR-29 |
+| | constraints | |
 | server/config.py | `SETUP_STOP_PHRASE = "stop setup"` | |
 | server/config.py | `GOAL_STALE_DAYS = 31` | FR-30 |
 | server/config.py | `MEMORY_MAX_WORDS = 12` | FR-32 |
@@ -305,13 +353,17 @@ writer failure must never fail the poll, because the poll also delivers real rem
 
 ## Repo structure
 
-New in v3 are marked. Only two paths are added.
+New in v3 are marked. Seven paths are added: `config/`, `server/profile.py`,
+`tests/test_profile.py`, `eval/questions_v3.json`, `eval/seed_v3.json`,
+`eval/run_eval_v3.py`, and under the gitignored `data/`, `profile.json` and `eval_v3/`.
+CLAUDE.md's "Project structure" section must list all of them in the same milestone that
+creates them, not just `config/`.
 
 ```text
 ai-glasses/
 ├── CLAUDE.md  README.md  requirements.txt  .env.example  .gitignore
 ├── config/                # NEW: committed, structure not data
-│   └── profile_schema.yaml
+│   └── profile_schema.json
 ├── docs/
 │   ├── roadmap.md
 │   ├── brief.md  spec.md  design.md  plan.md   # current version (v3)
@@ -351,7 +403,7 @@ ai-glasses/
 │   └── results/
 ├── data/                  # gitignored
 │   ├── assistant.db
-│   ├── profile.yaml       # NEW: personal; never committed
+│   ├── profile.json       # NEW: personal; never committed
 │   ├── eval/  eval_v2/
 │   └── eval_v3/           # NEW: v3 clips
 ├── models/                # gitignored
@@ -371,9 +423,14 @@ Serves the v3 quality targets in spec.md.
   pairs, and one setup run of 6 answers.
 - `eval/seed_v3.json` is the store the recall questions are asked against. It is committed,
   because it is invented test data, not my real memories. `data/assistant.db` is never used.
-- `run_eval_v3.py` backs up and restores the memories table **and `data/profile.yaml`**, not
+- `run_eval_v3.py` backs up and restores the memories table **and `data/profile.json`**, not
   just notes, reminders and concepts. A run that leaves a test profile behind would change
   every later answer.
+- The 10 writer sessions run as their own phase, after the question rows, with no
+  `POST /session/reset` between them. The writer only fires when a session expires, and a
+  reset marks the session written, so a reset phase would never drive it at all. Each
+  session must lapse its 120 s TTL before the poll is called: budget about 20 minutes of
+  wall clock.
 - Quota: the writer adds one call per session, and the 10 writer sessions are 10 extra calls
   on top of the question rows. Budget the v3 run against the 500-a-day limit before starting;
   the 2026-10-20 re-baseline showed how little headroom a same-day second run has.
@@ -384,30 +441,52 @@ v2's decisions still hold. New in v3:
 
 | Decision | Chosen | Instead of | Why |
 | --- | --- | --- | --- |
-| Recall | SQLite FTS5 behind one interface | Embeddings now | No dependency; the eval decides whether more is needed |
-| Retrieval contract | `search(query, k, since)` | Direct SQL in callers | The backend can change without touching callers |
-| Profile shape | Fixed slots in a schema file | Free-form facts | "What is the profile" is answerable, and another user re-skins it |
-| Profile values | `data/profile.yaml`, gitignored | `config/profile.yaml` | Identity, goals and weak spots do not belong in git history |
-| Profile size | Hard 40-line cap, fails at load | Silent truncation | A silently cut profile is a silently wrong answer |
-| Slot writes | Proposed, confirmed by a yes | Silent self-editing | A quietly corrupted always-on prompt is near impossible to debug |
-| Writer trigger | On the existing reminder poll | A background timer | No new machinery; accepts that it needs the client open |
-| Writer delivery | A notice row in the reminders table | A new endpoint or field | Keeps the frozen API contract |
-| Over-merge guard | In `store.py` | In the prompt only | Issue #116 is what a prompt-only rule buys |
-| Wipe | Phrase matched in `main.py` | A `wipe` tool | A model should not be able to choose to delete everything |
+| Recall | SQLite FTS5 behind one interface | Embeddings now | No dependency; the eval |
+| | | | decides if more is needed |
+| Retrieval contract | `search_memories(query, k, since)` | Direct SQL in callers | The |
+| | | | backend can change freely |
+| Profile shape | Fixed slots in a schema file | Free-form facts | "What is the profile" |
+| | | | is answerable; re-skinnable |
+| Profile values | `data/profile.json`, gitignored | `config/profile.json` | Identity and |
+| | | | weak spots stay out of git |
+| Profile size | Hard cap, fails at load and write | Silent truncation | A silently cut |
+| | | | profile is a wrong answer |
+| Slot writes | Proposed, confirmed by a yes | Silent self-editing | A quietly corrupted always-on |
+|  |  |  | prompt is near impossible to debug |
+| Writer trigger | On the existing reminder poll | A background timer | No new |
+|  |  |  | needs the client open |
+| Writer delivery | A notice row in reminders | A new endpoint or field | Keeps the |
+| | | | frozen API contract |
+| Over-merge guard | In `store.py` | In the prompt only | Issue #116 is what a prompt-only rule |
+|  |  |  | buys |
+| Wipe | Phrase matched in `main.py` | A `wipe` tool | A model should not be able to choose to |
+|  |  |  | delete everything |
+| Profile file format | JSON, stdlib | YAML with PyYAML | PyYAML is transitive only; v3 adds no |
+|  |  |  | direct dependency |
+| Writer logging | One JSONL line of its own | Silent, or folded in later | Issue #116 |
+|  |  |  | because every call left a line |
+| Threshold tuning | Its own pairs, not the eval's | Tune on the eval set | Else FR-40 |
+|  |  |  | nothing |
 | Compaction | Not in v3 | Merge and roll up now | Tuning it needs months of real data; v4 |
 
 ## Risks and mitigations
 
 | Risk | Mitigation |
 | --- | --- |
-| FTS5 misses paraphrased recalls | Exactly what the recall target measures; embeddings are the planned fallback |
-| `MEMORY_SAME_THRESHOLD` set too high or low | Measured by an M13 spike against the 5 near-miss pairs, not guessed |
-| Writer never runs because the client is closed | Stated as a known limitation; a timer is a v4 option |
-| 13 tool declarations confuse tool choice | Wipe and listing were kept out; the eval measures wrong calls |
+| FTS5 misses paraphrased recalls | Exactly what the recall target measures; embeddings are the |
+| | planned fallback |
+| `MEMORY_SAME_THRESHOLD` set too high or low | Measured by an M13 spike against the 5 near-miss |
+| | pairs, not guessed |
+| Writer never runs because the client is closed | Stated as a known limitation; a timer is a v4 |
+| | option |
+| 13 tool declarations confuse tool choice | Wipe and listing were kept out; the eval measures |
+| | wrong calls |
 | Profile grows past 40 lines | Fails at load with the cap named, not at query time |
 | Personal profile committed by accident | Values live under the already-gitignored `data/` |
-| A test run leaves a seeded profile behind | `run_eval_v3.py` backs up and restores the profile too |
+| A test run leaves a seeded profile behind | `run_eval_v3.py` backs up and restores the profile |
+| | too |
 | Free tier: 15 RPM, 500 RPD | The writer adds a call per session; budget the run in advance |
 | Memory text leaking into a search query | Instruction rule plus the v2 logging of every query |
 | Memory text leaking into the log | The log stores counts, never memory text |
-| Concept over-merge (issue #116) still open in v2 | Not fixed in v2; FR-40 tests the same failure in v3's own writer |
+| Concept over-merge (issue #116) still open in v2 | Not fixed in v2; FR-40 tests the same |
+| | failure in v3's own writer |
