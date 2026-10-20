@@ -437,8 +437,8 @@ FR-26 onwards are new in v3.
 ### FR-37 Recall (changed backend in v3)
 
 - Requirement: Recall goes through one interface,
-  `search_memories(query, k, since=None)`, so the ranking backend can be replaced without
-  touching its callers. v3 implements it with SQLite
+  `search_memories(query, k, since=None, until=None)`, so the ranking backend can be
+  replaced without touching its callers. v3 implements it with SQLite
   FTS5 full-text search, which adds no dependency. At most `MEMORY_RECALL_MAX` (5) items
   reach Gemini. The whole store is never sent, to any model or any tool
 - Input → Output: Question → at most 5 items in the Gemini request
@@ -451,11 +451,13 @@ FR-26 onwards are new in v3.
 ### FR-38 Time filter
 
 - Requirement: A question naming a time ("last week", "yesterday", "in September") filters
-  candidates by date before ranking. A question naming no time searches everything
+  candidates by date before ranking, between `since` and `until`. A question naming no time
+  searches everything
 - Input → Output: Question with a time → date-filtered search
 - Acceptance: With one matching item inside the named window and one outside it, only the
-  one inside is returned; the same question without the time returns both; an unparseable
-  time falls back to searching everything rather than returning nothing
+  one inside is returned, whether the outside one is before `since` or after `until`; the
+  same question without the time returns both; an unparseable `since` or `until` falls back
+  to searching everything rather than returning nothing
 
 ### FR-39 Session writer
 
@@ -480,8 +482,9 @@ FR-26 onwards are new in v3.
   "lora fine-tuning"
 - Input → Output: A new point near an existing one → a new row, not a merge
 - Acceptance: With "LoRA fine-tuning" already stored, storing "attention in transformers"
-  adds a new row and leaves the first unchanged; storing the same point twice in different
-  words updates one row and adds none; in the eval, 0 of 5 near-miss pairs are merged
+  adds a new row and leaves the first unchanged; storing the same point again in different
+  words adds no row, leaves the stored item unchanged, and reports it back as already
+  remembered; in the eval, 0 of 5 near-miss pairs are merged
 
 ## Interface contract
 

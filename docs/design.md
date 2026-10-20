@@ -137,16 +137,17 @@ Serves FR-32 to FR-38, FR-40.
 - A memory item is a row: text (≤ 12 words), type (`fact`, `project`, `preference`,
   `session`), and the date stored. The word limit is checked in `store.py` before insert, so
   no path can store a long item.
-- Recall goes through one function, `store.search_memories(query, k, since=None)`. That
-  signature is the interface the spec freezes; the implementation behind it is replaceable.
+- Recall goes through one function, `store.search_memories(query, k, since=None,
+  until=None)`. That signature is the interface the spec freezes; the implementation behind
+  it is replaceable.
 - v3 implements it with **SQLite FTS5**, which ships with SQLite and adds no dependency. A
   contentless FTS5 table indexes the item text and stays in sync with the memories table
   through triggers, so there is one source of truth.
 - At most 5 items (`MEMORY_RECALL_MAX`) are passed to Gemini. The full store is never sent,
   to Gemini or to Tavily. This is a size rule first: the store grows forever, a prompt
   cannot.
-- A named time (FR-38) is turned into a date range by Gemini, which passes `since` to the
-  tool. An unparseable time means no filter rather than no results.
+- A named time (FR-38) is turned into a date range by Gemini, which passes `since` and
+  `until` to the tool. An unparseable bound means no filter rather than no results.
 - Forget (FR-34) searches, and acts only on exactly one match. Two or more matches return
   the candidates to Gemini, which names them and asks; nothing is deleted until the next turn
   names one. Deletes are real `DELETE` statements, not a status flag.
@@ -155,6 +156,12 @@ Serves FR-32 to FR-38, FR-40.
   candidate text through `store.find_same(text)`, which returns a match only above a
   similarity floor; anything below it is a new row. The prompt also says it, but the store
   is what enforces it.
+- A match above the floor adds no row and changes nothing: the store returns the existing
+  item, the `remember` result says `new: false`, and the spoken answer says it is already
+  remembered. The original text and `created_at` are untouched, because editing an item in
+  place is out of scope in the brief and refreshing the date would make an old memory look
+  new to a "last week" recall. The cost is that a poor first wording can only be improved by
+  forget-and-re-add, which is the brief's intended path.
 - `find_same` is a floor, not a guarantee, and the design should not pretend otherwise. It
   compares words, so it catches the obvious collisions and will miss the same point phrased
   differently — the same weakness FTS5 has for recall. What gets through is what the FR-40
@@ -209,8 +216,8 @@ the last four.
 - Call `remember` for "remember that ...", shortening to a key point within the word limit
   and picking the type; read back what was stored.
 - Call `search_memories` for a question about me or about what we have discussed. With a
-  named time, pass `since`. Answer only from what comes back; if nothing does, say you do
-  not know rather than guessing.
+  named time, pass `since` and `until`. Answer only from what comes back; if nothing does,
+  say you do not know rather than guessing.
 - Call `forget` to delete; when it returns more than one candidate, name them and ask which,
   and do not delete until answered.
 - Never reuse an existing memory's wording for a different point. Two things that are not the
@@ -257,8 +264,8 @@ plus four.
 | `log_concept` | `name`, `summary` | `{name, summary, status, new}` or `{error}` |
 | `learned_this_week` | none | `{count, names}` |
 | `start_quiz` | none | `{count, question}` |
-| `remember` | `text`, `type` | `{id, text, type, created_at}` or `{error}` |
-| `search_memories` | `query` (optional), `since` (optional) | `{count, items: [{id, text, |
+| `remember` | `text`, `type` | `{id, text, type, created_at, new}` or `{error}` |
+| `search_memories` | `query`, `since`, `until` (all optional) | `{count, items: [{id, text, |
 | | | type, created_at}]}` |
 | `forget` | `query` | `{deleted: {...}}`, or `{candidates: [...]}` when more than one |
 | | | matches, or `{error}` |
@@ -457,7 +464,7 @@ v2's decisions still hold. New in v3:
 | Decision | Chosen | Instead of | Why |
 | --- | --- | --- | --- |
 | Recall | SQLite FTS5, behind one interface | Embeddings now | No dependency; the eval decides |
-| Retrieval contract | `search_memories(query, k, since)` | SQL in callers | Backend swaps freely |
+| Retrieval contract | `search_memories(query, k, since, until)` | SQL in callers | Backend swaps freely |
 | Profile shape | Fixed slots in a schema file | Free-form facts | Answerable; re-skinnable |
 | Profile values | `data/profile.json`, gitignored | In `config/` | Keeps identity out of git |
 | Profile size | Hard cap, at load and at write | Silent truncation | A cut profile is a wrong answer |
