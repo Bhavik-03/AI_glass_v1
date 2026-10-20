@@ -476,15 +476,18 @@ FR-26 onwards are new in v3.
 ### FR-40 No over-merge
 
 - Requirement: The writer and `remember that` never merge a new item onto an existing one
-  unless it is the same thing. Reusing an existing item's wording for a different point is a
-  failure, not a tidy-up. This is the v2 concept logger's failure mode (issue #116), where
-  "attention in transformers" and "overfitting" were both filed under the existing name
-  "lora fine-tuning"
+  unless it is the same thing. `find_same` is a safety guard, not a deduplicator. At
+  `MEMORY_SAME_THRESHOLD` 0.9 it collapses only near-verbatim repeats; a paraphrase, a
+  synonym or an added word is stored as a second row. Merging those is compaction, which is
+  v4. Reusing an existing item's wording for a different point is a failure, not a tidy-up.
+  This is the v2 concept logger's failure mode (issue #116), where "attention in
+  transformers" and "overfitting" were both filed under the existing name "lora fine-tuning"
 - Input → Output: A new point near an existing one → a new row, not a merge
 - Acceptance: With "LoRA fine-tuning" already stored, storing "attention in transformers"
-  adds a new row and leaves the first unchanged; storing the same point again in different
-  words adds no row, leaves the stored item unchanged, and reports it back as already
-  remembered; in the eval, 0 of 5 near-miss pairs are merged
+  adds a new row and leaves the first unchanged; storing a near-verbatim repeat - the same
+  point with the same content words - adds no row, leaves the stored item unchanged, and
+  reports it back as already remembered; a paraphrase that changes content words is
+  expected to add a row; in the eval, 0 of 5 near-miss pairs are merged
 
 ## Interface contract
 

@@ -162,10 +162,12 @@ Serves FR-32 to FR-38, FR-40.
   place is out of scope in the brief and refreshing the date would make an old memory look
   new to a "last week" recall. The cost is that a poor first wording can only be improved by
   forget-and-re-add, which is the brief's intended path.
-- `find_same` is a floor, not a guarantee, and the design should not pretend otherwise. It
-  compares words, so it catches the obvious collisions and will miss the same point phrased
-  differently — the same weakness FTS5 has for recall. What gets through is what the FR-40
-  target measures.
+- `find_same` is a safety guard, not a deduplicator. The M13-T1 spike chose Jaccard on
+  stemmed content-word sets. Near-miss pairs score 0.33 to 0.80 and reworded repeats 0.20
+  to 1.00, with six of the ten inside the near-miss range, so no threshold separates them.
+  0.9 is chosen because "with" versus "without" scores 0.80, and merging opposites is the
+  worst outcome; the cost is that 7 of 10 reworded repeats store a second row. Merging
+  those is compaction, which is v4.
 - `MEMORY_SAME_THRESHOLD` is tuned by the M13 spike against **its own pairs**, written for
   the spike and never placed in `questions_v3.json`. Tuning it on the five near-miss pairs
   the eval then scores would make that target measure nothing.
@@ -487,6 +489,9 @@ v2's decisions still hold. New in v3:
 | | planned fallback |
 | `MEMORY_SAME_THRESHOLD` set too high or low | Measured by an M13 spike against its own |
 | | pairs, never the five the eval scores |
+| Lowering `MEMORY_SAME_THRESHOLD` to catch more repeats | Opposites score 0.80; below 0.9 the |
+| | guard starts merging them. The bloat target rests on the salience filter, not on |
+| | `find_same` |
 | Writer never runs because the client is closed | Stated as a known limitation; a timer is |
 | | a v4 option. The pending buffer holds 3 and drops |
 | | the oldest with a log line, so it cannot grow |
