@@ -74,6 +74,7 @@ ai-glasses/
 │   ├── questions_v3.json  # v3 eval set, frozen after its first run
 │   ├── seed_v3.json       # the seeded store the v3 recall questions run against
 │   ├── run_eval_v3.py     # runs the v3 eval; reuses run_eval.py helpers
+│   ├── rank_probe.py      # re-runnable top-5 ranking probe of search_memories
 │   ├── live_questions.md  # 10 questions to speak with the key
 │   ├── live_log.py        # prints the last 10 logged queries
 │   └── results/           # <date>.md and .json per run

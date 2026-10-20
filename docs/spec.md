@@ -208,7 +208,7 @@ FR-26 onwards are new in v3.
   when the transcript is empty, before the LLM runs; 500 `{"error": "<stage>: <reason>"}`
   when a stage fails; the server answers the next request normally
 
-### FR-17 (changed in v2)
+### FR-17 (changed in v2 and v3)
 
 - Requirement: Log every query on the server
 - Input → Output: Each `/query` → one JSONL line
