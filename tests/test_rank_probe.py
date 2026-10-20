@@ -112,6 +112,33 @@ def test_fr37_evaluate_honours_k(db):
     assert at_two["misses"] == []
 
 
+def test_fr37_evaluate_reports_the_rank_of_each_hit(db):
+    """evaluate returns, per probe in order, the 1-based rank of the target in the results or None for a miss, and the worst rank among the hits."""
+    strong = item("python tips python tricks", 1)
+    weak = item("I mostly write python when scripting small tools for work", 2)
+    probes = (
+        ("python", strong["text"]),
+        ("python", weak["text"]),
+        ("zebra crossing", strong["text"]),
+    )
+
+    result = rank_probe.evaluate([strong, weak], probes)
+
+    assert result["ranks"] == [1, 2, None]
+    assert result["worst_rank"] == 2
+    assert result["hits"] == 2
+
+
+def test_fr37_evaluate_worst_rank_is_none_without_hits(db):
+    """With no hit there is no worst rank."""
+    result = rank_probe.evaluate(
+        TINY_ITEMS, (("zebra crossing", TINY_ITEMS[0]["text"]),)
+    )
+
+    assert result["ranks"] == [None]
+    assert result["worst_rank"] is None
+
+
 def test_fr37_evaluate_leaves_the_real_database_alone(db):
     """evaluate works on the current (temporary) DB_PATH and never touches data/assistant.db."""
     before = real_db_state()
@@ -129,8 +156,8 @@ def write_tiny_seed(tmp_path, monkeypatch):
     return path
 
 
-def test_fr37_main_prints_hit_rate_and_misses(monkeypatch, tmp_path, capsys):
-    """main prints 'top-5 hit rate: H/T (P%)' first, then one line per miss with query and target."""
+def test_fr37_main_prints_hit_rate_ranks_and_misses(monkeypatch, tmp_path, capsys):
+    """main prints the hit rate, the worst hit rank, the rank distribution, one line per probe with its rank, then one line per miss with query and target."""
     write_tiny_seed(tmp_path, monkeypatch)
     probes = (
         ("linear algebra", TINY_ITEMS[0]["text"]),
@@ -143,9 +170,30 @@ def test_fr37_main_prints_hit_rate_and_misses(monkeypatch, tmp_path, capsys):
 
     lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
     assert lines[0] == "top-5 hit rate: 2/3 (67%)"
-    assert len(lines) == 2
-    assert "zebra crossing" in lines[1]
-    assert TINY_ITEMS[2]["text"] in lines[1]
+    assert lines[1] == "worst hit rank: 1"
+    assert lines[2] == "ranks: 1:2 2:0 3:0 4:0 5:0 miss:1"
+    assert "rank 1" in lines[3] and "linear algebra" in lines[3]
+    assert "rank 1" in lines[4] and "dark mode" in lines[4]
+    assert "miss" in lines[5] and "zebra crossing" in lines[5]
+    assert lines[6].startswith("MISS")
+    assert "zebra crossing" in lines[6]
+    assert TINY_ITEMS[2]["text"] in lines[6]
+    assert len(lines) == 7
+
+
+def test_fr37_main_says_no_worst_rank_when_nothing_hits(monkeypatch, tmp_path, capsys):
+    """With no hit at all the worst hit rank line says none, and every probe is a miss."""
+    write_tiny_seed(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "eval.rank_probe.PROBES", (("zebra crossing", TINY_ITEMS[2]["text"]),)
+    )
+
+    rank_probe.main()
+
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == "top-5 hit rate: 0/1 (0%)"
+    assert lines[1] == "worst hit rank: none"
+    assert lines[2] == "ranks: 1:0 2:0 3:0 4:0 5:0 miss:1"
 
 
 def test_fr37_main_restores_db_path_and_spares_real_database(
