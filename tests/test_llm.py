@@ -1380,3 +1380,121 @@ def test_fr24_grade_unreadable_response_raises(monkeypatch, bad: str) -> None:
     install_fake(monkeypatch, [text_response(bad)])
     with pytest.raises(RuntimeError):
         llm.grade("LoRA", "Low-rank adapters.", "adapters")
+
+
+def test_fr33_instruction_remember_key_point_word_limit(monkeypatch) -> None:
+    """The instruction tells Gemini to call remember and shorten to a key point within the configured word limit."""
+    monkeypatch.setattr(config, "MEMORY_MAX_WORDS", 7)
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "remember" in text
+    assert "key point" in text
+    assert "7 words" in text
+
+
+def test_fr33_instruction_lists_memory_types() -> None:
+    """The instruction tells Gemini to pick the type: fact, project, preference or session."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "fact, project, preference or session" in text
+
+
+def test_fr33_instruction_reads_back_stored_text() -> None:
+    """The instruction tells Gemini to read the stored text back."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "read the stored text back" in text
+
+
+def test_fr33_instruction_already_remembered_when_not_new() -> None:
+    """The instruction says to say it is already remembered when new is false."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "new false" in text
+    assert "already remembered" in text
+
+
+def test_fr37_instruction_search_memories_for_user_questions() -> None:
+    """The instruction names search_memories for questions about the user or earlier conversations."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "search_memories" in text
+    assert "about the user" in text
+    assert "discussed before" in text
+
+
+def test_fr37_instruction_since_until_iso_with_offset() -> None:
+    """The instruction says to pass since and until as ISO 8601 with offset for a named time, until exclusive."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "since and until" in text
+    assert "iso 8601" in text
+    assert "offset" in text
+    assert "until is exclusive" in text
+
+
+def test_fr37_instruction_answer_only_from_results() -> None:
+    """The instruction says to answer only from what comes back and say it does not know when nothing does."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "answer only from what comes back" in text
+    assert "do not know" in text
+    assert "never guess" in text
+
+
+def test_fr38_instruction_says_how_many_when_count_larger() -> None:
+    """The instruction says to say how many there are when count is larger than the items returned."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "count is larger than the items returned" in text
+    assert "say how many" in text
+
+
+def test_fr34_instruction_forget_searches_first_then_forgets() -> None:
+    """The instruction says to search_memories first, then call forget with some of the item's words."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "to forget" in text
+    assert "call search_memories to see its exact words" in text
+    assert "call forget with some of those words" in text
+
+
+def test_fr34_instruction_forget_candidates_ask_which() -> None:
+    """The instruction says to name the candidates, ask which one, and delete nothing until the user answers."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "candidates" in text
+    assert "ask which" in text
+    assert "delete nothing until the user answers" in text
+
+
+def test_fr33_instruction_never_reuse_memory_wording() -> None:
+    """The instruction says never to reuse an existing memory's wording for a different point."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "never reuse an existing memory's wording for a different point" in text
+
+
+def test_fr35_instruction_cannot_wipe_says_exact_phrase(monkeypatch) -> None:
+    """The instruction says Gemini cannot wipe and to tell the user to say the configured phrase exactly."""
+    monkeypatch.setattr(config, "WIPE_REQUEST_PHRASE", "erase the whole memory bank")
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "cannot wipe" in text
+    assert "erase the whole memory bank" in text
+    assert "exactly" in text
+
+
+def test_fr35_instruction_mentions_other_wipe_wordings() -> None:
+    """The instruction covers other wordings such as 'delete all my memories' and 'clear everything'."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "delete" in text
+    assert "clear" in text
+    assert "in any other wording" in text
+
+
+def test_fr33_instruction_forbids_memory_content_in_web_search() -> None:
+    """The instruction says never to put memory content in a web_search query."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "never put memory content in a web_search query" in text
+
+
+def test_fr33_instruction_still_formats_and_keeps_earlier_rules() -> None:
+    """The instruction formats without KeyError and keeps the note/reminder/concept/screen rule."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "never put note, reminder, concept or screen content in a query" in text
+
+
+def test_fr35_instruction_names_the_other_wipe_wordings():
+    """The instruction gives "delete all my memories" and "clear everything" as the wordings to redirect."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "delete all my memories" in text
+    assert "clear everything" in text

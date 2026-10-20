@@ -1750,3 +1750,16 @@ def test_fr34_forget_bad_query_returns_only_error_and_deletes_nothing(
     assert list(out) == ["error"]
     assert isinstance(out["error"], str) and out["error"]
     assert memory_count(db) == 1
+
+
+def test_fr33_web_search_declaration_forbids_memory_content():
+    """The web_search declaration also says the query must never contain memory content, keeping the old sentence."""
+    description = declaration("web_search")["description"].lower()
+    assert "memory content" in description
+    assert "must never contain note, reminder, concept or screen content" in description
+
+
+@pytest.mark.parametrize("name", ["remember", "search_memories", "forget"])
+def test_fr33_memory_tools_declared_with_description(name):
+    """The remember, search_memories and forget tools are declared, each with a non-empty description."""
+    assert declaration(name)["description"].strip()

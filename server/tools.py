@@ -13,7 +13,8 @@ DECLARATIONS = [
         "name": "web_search",
         "description": (
             "Search the web for live or current information such as news, weather, prices "
-            "or scores. The query must never contain note, reminder, concept or screen content."
+            "or scores. The query must never contain note, reminder, concept or screen content. "
+            "It must never contain memory content either."
         ),
         "parameters_json_schema": {
             "type": "object",
