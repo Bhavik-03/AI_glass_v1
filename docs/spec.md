@@ -216,8 +216,10 @@ FR-26 onwards are new in v3.
   answer, per-stage timings, `searched`, tool calls and error. Each tool call records its
   name, arguments and whether it ran ok, failed, or was refused for lack of time (issue
   #59). The line also records whether an image was sent (yes or no, never the image),
-  whether a session was continued, and any concept logged. No API key or token ever appears
-  in the log
+  whether a session was continued, and any concept logged. From v3 it also records how many
+  memory items were passed to Gemini and how many profile lines were rendered, never their
+  text, and the session writer writes one line of its own on the reminder poll (FR-39). No
+  API key or token ever appears in the log
 
 ### FR-18
 
@@ -335,12 +337,16 @@ FR-26 onwards are new in v3.
 ### FR-28 Profile in every prompt
 
 - Requirement: The whole profile goes into the system instruction of every Gemini call,
-  including the writer call. It is capped at `PROFILE_MAX_LINES` (40). Going over the cap is
-  an error, not a silent truncation
+  including the writer call. It is capped at `PROFILE_MAX_LINES` (40) **rendered** lines —
+  the lines that enter the instruction, not lines in the file. The cap is checked at load
+  and at every write. Going over it is an error, not a silent truncation
 - Input → Output: Profile → part of every system instruction
 - Acceptance: A query made with a filled profile has every non-empty slot in the request
-  (fake client); a profile of 41 lines fails at load with a clear message naming the cap; an
-  empty profile adds nothing to the instruction
+  (fake client); a profile rendering 41 lines fails at load with a clear message naming the
+  cap; a confirmed `update_profile` or setup answer that would take the rendered profile
+  over the cap is refused, the caller is told, and the stored profile is unchanged; a file
+  with comments, blank lines and empty slots is measured by what it renders, not its length;
+  an empty profile adds nothing to the instruction
 
 ### FR-29 First-run setup
 

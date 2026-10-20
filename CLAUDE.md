@@ -178,5 +178,6 @@ and nothing is stored.
 - Commit `logs/`, `.venv/`, `models/`, or model files
 - Edit `eval/questions.json` after the first eval run: the set is frozen (only an obvious error, logged in plan.md)
 - Edit `eval/questions_v2.json` after its first run: frozen the same way
+- Edit `eval/questions_v3.json` or `eval/seed_v3.json` after their first run: frozen the same way
 - Add a dependency without adding it to `requirements.txt`
 - `git push --force` or rewrite pushed history

@@ -85,6 +85,14 @@ state and one consequence.
   declined this session). Both sit behind the same lock as the quiz state.
 - NEW: a session is marked **unwritten** when it expires, so the writer runs exactly once per
   session and never twice.
+- NEW, and the reason the writer does not lose sessions: an expired session is **handed to a
+  pending-write buffer before it is cleared**, by whichever read clears it. Without this, a
+  `/query` arriving between expiry and the next poll would clear the turns first and the
+  writer would have nothing to write. `/query` never runs the writer itself — that would add
+  a Gemini call to the user's latency path — it only moves the turns aside.
+- The buffer holds at most `WRITER_PENDING_MAX` (3) expired sessions. The poll drains it. If
+  the client is closed the buffer fills, and the oldest is dropped with a log line rather
+  than growing without limit.
 - `POST /session/reset` clears the turns, the image, a running quiz, the setup state and any
   pending proposal. It also marks the session written, so a reset session is never written
   afterwards. This is what keeps eval rows from leaking memories into each other.
@@ -105,7 +113,10 @@ Serves FR-26 to FR-29, FR-31.
   missing values file means an empty profile, which triggers setup.
 - The rendered profile block is built once per request and placed in the system instruction.
   Empty slots are left out entirely, so an empty profile adds nothing.
-- The 40-line cap (`PROFILE_MAX_LINES`) is enforced **at load and at every write**. At load
+- The 40-line cap (`PROFILE_MAX_LINES`) counts **rendered lines** — the lines that actually
+  enter the system instruction, one per non-empty slot plus any wrapped continuation — not
+  lines in the file. The file may hold comments, blank lines and empty slots that cost the
+  prompt nothing. It is enforced **at load and at every write**. At load
   it fails fast at startup rather than silently on every query. At write, a confirmed
   `update_profile` or setup answer that would take the profile over the cap is refused and
   the caller is told; without that check a write could succeed and then stop the server
@@ -158,8 +169,9 @@ Serves FR-39.
 The session ends 120 s after the last answer, but nothing runs at that moment: the server
 only acts when asked. v3 reuses the poll the client already makes.
 
-- Every 10 s the idle client calls `GET /reminders/due`. If that call finds the session
-  expired and unwritten, the server runs the writer before answering the poll.
+- Every 10 s the idle client calls `GET /reminders/due`. If the pending-write buffer holds an
+  expired, unwritten session, the server runs the writer on it before answering the poll.
+  The session may have been moved there by the poll itself or by an earlier `/query`.
 - The writer is one Gemini call with no tools, a 10 s timeout and JSON output, in the same
   shape as the v2 quiz grader: it gets the session's turns and the profile, and returns 0 to
   3 key points.
@@ -314,7 +326,7 @@ New values; every other v1 and v2 value stays.
 | --- | --- | --- |
 | server/config.py | `PROFILE_SCHEMA_PATH = "config/profile_schema.json"` | committed |
 | server/config.py | `PROFILE_VALUES_PATH = "data/profile.json"` | gitignored |
-| server/config.py | `PROFILE_MAX_LINES = 40` | checked at load |
+| server/config.py | `PROFILE_MAX_LINES = 40` | rendered lines; checked at load and write |
 | server/config.py | `SETUP_SLOTS` = identity, goal_now, goal_long, exploring, style, | FR-29 |
 | | constraints | |
 | server/config.py | `SETUP_STOP_PHRASE = "stop setup"` | |
@@ -324,6 +336,7 @@ New values; every other v1 and v2 value stays.
 | server/config.py | `MEMORY_SAME_THRESHOLD` | FR-40; set by the M13 spike |
 | server/config.py | `WIPE_CONFIRM_PHRASE = "yes wipe everything"` | FR-35 |
 | server/config.py | `WRITER_MAX_POINTS = 3`, `WRITER_TIMEOUT_S = 10` | FR-39 |
+| server/config.py | `WRITER_PENDING_MAX = 3` | expired sessions awaiting the writer |
 | eval/config.py | `V3_QUESTIONS_PATH`, `V3_DATA_DIR`, `V3_SEED_PATH` | paths |
 | eval/config.py | `V3_MEDIAN_MAX_S = 5.3` | v3 target in spec.md |
 
@@ -353,7 +366,7 @@ writer failure must never fail the poll, because the poll also delivers real rem
 
 ## Repo structure
 
-New in v3 are marked. Seven paths are added: `config/`, `server/profile.py`,
+New in v3 are marked. Eight paths are added: `config/`, `server/profile.py`,
 `tests/test_profile.py`, `eval/questions_v3.json`, `eval/seed_v3.json`,
 `eval/run_eval_v3.py`, and under the gitignored `data/`, `profile.json` and `eval_v3/`.
 CLAUDE.md's "Project structure" section must list all of them in the same milestone that
@@ -441,33 +454,21 @@ v2's decisions still hold. New in v3:
 
 | Decision | Chosen | Instead of | Why |
 | --- | --- | --- | --- |
-| Recall | SQLite FTS5 behind one interface | Embeddings now | No dependency; the eval |
-| | | | decides if more is needed |
-| Retrieval contract | `search_memories(query, k, since)` | Direct SQL in callers | The |
-| | | | backend can change freely |
-| Profile shape | Fixed slots in a schema file | Free-form facts | "What is the profile" |
-| | | | is answerable; re-skinnable |
-| Profile values | `data/profile.json`, gitignored | `config/profile.json` | Identity and |
-| | | | weak spots stay out of git |
-| Profile size | Hard cap, fails at load and write | Silent truncation | A silently cut |
-| | | | profile is a wrong answer |
-| Slot writes | Proposed, confirmed by a yes | Silent self-editing | A quietly corrupted always-on |
-|  |  |  | prompt is near impossible to debug |
-| Writer trigger | On the existing reminder poll | A background timer | No new |
-|  |  |  | needs the client open |
-| Writer delivery | A notice row in reminders | A new endpoint or field | Keeps the |
-| | | | frozen API contract |
-| Over-merge guard | In `store.py` | In the prompt only | Issue #116 is what a prompt-only rule |
-|  |  |  | buys |
-| Wipe | Phrase matched in `main.py` | A `wipe` tool | A model should not be able to choose to |
-|  |  |  | delete everything |
-| Profile file format | JSON, stdlib | YAML with PyYAML | PyYAML is transitive only; v3 adds no |
-|  |  |  | direct dependency |
-| Writer logging | One JSONL line of its own | Silent, or folded in later | Issue #116 |
-|  |  |  | because every call left a line |
-| Threshold tuning | Its own pairs, not the eval's | Tune on the eval set | Else FR-40 |
-|  |  |  | nothing |
-| Compaction | Not in v3 | Merge and roll up now | Tuning it needs months of real data; v4 |
+| Recall | SQLite FTS5, behind one interface | Embeddings now | No dependency; the eval decides |
+| Retrieval contract | `search_memories(query, k, since)` | SQL in callers | Backend swaps freely |
+| Profile shape | Fixed slots in a schema file | Free-form facts | Answerable; re-skinnable |
+| Profile values | `data/profile.json`, gitignored | In `config/` | Keeps identity out of git |
+| Profile size | Hard cap, at load and at write | Silent truncation | A cut profile is a wrong answer |
+| Slot writes | Proposed, confirmed by a yes | Silent self-editing | Quiet corruption is undebuggable |
+| Writer trigger | On the existing reminder poll | A background timer | No new machinery |
+| Writer handoff | Buffer the turns before clearing | Write on expiry | A `/query` would clear them first |
+| Writer delivery | A notice row in reminders | A new endpoint | Keeps the frozen API contract |
+| Writer logging | One JSONL line of its own | Silent | #116 was found because calls left lines |
+| Over-merge guard | In `store.py` | In the prompt only | #116 is what a prompt-only rule buys |
+| Threshold tuning | Its own pairs, not the eval's | Tune on the eval set | Else FR-40 measures nothing |
+| Wipe | Phrase matched in `main.py` | A `wipe` tool | A model should not choose to delete all |
+| Profile file format | JSON, stdlib | YAML with PyYAML | PyYAML is transitive; v3 adds none |
+| Compaction | Not in v3 | Merge and roll up now | Tuning needs months of real data; v4 |
 
 ## Risks and mitigations
 
@@ -475,13 +476,14 @@ v2's decisions still hold. New in v3:
 | --- | --- |
 | FTS5 misses paraphrased recalls | Exactly what the recall target measures; embeddings are the |
 | | planned fallback |
-| `MEMORY_SAME_THRESHOLD` set too high or low | Measured by an M13 spike against the 5 near-miss |
-| | pairs, not guessed |
-| Writer never runs because the client is closed | Stated as a known limitation; a timer is a v4 |
-| | option |
+| `MEMORY_SAME_THRESHOLD` set too high or low | Measured by an M13 spike against its own |
+| | pairs, never the five the eval scores |
+| Writer never runs because the client is closed | Stated as a known limitation; a timer is |
+| | a v4 option. The pending buffer holds 3 and drops |
+| | the oldest with a log line, so it cannot grow |
 | 13 tool declarations confuse tool choice | Wipe and listing were kept out; the eval measures |
 | | wrong calls |
-| Profile grows past 40 lines | Fails at load with the cap named, not at query time |
+| Profile grows past 40 rendered lines | Refused at write; fails at load with the cap named |
 | Personal profile committed by accident | Values live under the already-gitignored `data/` |
 | A test run leaves a seeded profile behind | `run_eval_v3.py` backs up and restores the profile |
 | | too |
