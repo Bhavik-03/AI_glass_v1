@@ -115,9 +115,10 @@ Serves FR-26 to FR-29, FR-31.
   Empty slots are left out entirely, so an empty profile adds nothing.
 - The 40-line cap (`PROFILE_MAX_LINES`) counts **rendered lines** — the lines that actually
   enter the system instruction, one per non-empty slot plus any wrapped continuation — not
-  lines in the file. The file may hold comments, blank lines and empty slots that cost the
-  prompt nothing. It is enforced **at load and at every write**. At load
-  it fails fast at startup rather than silently on every query. At write, a confirmed
+  lines in the file. JSON has no comments, but the two still differ: an empty slot is a file
+  line that renders nothing, and a long value is one file line that renders as several
+  lines. It is enforced **at load and at every write**. At load it fails fast at startup
+  rather than silently on every query. At write, a confirmed
   `update_profile` or setup answer that would take the profile over the cap is refused and
   the caller is told; without that check a write could succeed and then stop the server
   starting next time.
@@ -341,8 +342,9 @@ New values; every other v1 and v2 value stays.
 | eval/config.py | `V3_MEDIAN_MAX_S = 5.3` | v3 target in spec.md |
 
 `MEMORY_SAME_THRESHOLD` is the one value that cannot be guessed. The first M13 task is a
-spike that measures it against the five near-miss pairs, the way the Look spike set the JPEG
-quality.
+spike that measures it, the way the Look spike set the JPEG quality. It is tuned against its
+**own** pairs, written for the spike and never placed in `questions_v3.json`: tuning it on
+the five near-miss pairs the eval then scores would make the FR-40 target measure nothing.
 
 ## Timeouts and errors
 
