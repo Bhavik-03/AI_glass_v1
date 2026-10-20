@@ -162,6 +162,22 @@ def _valid_bound(con: sqlite3.Connection, value: str | None) -> str | None:
     return value
 
 
+# The window of a memory query; the four parameters come from `_window`.
+IN_WINDOW = (
+    " AND (? IS NULL OR julianday(m.created_at) >= julianday(?))"
+    " AND (? IS NULL OR julianday(m.created_at) < julianday(?))"
+)
+MATCHES = (
+    " FROM memories_fts JOIN memories m ON m.id = memories_fts.rowid"
+    " WHERE memories_fts MATCH ?"
+)
+
+
+def _window(con: sqlite3.Connection, since: str | None, until: str | None) -> tuple:
+    since, until = _valid_bound(con, since), _valid_bound(con, until)
+    return since, since, until, until
+
+
 def search_memories(
     query: str, k: int, since: str | None = None, until: str | None = None
 ) -> list[dict]:
@@ -174,17 +190,51 @@ def search_memories(
     if not match:
         return []
     with _connect() as con:
-        since, until = _valid_bound(con, since), _valid_bound(con, until)
         rows = con.execute(
-            "SELECT m.id, m.text, m.type, m.created_at FROM memories_fts"
-            " JOIN memories m ON m.id = memories_fts.rowid"
-            " WHERE memories_fts MATCH ?"
-            " AND (? IS NULL OR julianday(m.created_at) >= julianday(?))"
-            " AND (? IS NULL OR julianday(m.created_at) < julianday(?))"
-            " ORDER BY bm25(memories_fts), m.id DESC LIMIT ?",
-            (match, since, since, until, until, k),
+            "SELECT m.id, m.text, m.type, m.created_at"
+            + MATCHES
+            + IN_WINDOW
+            + " ORDER BY bm25(memories_fts), m.id DESC LIMIT ?",
+            (match, *_window(con, since, until), k),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def count_matches(
+    query: str, since: str | None = None, until: str | None = None
+) -> int:
+    """How many memories match the question in the window, however many are returned."""
+    match = _match_query(query)
+    if not match:
+        return 0
+    with _connect() as con:
+        return con.execute(
+            "SELECT COUNT(*)" + MATCHES + IN_WINDOW,
+            (match, *_window(con, since, until)),
+        ).fetchone()[0]
+
+
+def recent_memories(
+    k: int, since: str | None = None, until: str | None = None
+) -> list[dict]:
+    """The `k` newest memories in the window, newest first (compared as moments)."""
+    with _connect() as con:
+        rows = con.execute(
+            "SELECT m.id, m.text, m.type, m.created_at FROM memories m WHERE 1 = 1"
+            + IN_WINDOW
+            + " ORDER BY julianday(m.created_at) DESC, m.id DESC LIMIT ?",
+            (*_window(con, since, until), k),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def count_memories(since: str | None = None, until: str | None = None) -> int:
+    """How many memories are in the window."""
+    with _connect() as con:
+        return con.execute(
+            "SELECT COUNT(*) FROM memories m WHERE 1 = 1" + IN_WINDOW,
+            _window(con, since, until),
+        ).fetchone()[0]
 
 
 def add_note(text: str, created_at: str) -> dict:

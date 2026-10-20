@@ -1177,3 +1177,215 @@ def test_fr38_impossible_date_only_until_means_no_filter(db, bad):
     b = add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
 
     assert found_ids("annotation", until=bad) == sorted([a["id"], b["id"]])
+
+
+def mem_at(text: str, day: int, hour: int = 9) -> dict:
+    return store.add_memory(
+        text, store.FACT, f"2026-09-{day:02d}T{hour:02d}:00:00+05:30"
+    )
+
+
+def recent_ids(k: int, **window) -> list[int]:
+    return [m["id"] for m in store.recent_memories(k, **window)]
+
+
+def test_fr36_recall_and_list_max_are_five_in_config():
+    """MEMORY_RECALL_MAX and MEMORY_LIST_MAX are both 5 in config."""
+    assert config.MEMORY_RECALL_MAX == 5
+    assert config.MEMORY_LIST_MAX == 5
+
+
+def test_fr36_count_memories_empty_store_is_zero(db):
+    """count_memories on an empty store is 0."""
+    assert store.count_memories() == 0
+
+
+def test_fr36_count_memories_counts_every_row_without_window(db):
+    """With no window, count_memories counts all stored items, beyond any limit."""
+    for n in range(1, 9):
+        mem_at(f"separate point number {n}", n)
+
+    assert store.count_memories() == 8
+
+
+def test_fr36_count_memories_respects_window(db):
+    """count_memories counts only items in the window: since inclusive, until exclusive."""
+    for n in range(1, 9):
+        mem_at(f"separate point number {n}", n)
+
+    assert store.count_memories(since="2026-09-03", until="2026-09-06") == 3
+    assert store.count_memories(since="2026-09-06") == 3
+    assert store.count_memories(until="2026-09-03") == 2
+
+
+def test_fr36_count_memories_unreadable_bound_is_ignored(db):
+    """An unreadable since or until is ignored, not an empty result."""
+    for n in range(1, 4):
+        mem_at(f"separate point number {n}", n)
+
+    assert store.count_memories(since="last week", until="soon") == 3
+
+
+def test_fr36_recent_memories_empty_store_gives_empty_list(db):
+    """recent_memories on an empty store returns []."""
+    assert store.recent_memories(5) == []
+
+
+def test_fr36_recent_memories_newest_first_and_limited_to_k(db):
+    """recent_memories returns at most k items, newest first, whatever the insert order."""
+    ids = {
+        n: mem_at(f"separate point number {n}", n)["id"] for n in (4, 1, 7, 3, 6, 2, 5)
+    }
+
+    assert recent_ids(3) == [ids[7], ids[6], ids[5]]
+    assert len(store.recent_memories(5)) == 5
+    assert len(store.recent_memories(50)) == 7
+
+
+def test_fr36_recent_memories_items_have_four_fields(db):
+    """Each recent item has exactly id, text, type and created_at."""
+    mem = store.add_memory("The annotation plan is ready", store.PROJECT, MEM_TIME)
+
+    assert store.recent_memories(5) == [
+        {
+            "id": mem["id"],
+            "text": "The annotation plan is ready",
+            "type": "project",
+            "created_at": MEM_TIME,
+        }
+    ]
+
+
+def test_fr36_recent_memories_ties_higher_id_first(db):
+    """Items with the same created_at come back higher id first."""
+    a = mem_at("first point", 5)
+    b = mem_at("second point", 5)
+    c = mem_at("third point", 5)
+
+    assert recent_ids(5) == [c["id"], b["id"], a["id"]]
+
+
+def test_fr36_recent_memories_window_since_inclusive_until_exclusive(db):
+    """recent_memories keeps items from since (inclusive) up to until (exclusive)."""
+    before = add_at("point before", "2026-09-01T09:59:59+05:30")
+    start = add_at("point at start", "2026-09-01T10:00:00+05:30")
+    inside = add_at("point inside", "2026-09-02T10:00:00+05:30")
+    add_at("point at end", "2026-09-03T10:00:00+05:30")
+
+    got = recent_ids(
+        5, since="2026-09-01T10:00:00+05:30", until="2026-09-03T10:00:00+05:30"
+    )
+
+    assert got == [inside["id"], start["id"]]
+    assert before["id"] not in got
+
+
+def test_fr36_recent_memories_date_only_bounds_are_local_midnight(db):
+    """Date-only bounds mean local midnight: since='2026-09-01' keeps 02:00+05:30, until='2026-09-01' drops it."""
+    late = add_at("previous evening", "2026-08-31T23:59:59+05:30")
+    early = add_at("early morning", "2026-09-01T02:00:00+05:30")
+
+    assert recent_ids(5, since="2026-09-01") == [early["id"]]
+    assert recent_ids(5, until="2026-09-01") == [late["id"]]
+
+
+def test_fr36_recent_memories_orders_mixed_offsets_as_instants(db):
+    """Items stored with +05:30 and Z are ordered by moment in time, not by string."""
+    # 2026-09-01T06:00:00Z is 11:30 IST: later than 10:00+05:30, but "T06" sorts before "T10".
+    ist = add_at("kolkata item", "2026-09-01T10:00:00+05:30")
+    utc = add_at("utc item", "2026-09-01T06:00:00Z")
+    early_utc = add_at("early utc item", "2026-09-01T03:00:00Z")
+
+    assert recent_ids(5) == [utc["id"], ist["id"], early_utc["id"]]
+
+
+def test_fr36_recent_memories_window_compares_mixed_offsets_as_instants(db):
+    """A Z item is placed in the window by its instant: 2026-09-01T06:00:00Z is 11:30 IST."""
+    utc = add_at("utc item", "2026-09-01T06:00:00Z")
+    add_at("kolkata item", "2026-09-01T10:00:00+05:30")
+
+    got = recent_ids(5, since="2026-09-01T11:00:00+05:30")
+
+    assert got == [utc["id"]]
+
+
+def test_fr36_count_matches_counts_all_matches_beyond_any_limit(db):
+    """count_matches counts every matching item (12), not just the top few."""
+    add_mems(*[f"annotation note number {n}" for n in range(12)])
+    add_mems(*[f"unrelated gardening item {n}" for n in range(8)])
+
+    assert store.count_matches("annotation", since=None, until=None) == 12
+    assert len(store.search_memories("annotation", 5)) == 5
+
+
+def test_fr36_count_matches_uses_any_word_match(db):
+    """count_matches counts an item that matches any content word of the question."""
+    add_mems(
+        "annotation guidelines for the dataset",
+        "annotation was discussed briefly",
+        "the dataset is large",
+        "My cat is called Biscuit",
+    )
+
+    assert store.count_matches("annotation dataset") == 3
+
+
+def test_fr36_count_matches_matches_search_memories_for_a_spoken_question(db):
+    """The count agrees with search_memories for a spoken question with stopwords and quotes."""
+    add_mems("Annotation guidelines are due on Friday", "My cat is called Biscuit")
+
+    question = 'what did we discuss about "annotation"'
+
+    assert store.count_matches(question) == len(store.search_memories(question, 10))
+    assert store.count_matches(question) == 1
+
+
+def test_fr36_count_matches_respects_window(db):
+    """count_matches counts only matches inside the window."""
+    add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    add_at("annotation notes from September", "2026-09-15T10:00:00+05:30")
+    add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+    add_at("gardening notes from September", "2026-09-16T10:00:00+05:30")
+
+    assert store.count_matches("annotation") == 3
+    assert (
+        store.count_matches("annotation", since="2026-09-01", until="2026-10-01") == 1
+    )
+    assert store.count_matches("annotation", since="2026-09-01") == 2
+    assert store.count_matches("annotation", until="2026-09-01") == 1
+
+
+def test_fr36_count_matches_unreadable_bound_is_ignored(db):
+    """An unreadable bound is ignored by count_matches, as in search_memories."""
+    add_at("annotation notes from August", "2026-08-20T10:00:00+05:30")
+    add_at("annotation notes from October", "2026-10-10T10:00:00+05:30")
+
+    assert store.count_matches("annotation", since="last week", until="soon") == 2
+
+
+@pytest.mark.parametrize(
+    "query",
+    ['"', "'", "*", "", "what did we about", "AND OR NOT", "quantum chromodynamics"],
+)
+def test_fr36_count_matches_zero_without_usable_words_or_match(db, query):
+    """A query of only stopwords or syntax, or one matching nothing, counts 0."""
+    add_mems("The annotation plan is ready")
+
+    assert store.count_matches(query) == 0
+
+
+def test_fr36_count_matches_zero_on_empty_store(db):
+    """count_matches on an empty store is 0."""
+    assert store.count_matches("annotation") == 0
+
+
+def test_fr36_count_functions_and_recent_are_read_only(db):
+    """count_memories, recent_memories and count_matches change no row."""
+    add_mems("annotation plan", "annotation review")
+    before = memory_rows(db)
+
+    store.count_memories()
+    store.recent_memories(5)
+    store.count_matches("annotation")
+
+    assert memory_rows(db) == before

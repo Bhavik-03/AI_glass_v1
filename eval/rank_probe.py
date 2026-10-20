@@ -20,8 +20,8 @@ from pathlib import Path
 from eval import config as eval_config
 from server import config, store
 
-# FR-37: at most 5 items reach Gemini.
-TOP_K = 5
+# FR-37: at most this many items reach Gemini.
+TOP_K = config.MEMORY_RECALL_MAX
 
 # (question, exact text of the seed item it should retrieve).
 PROBES = (

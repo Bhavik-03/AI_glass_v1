@@ -1406,3 +1406,221 @@ def test_fr33_remember_word_limit_error_mentions_the_limit(db, fixed_now):
     out = tools.run("remember", {"text": THIRTEEN_WORDS, "type": "fact"}, fixed_now)
 
     assert str(config.MEMORY_MAX_WORDS) in out["error"]
+
+
+# --- search_memories (FR-36, FR-37, FR-38) ---
+
+SEARCH_KEYS = {"id", "text", "type", "created_at"}
+
+
+def mem_on(text, day, hour=9):
+    return store.add_memory(
+        text, store.FACT, f"2026-09-{day:02d}T{hour:02d}:00:00+05:30"
+    )
+
+
+def test_fr36_declares_search_memories_with_three_optional_strings():
+    """DECLARATIONS has one search_memories entry with string properties query, since and until, none required."""
+    decl = declaration("search_memories")
+    assert decl["description"]
+    schema = decl["parameters_json_schema"]
+    assert schema["type"] == "object"
+    for name in ("query", "since", "until"):
+        assert schema["properties"][name]["type"] == "string"
+    assert not schema.get("required")
+
+
+def test_fr37_query_with_twelve_matches_gives_count_twelve_and_five_items(
+    db, fixed_now
+):
+    """With a query matching 12 of 50 stored items, count is 12 and items holds 5."""
+    for n in range(12):
+        store.add_memory(f"annotation note number {n}", store.FACT, FIXED_ISO)
+    for n in range(38):
+        store.add_memory(f"unrelated gardening item {n}", store.FACT, FIXED_ISO)
+
+    out = tools.run("search_memories", {"query": "annotation"}, fixed_now)
+
+    assert set(out) == {"count", "items"}
+    assert out["count"] == 12
+    assert len(out["items"]) == config.MEMORY_RECALL_MAX == 5
+
+
+def test_fr37_best_match_is_first_among_the_items(db, fixed_now):
+    """The item matching more query words comes first in items."""
+    for n in range(11):
+        store.add_memory(f"annotation note number {n}", store.FACT, FIXED_ISO)
+    best = store.add_memory(
+        "annotation guidelines for the dataset", store.FACT, FIXED_ISO
+    )
+
+    out = tools.run("search_memories", {"query": "annotation dataset"}, fixed_now)
+
+    assert out["items"][0]["id"] == best["id"]
+    assert out["count"] == 12
+
+
+def test_fr37_fifty_matching_items_still_give_five_items(db, fixed_now):
+    """With 50 matching items stored, count is 50 and items still holds at most 5."""
+    for n in range(50):
+        store.add_memory(f"annotation note number {n}", store.FACT, FIXED_ISO)
+
+    out = tools.run("search_memories", {"query": "annotation"}, fixed_now)
+
+    assert out["count"] == 50
+    assert len(out["items"]) == 5
+
+
+def test_fr37_query_with_no_match_gives_zero_and_no_items(db, fixed_now):
+    """A query matching nothing gives count 0 and no items."""
+    store.add_memory("The annotation plan is ready", store.FACT, FIXED_ISO)
+
+    out = tools.run("search_memories", {"query": "quantum chromodynamics"}, fixed_now)
+
+    assert out == {"count": 0, "items": []}
+
+
+def test_fr37_items_have_exactly_the_four_keys(db, fixed_now):
+    """Each item, from a query and from a list, carries exactly id, text, type and created_at."""
+    store.add_memory("The annotation plan is ready", store.PROJECT, FIXED_ISO)
+
+    searched = tools.run("search_memories", {"query": "annotation"}, fixed_now)
+    listed = tools.run("search_memories", {}, fixed_now)
+
+    for out in (searched, listed):
+        assert len(out["items"]) == 1
+        assert set(out["items"][0]) == SEARCH_KEYS
+        assert out["items"][0]["text"] == "The annotation plan is ready"
+        assert out["items"][0]["type"] == "project"
+        assert out["items"][0]["created_at"] == FIXED_ISO
+
+
+def test_fr36_no_query_with_eight_items_gives_count_eight_and_five_newest(
+    db, fixed_now
+):
+    """With no query and 8 items, count is 8 and items are the 5 most recent, newest first."""
+    # Inserted out of order so that insertion order cannot pass for recency.
+    ids = {
+        n: mem_on(f"separate point number {n}", n)["id"]
+        for n in (4, 1, 7, 3, 8, 2, 6, 5)
+    }
+
+    out = tools.run("search_memories", {}, fixed_now)
+
+    assert set(out) == {"count", "items"}
+    assert out["count"] == 8
+    assert [m["id"] for m in out["items"]] == [ids[n] for n in (8, 7, 6, 5, 4)]
+
+
+def test_fr36_no_items_stored_gives_count_zero_and_empty_items(db, fixed_now):
+    """With nothing stored, count is 0 and items is empty."""
+    assert tools.run("search_memories", {}, fixed_now) == {"count": 0, "items": []}
+    assert tools.run("search_memories", {"query": "annotation"}, fixed_now) == {
+        "count": 0,
+        "items": [],
+    }
+
+
+@pytest.mark.parametrize("query", [None, "", "   "], ids=["none", "empty", "blank"])
+def test_fr36_none_or_blank_query_behaves_as_no_query(db, fixed_now, query):
+    """A None, empty or whitespace query lists the 5 most recent items with the total count."""
+    ids = [mem_on(f"separate point number {n}", n)["id"] for n in range(1, 9)]
+
+    out = tools.run("search_memories", {"query": query}, fixed_now)
+
+    assert out["count"] == 8
+    assert [m["id"] for m in out["items"]] == ids[::-1][:5]
+
+
+def test_fr38_no_query_window_returns_only_in_window_items_and_total(db, fixed_now):
+    """With since and until and no query, items are only those in the window and count is the in-window total."""
+    for n in range(1, 13):
+        mem_on(f"separate point number {n}", n)
+
+    out = tools.run(
+        "search_memories", {"since": "2026-09-03", "until": "2026-09-11"}, fixed_now
+    )
+
+    assert out["count"] == 8
+    assert [m["created_at"][:10] for m in out["items"]] == [
+        f"2026-09-{d:02d}" for d in (10, 9, 8, 7, 6)
+    ]
+
+
+def test_fr38_query_window_counts_only_in_window_matches(db, fixed_now):
+    """With a query and a window, count and items cover only the in-window matches."""
+    for n in range(1, 10):
+        mem_on(f"annotation note number {n}", n)
+    mem_on("gardening note inside the window", 5)
+
+    out = tools.run(
+        "search_memories",
+        {"query": "annotation", "since": "2026-09-02", "until": "2026-09-08"},
+        fixed_now,
+    )
+
+    assert out["count"] == 6
+    assert len(out["items"]) == 5
+    assert all(
+        "2026-09-02" <= m["created_at"][:10] < "2026-09-08" for m in out["items"]
+    )
+    assert all("annotation" in m["text"] for m in out["items"])
+
+
+def test_fr38_date_only_since_is_local_midnight(db, fixed_now):
+    """since='2026-09-01' is midnight in the local zone: an item at 02:00+05:30 that day counts, 23:59:59 the day before does not."""
+    early = store.add_memory(
+        "annotation early morning", store.FACT, "2026-09-01T02:00:00+05:30"
+    )
+    store.add_memory("annotation last second", store.FACT, "2026-08-31T23:59:59+05:30")
+
+    listed = tools.run("search_memories", {"since": "2026-09-01"}, fixed_now)
+    searched = tools.run(
+        "search_memories", {"query": "annotation", "since": "2026-09-01"}, fixed_now
+    )
+
+    for out in (listed, searched):
+        assert out["count"] == 1
+        assert [m["id"] for m in out["items"]] == [early["id"]]
+
+
+@pytest.mark.parametrize("bad", [5, 1.5, True, ["2026-09-01"], {"a": 1}])
+def test_fr38_non_string_since_and_until_are_ignored(db, fixed_now, bad):
+    """A since or until that is not a string is ignored: no filter, no error."""
+    for n in range(1, 4):
+        mem_on(f"annotation note number {n}", n)
+
+    listed = tools.run("search_memories", {"since": bad, "until": bad}, fixed_now)
+    searched = tools.run(
+        "search_memories",
+        {"query": "annotation", "since": bad, "until": bad},
+        fixed_now,
+    )
+
+    assert listed["count"] == searched["count"] == 3
+    assert len(listed["items"]) == len(searched["items"]) == 3
+
+
+@pytest.mark.parametrize("bad", [5, 1.5, True, ["annotation"], {"a": 1}])
+def test_fr37_non_string_query_returns_only_an_error(db, fixed_now, bad):
+    """A query that is neither None nor a string returns only {error: <reason>}."""
+    store.add_memory("The annotation plan is ready", store.FACT, FIXED_ISO)
+
+    out = tools.run("search_memories", {"query": bad}, fixed_now)
+
+    assert list(out) == ["error"]
+    assert isinstance(out["error"], str) and out["error"]
+
+
+def test_fr36_search_memories_does_not_change_the_row_count(db, fixed_now):
+    """The tool never writes: the memories table has the same rows after searching and listing."""
+    for n in range(1, 7):
+        mem_on(f"annotation note number {n}", n)
+    before = memory_rows_in_db(db)
+
+    tools.run("search_memories", {"query": "annotation"}, fixed_now)
+    tools.run("search_memories", {}, fixed_now)
+    tools.run("search_memories", {"query": 5}, fixed_now)
+
+    assert memory_count(db) == 6
+    assert memory_rows_in_db(db) == before

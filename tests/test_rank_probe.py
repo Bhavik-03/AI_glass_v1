@@ -226,3 +226,10 @@ def test_fr37_main_restores_db_path_when_seed_is_missing(monkeypatch, tmp_path):
         rank_probe.main()
 
     assert config.DB_PATH == original
+
+
+def test_fr37_top_k_reads_memory_recall_max_from_config():
+    """TOP_K equals config.MEMORY_RECALL_MAX, and both recall and list maxima are 5."""
+    assert config.MEMORY_RECALL_MAX == 5
+    assert config.MEMORY_LIST_MAX == 5
+    assert rank_probe.TOP_K == config.MEMORY_RECALL_MAX
