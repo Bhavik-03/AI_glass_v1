@@ -77,10 +77,14 @@ def init() -> None:
         con.executescript(SCHEMA)
 
 
-def add_memory(text: str, type: str, created_at: str) -> dict:
-    """Store one key point; an item over `config.MEMORY_MAX_WORDS` words is rejected."""
+def _check_length(text: str) -> None:
     if len(text.split()) > config.MEMORY_MAX_WORDS:
         raise ValueError(f"memory is over {config.MEMORY_MAX_WORDS} words")
+
+
+def add_memory(text: str, type: str, created_at: str) -> dict:
+    """Store one key point; an item over `config.MEMORY_MAX_WORDS` words is rejected."""
+    _check_length(text)
     with _connect() as con:
         cur = con.execute(
             "INSERT INTO memories (text, type, created_at) VALUES (?, ?, ?)",
@@ -89,10 +93,50 @@ def add_memory(text: str, type: str, created_at: str) -> dict:
     return {"id": cur.lastrowid, "text": text, "type": type, "created_at": created_at}
 
 
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.lower().replace("'", ""))
+
+
 def _match_query(question: str) -> str:
     """The question's content words as a quoted FTS5 OR query; '' when none are left."""
-    words = re.findall(r"[a-z0-9]+", question.lower().replace("'", ""))
-    return " OR ".join(f'"{w}"' for w in words if w not in STOPWORDS)
+    return " OR ".join(f'"{w}"' for w in _words(question) if w not in STOPWORDS)
+
+
+def _stem(word: str) -> str:
+    for suffix in ("ing", "ed", "es", "s"):
+        if word.endswith(suffix) and len(word) - len(suffix) >= 4:
+            return word[: -len(suffix)]
+    return word
+
+
+def find_same(text: str) -> dict | None:
+    """The stored memory that repeats `text` almost word for word, else None.
+
+    A safety guard, not a deduplicator: Jaccard on stemmed content words at
+    `config.MEMORY_SAME_THRESHOLD` merges near-verbatim repeats only. Paraphrases stay apart.
+    """
+    new = {_stem(w) for w in _words(text) if w not in STOPWORDS}
+    best, best_score = None, 0.0
+    with _connect() as con:
+        rows = con.execute("SELECT id, text, type, created_at FROM memories").fetchall()
+    for row in rows:
+        old = {_stem(w) for w in _words(row["text"]) if w not in STOPWORDS}
+        score = len(new & old) / len(new | old) if new | old else 0.0
+        if score >= config.MEMORY_SAME_THRESHOLD and score > best_score:
+            best, best_score = dict(row), score
+    return best
+
+
+def remember(text: str, type: str, created_at: str) -> dict:
+    """Store a key point unless a near-verbatim repeat is already stored.
+
+    Returns the item and `new`: False with the existing item (unchanged) for a repeat.
+    """
+    _check_length(text)
+    existing = find_same(text)
+    if existing:
+        return {**existing, "new": False}
+    return {**add_memory(text, type, created_at), "new": True}
 
 
 def _valid_bound(con: sqlite3.Connection, value: str | None) -> str | None:

@@ -952,3 +952,126 @@ def test_fr38_bounds_with_other_offset_compare_as_same_moment(db):
 
     assert found_ids("annotation", since="2026-09-01T00:00:00Z") == [exact["id"]]
     assert found_ids("annotation", until="2026-09-01T00:00:00Z") == [before["id"]]
+
+
+def test_fr40_threshold_config_is_point_nine():
+    """MEMORY_SAME_THRESHOLD is 0.9 in config."""
+    assert config.MEMORY_SAME_THRESHOLD == 0.9
+
+
+def test_fr40_find_same_none_on_empty_store(db):
+    """find_same returns None when the store is empty."""
+    assert store.find_same("LoRA fine-tuning") is None
+
+
+def test_fr40_find_same_finds_reordered_inflected_repeat(db):
+    """A repeat with the same content words in another order is found."""
+    [first] = add_mems("Annotation project deadline is in March")
+    found = store.find_same("The deadline for the annotation project is March")
+    assert found is not None
+    assert found["id"] == first["id"]
+
+
+def test_fr40_find_same_returns_stored_item_unchanged(db):
+    """find_same returns the stored item with its original text and created_at."""
+    store.add_memory("Studying LoRA fine-tuning", store.FACT, MEM_TIME)
+    found = store.find_same("I am studying LoRA fine tuning")
+    assert found["text"] == "Studying LoRA fine-tuning"
+    assert found["created_at"] == MEM_TIME
+    assert found["type"] == store.FACT
+    assert set(found) == {"id", "text", "type", "created_at"}
+
+
+def test_fr40_find_same_none_for_unrelated_topic(db):
+    """'LoRA fine-tuning' stored: 'attention in transformers' is not found."""
+    add_mems("LoRA fine-tuning")
+    assert store.find_same("attention in transformers") is None
+
+
+def test_fr40_find_same_none_for_opposites(db):
+    """Opposite points that differ by one word are not the same."""
+    add_mems("Prefers answers with code examples")
+    assert store.find_same("Prefers answers without code examples") is None
+
+
+def test_fr40_find_same_none_for_one_word_change(db):
+    """Changing one content word (Rust to Go) is not a repeat."""
+    add_mems("Wants to learn Rust this year")
+    assert store.find_same("Wants to learn Go this year") is None
+
+
+def test_fr40_find_same_uses_config_threshold_lower(db, monkeypatch):
+    """A lower MEMORY_SAME_THRESHOLD makes a partly similar pair match."""
+    add_mems("Wants to learn Rust this year")
+    assert store.find_same("Wants to learn Go this year") is None
+    monkeypatch.setattr(config, "MEMORY_SAME_THRESHOLD", 0.5)
+    assert store.find_same("Wants to learn Go this year") is not None
+
+
+def test_fr40_find_same_uses_config_threshold_above_one(db, monkeypatch):
+    """With the threshold above 1, even identical text does not match."""
+    add_mems("LoRA fine-tuning")
+    monkeypatch.setattr(config, "MEMORY_SAME_THRESHOLD", 1.1)
+    assert store.find_same("LoRA fine-tuning") is None
+
+
+def test_fr40_find_same_picks_best_scoring(db, monkeypatch):
+    """When several stored items match, the best-scoring one wins."""
+    monkeypatch.setattr(config, "MEMORY_SAME_THRESHOLD", 0.5)
+    _, second = add_mems(
+        "Project deadline March annotation",
+        "Project deadline March annotation review team",
+    )
+    found = store.find_same("Project deadline March annotation review team")
+    assert found["id"] == second["id"]
+
+
+def test_fr40_remember_first_add_is_new(db):
+    """remember on an empty store adds a row and returns new True."""
+    item = store.remember("LoRA fine-tuning", store.FACT, MEM_TIME)
+    assert item["new"] is True
+    assert item["text"] == "LoRA fine-tuning"
+    assert item["type"] == store.FACT
+    assert item["created_at"] == MEM_TIME
+    assert len(memory_rows(db)) == 1
+
+
+def test_fr40_remember_near_verbatim_repeat_adds_no_row(db):
+    """A near-verbatim repeat adds no row, keeps the stored item, returns new False."""
+    first = store.remember("Studying LoRA fine-tuning", store.FACT, MEM_TIME)
+    before = memory_rows(db)
+    later = "2026-10-21T09:00:00+05:30"
+    again = store.remember("I am studying LoRA fine tuning", store.FACT, later)
+    assert again["new"] is False
+    assert again["id"] == first["id"]
+    assert again["text"] == "Studying LoRA fine-tuning"
+    assert again["created_at"] == MEM_TIME
+    assert memory_rows(db) == before
+
+
+def test_fr40_remember_unrelated_point_adds_row_and_leaves_first(db):
+    """'LoRA fine-tuning' stored: adding 'attention in transformers' makes a new row."""
+    store.remember("LoRA fine-tuning", store.FACT, MEM_TIME)
+    before = memory_rows(db)
+    item = store.remember("attention in transformers", store.FACT, MEM_TIME)
+    assert item["new"] is True
+    after = memory_rows(db)
+    assert len(after) == 2
+    assert after[0] == before[0]
+
+
+def test_fr40_remember_paraphrase_with_new_content_words_adds_row(db):
+    """A paraphrase that changes content words adds a row."""
+    store.remember("Prefers short answers", store.FACT, MEM_TIME)
+    item = store.remember("Likes brief answers", store.FACT, MEM_TIME)
+    assert item["new"] is True
+    assert len(memory_rows(db)) == 2
+
+
+def test_fr40_remember_over_word_limit_raises_even_if_match(db):
+    """Text over the word limit raises ValueError even when it would match; nothing stored."""
+    store.remember(WORDS_12, store.FACT, MEM_TIME)
+    before = memory_rows(db)
+    with pytest.raises(ValueError, match=str(config.MEMORY_MAX_WORDS)):
+        store.remember(WORDS_13, store.FACT, MEM_TIME)
+    assert memory_rows(db) == before
