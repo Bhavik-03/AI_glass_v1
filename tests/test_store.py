@@ -679,3 +679,153 @@ def test_fr32_memories_survive_restart(db):
     rows = memory_rows(db)
     assert len(rows) == 1
     assert "I study operating systems" in rows[0]
+
+
+def add_mems(*texts: str) -> list[dict]:
+    return [store.add_memory(t, store.FACT, MEM_TIME) for t in texts]
+
+
+def test_fr37_fts_table_exists_after_init(db):
+    """An FTS5 index over memories.text exists after init()."""
+    assert "memories_fts" in table_names(db)
+
+
+def test_fr37_inserted_item_is_searchable_immediately(db):
+    """An item added with add_memory is found by search_memories (index synced on insert)."""
+    mem = store.add_memory("We discussed annotation tools", store.PROJECT, MEM_TIME)
+
+    found = store.search_memories("annotation", 5)
+
+    assert [m["id"] for m in found] == [mem["id"]]
+
+
+def index_rowids(path, word: str) -> list[int]:
+    """Rowids the FTS5 index itself holds for a word, without joining memories."""
+    con = REAL_CONNECT(path)
+    try:
+        rows = con.execute(
+            "SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?", (f'"{word}"',)
+        )
+        return sorted(r[0] for r in rows)
+    finally:
+        con.close()
+
+
+def test_fr37_delete_from_memories_empties_the_index(db):
+    """DELETE FROM memories removes the rows from the index itself, not only from search."""
+    first, second = add_mems("We discussed annotation tools", "I like annotation work")
+    assert index_rowids(db, "annotation") == [first["id"], second["id"]]
+
+    con = REAL_CONNECT(db)
+    try:
+        con.execute("DELETE FROM memories")
+        con.commit()
+    finally:
+        con.close()
+
+    assert index_rowids(db, "annotation") == []
+    assert store.search_memories("annotation", 5) == []
+
+
+def test_fr37_returns_at_most_k_items(db):
+    """search_memories returns at most k items."""
+    add_mems(*[f"annotation note number {n}" for n in range(6)])
+
+    assert len(store.search_memories("annotation", 5)) == 5
+    assert len(store.search_memories("annotation", 2)) == 2
+
+
+def test_fr37_best_match_first(db):
+    """An item matching two query words ranks before an item matching one."""
+    two, one = add_mems(
+        "annotation guidelines for the dataset",
+        "annotation was discussed briefly",
+    )
+
+    found = store.search_memories("annotation dataset", 5)
+
+    assert [m["id"] for m in found] == [two["id"], one["id"]]
+
+
+def test_fr37_spoken_question_finds_item_with_other_words(db):
+    """A question with words not in the item still returns the item containing 'annotation'."""
+    target, *_ = add_mems(
+        "Annotation guidelines are due on Friday",
+        "My cat is called Biscuit",
+        "I study operating systems at night",
+        "Prefer short spoken answers",
+    )
+
+    found = store.search_memories("what did we discuss about annotation", 5)
+
+    assert [m["id"] for m in found] == [target["id"]]
+
+
+def test_fr37_stemmed_word_matches(db):
+    """Word forms match through stemming ('annotations' finds 'annotation')."""
+    mem, *_ = add_mems("Annotation guidelines are due on Friday", "My cat is Biscuit")
+
+    found = store.search_memories("annotations", 5)
+
+    assert [m["id"] for m in found] == [mem["id"]]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        'what\'s the "annotation" plan',
+        "fine-tuning -x (y) AND OR NOT NEAR*",
+        '"',
+        "'",
+        "*",
+    ],
+)
+def test_fr37_syntax_characters_do_not_raise(db, query):
+    """A question with FTS5 syntax characters (quotes, apostrophes, hyphens) does not raise."""
+    add_mems("The annotation plan and fine-tuning notes")
+
+    result = store.search_memories(query, 5)
+
+    assert isinstance(result, list)
+
+
+def test_fr37_question_with_quotes_still_matches(db):
+    """Quotes and apostrophes around real words are ignored, the words still match."""
+    mem, *_ = add_mems("The annotation plan is ready", "My cat is Biscuit")
+
+    found = store.search_memories('what\'s the "annotation" plan', 5)
+
+    assert [m["id"] for m in found] == [mem["id"]]
+
+
+@pytest.mark.parametrize(
+    "query", ['"', "'", "*", "", "what did we about", "AND OR NOT"]
+)
+def test_fr37_only_syntax_or_stopwords_returns_empty(db, query):
+    """A query with no usable words returns []."""
+    add_mems("The annotation plan is ready")
+
+    assert store.search_memories(query, 5) == []
+
+
+def test_fr37_no_match_returns_empty(db):
+    """A question matching nothing returns []."""
+    add_mems("The annotation plan is ready")
+
+    assert store.search_memories("quantum chromodynamics", 5) == []
+
+
+def test_fr37_each_item_has_four_fields(db):
+    """Each returned item has id, text, type and created_at."""
+    mem = store.add_memory("The annotation plan is ready", store.PROJECT, MEM_TIME)
+
+    found = store.search_memories("annotation", 5)
+
+    assert found == [
+        {
+            "id": mem["id"],
+            "text": "The annotation plan is ready",
+            "type": "project",
+            "created_at": MEM_TIME,
+        }
+    ]

@@ -1,3 +1,4 @@
+import re
 import sqlite3
 from contextlib import closing, contextmanager
 
@@ -13,6 +14,13 @@ FACT = "fact"
 PROJECT = "project"
 PREFERENCE = "preference"
 SESSION = "session"
+
+# Dropped from a spoken question before it searches memories; negations are not listed.
+STOPWORDS = frozenset(
+    "a an the and or of to in on at for with is are was were be been am i my me it its this"  # noqa: SIM905
+    " that as by from about into these those has have had do does did so than then there"
+    " their what which who will would can could should may might just also very".split()
+)
 
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS notes (
@@ -42,6 +50,15 @@ CREATE TABLE IF NOT EXISTS memories (
     type TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+    text, content='', tokenize='porter unicode61'
+);
+CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+    INSERT INTO memories_fts (rowid, text) VALUES (new.id, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+    INSERT INTO memories_fts (memories_fts, rowid, text) VALUES ('delete', old.id, old.text);
+END;
 """
 
 
@@ -70,6 +87,27 @@ def add_memory(text: str, type: str, created_at: str) -> dict:
             (text, type, created_at),
         )
     return {"id": cur.lastrowid, "text": text, "type": type, "created_at": created_at}
+
+
+def _match_query(question: str) -> str:
+    """The question's content words as a quoted FTS5 OR query; '' when none are left."""
+    words = re.findall(r"[a-z0-9]+", question.lower().replace("'", ""))
+    return " OR ".join(f'"{w}"' for w in words if w not in STOPWORDS)
+
+
+def search_memories(query: str, k: int) -> list[dict]:
+    """The `k` memories that best match the question's content words, best first."""
+    match = _match_query(query)
+    if not match:
+        return []
+    with _connect() as con:
+        rows = con.execute(
+            "SELECT m.id, m.text, m.type, m.created_at FROM memories_fts"
+            " JOIN memories m ON m.id = memories_fts.rowid"
+            " WHERE memories_fts MATCH ? ORDER BY bm25(memories_fts), m.id DESC LIMIT ?",
+            (match, k),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def add_note(text: str, created_at: str) -> dict:
