@@ -1228,3 +1228,181 @@ def test_fr24_start_quiz_question_comes_from_config_template(db, monkeypatch):
 def test_fr24_quiz_score_text(right, total, text):
     """The end of a quiz speaks the score as '<right> of <total> right'."""
     assert tools.quiz_score_text(right, total) == text
+
+
+# --- remember (FR-33) ---
+
+MEMORY_TYPES = {"fact", "project", "preference", "session"}
+LORA_POINT = "Studying LoRA fine-tuning"
+LORA_REPEAT = "I am studying LoRA fine tuning"
+THIRTEEN_WORDS = (
+    "one two three four five six seven eight nine ten eleven twelve thirteen"
+)
+
+
+def memory_count(db_path):
+    con = sqlite3.connect(db_path)
+    try:
+        return con.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+    finally:
+        con.close()
+
+
+def memory_rows_in_db(db_path):
+    con = sqlite3.connect(db_path)
+    try:
+        return con.execute("SELECT text, created_at FROM memories").fetchall()
+    finally:
+        con.close()
+
+
+def test_fr33_declares_remember_with_required_text_and_type_enum():
+    """DECLARATIONS has one remember entry requiring string 'text' and string 'type' (enum of the four types)."""
+    decl = declaration("remember")
+    assert decl["description"]
+    schema = decl["parameters_json_schema"]
+    assert schema["type"] == "object"
+    assert schema["properties"]["text"]["type"] == "string"
+    assert schema["properties"]["type"]["type"] == "string"
+    assert set(schema["properties"]["type"]["enum"]) == MEMORY_TYPES
+    assert len(schema["properties"]["type"]["enum"]) == 4
+    assert "text" in schema["required"]
+    assert "type" in schema["required"]
+
+
+def test_fr33_remember_stores_exactly_one_row(db, fixed_now):
+    """One remember call stores exactly one row, never two."""
+    tools.run("remember", {"text": LORA_POINT, "type": "fact"}, fixed_now)
+
+    assert memory_count(db) == 1
+
+
+def test_fr33_remember_returns_id_text_type_created_at_new(db, fixed_now):
+    """remember returns exactly {id, text, type, created_at, new} with the stored values and new True."""
+    out = tools.run("remember", {"text": LORA_POINT, "type": "project"}, fixed_now)
+
+    assert set(out) == {"id", "text", "type", "created_at", "new"}
+    assert out["text"] == LORA_POINT
+    assert out["type"] == "project"
+    assert out["created_at"] == FIXED_ISO
+    assert out["new"] is True
+    assert memory_rows_in_db(db) == [(LORA_POINT, FIXED_ISO)]
+
+
+def test_fr33_remember_strips_the_text(db, fixed_now):
+    """The stored and returned text is stripped of surrounding whitespace."""
+    out = tools.run(
+        "remember", {"text": "  " + LORA_POINT + "  ", "type": "fact"}, fixed_now
+    )
+
+    assert out["text"] == LORA_POINT
+    assert memory_rows_in_db(db)[0][0] == LORA_POINT
+
+
+@pytest.mark.parametrize("mem_type", sorted(MEMORY_TYPES))
+def test_fr33_remember_accepts_each_of_the_four_types(db, fixed_now, mem_type):
+    """Each of fact, project, preference and session is accepted and returned as given."""
+    out = tools.run("remember", {"text": LORA_POINT, "type": mem_type}, fixed_now)
+
+    assert out["type"] == mem_type
+    assert out["new"] is True
+    assert memory_count(db) == 1
+
+
+def test_fr33_remember_repeat_returns_existing_item_not_new(db):
+    """A near-verbatim repeat returns new False and the original item (id, text, type, created_at)."""
+    first = tools.run("remember", {"text": LORA_POINT, "type": "fact"}, NOW)
+    later = NOW + timedelta(hours=1)
+
+    out = tools.run("remember", {"text": LORA_REPEAT, "type": "fact"}, later)
+
+    assert set(out) == {"id", "text", "type", "created_at", "new"}
+    assert out["new"] is False
+    assert out["id"] == first["id"]
+    assert out["text"] == LORA_POINT
+    assert out["type"] == first["type"]
+    assert out["created_at"] == first["created_at"]
+
+
+def test_fr33_remember_repeat_stores_no_second_row(db):
+    """After a repeat the table still has one row, with the original created_at."""
+    first = tools.run("remember", {"text": LORA_POINT, "type": "fact"}, NOW)
+
+    tools.run(
+        "remember", {"text": LORA_REPEAT, "type": "fact"}, NOW + timedelta(hours=1)
+    )
+
+    assert memory_rows_in_db(db) == [(LORA_POINT, first["created_at"])]
+
+
+def test_fr33_remember_two_different_points_store_two_rows(db, fixed_now):
+    """Two different points are both new and store two rows."""
+    a = tools.run("remember", {"text": LORA_POINT, "type": "fact"}, fixed_now)
+    b = tools.run(
+        "remember",
+        {"text": "Prefers short spoken answers", "type": "preference"},
+        fixed_now,
+    )
+
+    assert a["new"] is True
+    assert b["new"] is True
+    assert a["id"] != b["id"]
+    assert memory_count(db) == 2
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"text": "", "type": "fact"},
+        {"text": "   ", "type": "fact"},
+        {"type": "fact"},
+        {"text": 5, "type": "fact"},
+        {"text": None, "type": "fact"},
+        {"text": LORA_POINT},
+        {"text": LORA_POINT, "type": None},
+        {"text": LORA_POINT, "type": 5},
+        {"text": LORA_POINT, "type": ""},
+        {"text": LORA_POINT, "type": "hobby"},
+        {"text": THIRTEEN_WORDS, "type": "fact"},
+    ],
+    ids=[
+        "empty-text",
+        "blank-text",
+        "missing-text",
+        "non-string-text",
+        "none-text",
+        "missing-type",
+        "none-type",
+        "non-string-type",
+        "empty-type",
+        "unknown-type",
+        "thirteen-words",
+    ],
+)
+def test_fr33_remember_bad_arguments_return_error_and_store_nothing(
+    db, fixed_now, args
+):
+    """Empty text, an unknown type or text over the word limit returns only {error} and stores nothing."""
+    out = tools.run("remember", args, fixed_now)
+
+    assert list(out) == ["error"]
+    assert isinstance(out["error"], str) and out["error"]
+    assert memory_count(db) == 0
+
+
+def test_fr33_remember_twelve_words_is_accepted(db, fixed_now):
+    """Text of exactly config.MEMORY_MAX_WORDS (12) words is stored."""
+    assert config.MEMORY_MAX_WORDS == 12
+    text = " ".join(THIRTEEN_WORDS.split()[:12])
+
+    out = tools.run("remember", {"text": text, "type": "fact"}, fixed_now)
+
+    assert out["new"] is True
+    assert memory_count(db) == 1
+
+
+def test_fr33_remember_word_limit_error_mentions_the_limit(db, fixed_now):
+    """The over-limit error mentions the word limit so Gemini can shorten the point."""
+    out = tools.run("remember", {"text": THIRTEEN_WORDS, "type": "fact"}, fixed_now)
+
+    assert str(config.MEMORY_MAX_WORDS) in out["error"]

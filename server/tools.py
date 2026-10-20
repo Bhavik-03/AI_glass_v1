@@ -6,6 +6,8 @@ from server import config, search, session, store
 # Larger integers can't be bound as SQLite parameters (OverflowError).
 SQLITE_MAX_INT = 2**63 - 1
 
+MEMORY_TYPES = (store.FACT, store.PROJECT, store.PREFERENCE, store.SESSION)
+
 DECLARATIONS = [
     {
         "name": "web_search",
@@ -97,6 +99,27 @@ DECLARATIONS = [
         "parameters_json_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "remember",
+        "description": (
+            "Remember one key point about the user, a project, a preference or a past "
+            f"conversation. text is at most {config.MEMORY_MAX_WORDS} words: shorten it to "
+            "the key point. Repeat the stored text back to the user; when the result has "
+            "new false, say it is already remembered."
+        ),
+        "parameters_json_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "The key point"},
+                "type": {
+                    "type": "string",
+                    "enum": list(MEMORY_TYPES),
+                    "description": "fact about the user, project, preference or session summary",
+                },
+            },
+            "required": ["text", "type"],
+        },
+    },
+    {
         "name": "start_quiz",
         "description": (
             "Start a quiz on logged concepts. Call it only when the user asks to be quizzed. "
@@ -167,6 +190,18 @@ def _log_concept(args: dict, now: datetime) -> dict:
     )
 
 
+def _remember(args: dict, now: datetime) -> dict:
+    text, kind = args.get("text"), args.get("type")
+    if not isinstance(text, str) or not text.strip():
+        return {"error": "remember needs a non-empty text"}
+    if kind not in MEMORY_TYPES:
+        return {"error": f"remember needs a type: {', '.join(MEMORY_TYPES)}"}
+    try:
+        return store.remember(text.strip(), kind, now.isoformat(timespec="seconds"))
+    except ValueError as e:
+        return {"error": f"{e}; shorten it to a key point"}
+
+
 def _learned_this_week(args: dict, now: datetime) -> dict:
     since = now - timedelta(days=config.LEARNED_DAYS)
     return store.learned_since(
@@ -221,6 +256,7 @@ _HANDLERS = {
     "log_concept": _log_concept,
     "learned_this_week": _learned_this_week,
     "start_quiz": _start_quiz,
+    "remember": _remember,
 }
 
 
