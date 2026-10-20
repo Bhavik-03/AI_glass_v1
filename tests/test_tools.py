@@ -1624,3 +1624,129 @@ def test_fr36_search_memories_does_not_change_the_row_count(db, fixed_now):
 
     assert memory_count(db) == 6
     assert memory_rows_in_db(db) == before
+
+
+# --- forget (FR-34) ---
+
+
+def stored_memory(text, mem_type="fact"):
+    return store.add_memory(text, mem_type, FIXED_ISO)
+
+
+def test_fr34_declares_forget_with_required_query():
+    """DECLARATIONS has one forget entry whose schema requires a string 'query'."""
+    decl = declaration("forget")
+    assert decl["description"]
+    schema = decl["parameters_json_schema"]
+    assert schema["type"] == "object"
+    assert schema["properties"]["query"]["type"] == "string"
+    assert "query" in schema["required"]
+
+
+def test_fr34_forget_one_match_returns_deleted_item_and_removes_row(db, fixed_now):
+    """Exactly one match returns {deleted: {id, text, type, created_at}} and the row is gone."""
+    gym = stored_memory("Gym on Monday", "preference")
+    stored_memory("My cat is called Biscuit")
+
+    out = tools.run("forget", {"query": "gym Monday"}, fixed_now)
+
+    assert out == {
+        "deleted": {
+            "id": gym["id"],
+            "text": "Gym on Monday",
+            "type": "preference",
+            "created_at": FIXED_ISO,
+        }
+    }
+    assert memory_count(db) == 1
+    assert memory_rows_in_db(db) == [("My cat is called Biscuit", FIXED_ISO)]
+
+
+def test_fr34_forget_gym_mondays_deletes_stored_gym_on_monday(db, fixed_now):
+    """The query "gym Mondays" deletes a stored "gym on Monday" through the tool."""
+    gym = stored_memory("gym on Monday")
+
+    out = tools.run("forget", {"query": "gym Mondays"}, fixed_now)
+
+    assert out["deleted"]["id"] == gym["id"]
+    assert memory_count(db) == 0
+
+
+def test_fr34_forget_ambiguous_returns_candidates_and_deletes_nothing(db, fixed_now):
+    """Two or more matches return {candidates: [...]} naming both items, and nothing is deleted."""
+    first = stored_memory("Gym session on Monday")
+    second = stored_memory("Gym session on Friday")
+
+    out = tools.run("forget", {"query": "gym session"}, fixed_now)
+
+    assert list(out) == ["candidates"]
+    assert [c["id"] for c in out["candidates"]] == [first["id"], second["id"]]
+    assert [c["text"] for c in out["candidates"]] == [
+        "Gym session on Monday",
+        "Gym session on Friday",
+    ]
+    assert memory_count(db) == 2
+
+
+def test_fr34_forget_no_match_returns_only_error_saying_not_found(db, fixed_now):
+    """With no match the result is only {error} saying nothing was found, and nothing is deleted."""
+    stored_memory("Gym on Monday")
+
+    out = tools.run("forget", {"query": "gym plan"}, fixed_now)
+
+    assert list(out) == ["error"]
+    assert isinstance(out["error"], str)
+    assert "found" in out["error"]
+    assert memory_count(db) == 1
+
+
+def test_fr34_forget_on_empty_store_returns_not_found_error(db, fixed_now):
+    """With nothing stored, forget returns only an {error} saying nothing was found."""
+    out = tools.run("forget", {"query": "gym Monday"}, fixed_now)
+
+    assert list(out) == ["error"]
+    assert "found" in out["error"]
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["the is a", "what did we about", "!!! ???", "'"],
+    ids=["stopwords", "spoken-stopwords", "punctuation", "apostrophe"],
+)
+def test_fr34_forget_query_without_content_words_returns_only_error(
+    db, fixed_now, query
+):
+    """A query with no content words returns only a non-empty {error} and deletes nothing."""
+    stored_memory("Gym on Monday")
+    stored_memory("My cat is called Biscuit")
+
+    out = tools.run("forget", {"query": query}, fixed_now)
+
+    assert list(out) == ["error"]
+    assert isinstance(out["error"], str) and out["error"]
+    assert memory_count(db) == 2
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {},
+        {"query": None},
+        {"query": 5},
+        {"query": ["gym"]},
+        {"query": ""},
+        {"query": "   "},
+    ],
+    ids=["missing", "none", "non-string", "list", "empty", "blank"],
+)
+def test_fr34_forget_bad_query_returns_only_error_and_deletes_nothing(
+    db, fixed_now, args
+):
+    """A missing, None, non-string or blank query returns only a non-empty {error} and deletes nothing."""
+    stored_memory("Gym on Monday")
+
+    out = tools.run("forget", args, fixed_now)
+
+    assert list(out) == ["error"]
+    assert isinstance(out["error"], str) and out["error"]
+    assert memory_count(db) == 1

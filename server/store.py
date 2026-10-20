@@ -113,22 +113,48 @@ def _stem(word: str) -> str:
     return word
 
 
+def _content_stems(text: str) -> set[str]:
+    """The stemmed content words of `text`: what find_same and forget_memory compare."""
+    return {_stem(w) for w in _words(text) if w not in STOPWORDS}
+
+
 def find_same(text: str) -> dict | None:
     """The stored memory that repeats `text` almost word for word, else None.
 
     A safety guard, not a deduplicator: Jaccard on stemmed content words at
     `config.MEMORY_SAME_THRESHOLD` merges near-verbatim repeats only. Paraphrases stay apart.
     """
-    new = {_stem(w) for w in _words(text) if w not in STOPWORDS}
+    new = _content_stems(text)
     best, best_score = None, 0.0
     with _connect() as con:
         rows = con.execute("SELECT id, text, type, created_at FROM memories").fetchall()
     for row in rows:
-        old = {_stem(w) for w in _words(row["text"]) if w not in STOPWORDS}
+        old = _content_stems(row["text"])
         score = len(new & old) / len(new | old) if new | old else 0.0
         if score >= config.MEMORY_SAME_THRESHOLD and score > best_score:
             best, best_score = dict(row), score
     return best
+
+
+def forget_memory(query: str) -> dict:
+    """Delete the one memory that contains every content word of `query`.
+
+    Recall matches on any word, which is far too loose for a DELETE, so forgetting needs
+    all of them (same stems as find_same). Returns {"deleted": item}, or {"candidates":
+    [...]} with nothing deleted: empty when nothing matched, two or more when ambiguous.
+    """
+    wanted = _content_stems(query)
+    with _connect() as con:
+        rows = con.execute(
+            "SELECT id, text, type, created_at FROM memories ORDER BY id"
+        ).fetchall()
+        matches = [
+            dict(r) for r in rows if wanted and wanted <= _content_stems(r["text"])
+        ]
+        if len(matches) == 1:
+            con.execute("DELETE FROM memories WHERE id = ?", (matches[0]["id"],))
+            return {"deleted": matches[0]}
+    return {"candidates": matches}
 
 
 def remember(text: str, type: str, created_at: str) -> dict:

@@ -150,6 +150,26 @@ DECLARATIONS = [
         },
     },
     {
+        "name": "forget",
+        "description": (
+            "Delete one memory. query is a few distinctive words from the stored text, so "
+            "call search_memories first to see its exact words. It deletes only when exactly "
+            "one memory contains all of the words. When it returns candidates, name them to "
+            "the user and ask which; delete nothing until they answer. When it finds nothing, "
+            "say so."
+        ),
+        "parameters_json_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Words from the memory to delete",
+                }
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "start_quiz",
         "description": (
             "Start a quiz on logged concepts. Call it only when the user asks to be quizzed. "
@@ -232,6 +252,19 @@ def _remember(args: dict, now: datetime) -> dict:
         return {"error": f"{e}; shorten it to a key point"}
 
 
+def _forget(args: dict, now: datetime) -> dict:
+    query = args.get("query")
+    if not isinstance(query, str) or not query.strip():
+        return {"error": "forget needs a non-empty query"}
+    result = store.forget_memory(query)
+    candidates = result.get("candidates")
+    if candidates is None or len(candidates) > 1:
+        return result
+    return {
+        "error": "no memory was found containing all of those words; nothing deleted"
+    }
+
+
 def _search_memories(args: dict, now: datetime) -> dict:
     query = args.get("query")
     if query is not None and not isinstance(query, str):
@@ -308,6 +341,7 @@ _HANDLERS = {
     "start_quiz": _start_quiz,
     "remember": _remember,
     "search_memories": _search_memories,
+    "forget": _forget,
 }
 
 

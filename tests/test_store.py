@@ -1389,3 +1389,218 @@ def test_fr36_count_functions_and_recent_are_read_only(db):
     store.count_matches("annotation")
 
     assert memory_rows(db) == before
+
+
+def memory_texts(path) -> list[str]:
+    con = REAL_CONNECT(path)
+    try:
+        return [r[0] for r in con.execute("SELECT text FROM memories ORDER BY id")]
+    finally:
+        con.close()
+
+
+def table_count(path, table: str) -> int:
+    con = REAL_CONNECT(path)
+    try:
+        return con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+    finally:
+        con.close()
+
+
+def test_fr34_forget_one_match_deletes_it_and_keeps_every_other_row(db):
+    """With exactly one item containing every query word, that row is gone and every other row remains."""
+    add_mems("Gym on Monday", "My cat is called Biscuit", "I study operating systems")
+    assert table_count(db, "memories") == 3
+
+    store.forget_memory("gym Monday")
+
+    assert table_count(db, "memories") == 2
+    assert sorted(memory_texts(db)) == [
+        "I study operating systems",
+        "My cat is called Biscuit",
+    ]
+
+
+def test_fr34_forget_returns_the_deleted_row_with_four_fields(db):
+    """The result is {"deleted": {id, text, type, created_at}} describing the deleted row."""
+    mem = store.add_memory("Gym on Monday", store.PREFERENCE, MEM_TIME)
+    add_mems("My cat is called Biscuit")
+
+    result = store.forget_memory("gym Monday")
+
+    assert result == {
+        "deleted": {
+            "id": mem["id"],
+            "text": "Gym on Monday",
+            "type": "preference",
+            "created_at": MEM_TIME,
+        }
+    }
+
+
+def test_fr34_forget_gym_mondays_deletes_stored_gym_on_monday(db):
+    """ "gym Mondays" deletes a stored "gym on Monday" (same stemming as find_same)."""
+    [mem] = add_mems("gym on Monday")
+
+    result = store.forget_memory("gym Mondays")
+
+    assert result["deleted"]["id"] == mem["id"]
+    assert memory_rows(db) == []
+
+
+def test_fr34_forget_word_the_item_lacks_deletes_nothing(db):
+    """ "gym plan" against "gym on Monday" deletes nothing and returns empty candidates."""
+    add_mems("gym on Monday")
+    before = memory_rows(db)
+
+    result = store.forget_memory("gym plan")
+
+    assert result == {"candidates": []}
+    assert memory_rows(db) == before
+
+
+def test_fr34_forget_two_matches_delete_nothing_and_return_both_in_id_order(db):
+    """With two matching items nothing is deleted and both come back as candidates, oldest id first."""
+    first, second = add_mems("Gym session on Monday", "Gym session on Friday")
+    add_mems("My cat is called Biscuit")
+    before = memory_rows(db)
+
+    result = store.forget_memory("gym session")
+
+    assert list(result) == ["candidates"]
+    assert result["candidates"] == [
+        {
+            "id": first["id"],
+            "text": "Gym session on Monday",
+            "type": "fact",
+            "created_at": MEM_TIME,
+        },
+        {
+            "id": second["id"],
+            "text": "Gym session on Friday",
+            "type": "fact",
+            "created_at": MEM_TIME,
+        },
+    ]
+    assert memory_rows(db) == before
+
+
+def test_fr34_forget_needs_all_words_so_extra_word_narrows_to_one(db):
+    """A match needs ALL query words: "gym Friday" matches only the Friday item among two gym items."""
+    monday, friday = add_mems("Gym session on Monday", "Gym session on Friday")
+
+    result = store.forget_memory("gym Friday")
+
+    assert result["deleted"]["id"] == friday["id"]
+    assert memory_texts(db) == ["Gym session on Monday"]
+    assert store.search_memories("monday", 5)[0]["id"] == monday["id"]
+
+
+def test_fr34_forget_words_split_across_items_match_nothing(db):
+    """When each query word is in a different item but no item has both, nothing is deleted."""
+    add_mems("Gym on Monday", "Dentist appointment on Friday")
+    before = memory_rows(db)
+
+    result = store.forget_memory("gym Friday")
+
+    assert result == {"candidates": []}
+    assert memory_rows(db) == before
+
+
+def test_fr34_forget_no_match_deletes_nothing_and_returns_empty_candidates(db):
+    """With no matching item nothing is deleted and the candidates list is empty."""
+    add_mems("Gym on Monday", "My cat is called Biscuit")
+    before = memory_rows(db)
+
+    result = store.forget_memory("quantum chromodynamics")
+
+    assert result == {"candidates": []}
+    assert memory_rows(db) == before
+
+
+def test_fr34_forget_on_empty_store_returns_empty_candidates(db):
+    """With nothing stored, forget deletes nothing and returns empty candidates."""
+    assert store.forget_memory("gym Monday") == {"candidates": []}
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["", "   ", "the is a", "what did we about", "!!! ???", "'", '"', "*"],
+    ids=[
+        "empty",
+        "blank",
+        "only-stopwords",
+        "only-stopwords-spoken",
+        "only-punctuation",
+        "apostrophe",
+        "quote",
+        "star",
+    ],
+)
+def test_fr34_forget_query_without_content_words_matches_nothing(db, query):
+    """A blank, stopword-only or punctuation-only query matches nothing and never deletes everything."""
+    add_mems("Gym on Monday", "My cat is called Biscuit")
+    before = memory_rows(db)
+
+    result = store.forget_memory(query)
+
+    assert result == {"candidates": []}
+    assert memory_rows(db) == before
+
+
+def test_fr34_forget_removes_the_fts_index_entry_with_the_row(db):
+    """The FTS5 index entry goes with the row: the index holds no rowid for the deleted item."""
+    gym, cat = add_mems("Gym on Monday", "My cat likes Monday")
+    assert index_rowids(db, "gym") == [gym["id"]]
+    assert index_rowids(db, "monday") == sorted([gym["id"], cat["id"]])
+
+    store.forget_memory("gym")
+
+    assert index_rowids(db, "gym") == []
+    assert index_rowids(db, "monday") == [cat["id"]]
+
+
+def test_fr34_forget_ambiguous_leaves_the_index_untouched(db):
+    """An ambiguous query deletes nothing, so the index still holds both items."""
+    first, second = add_mems("Gym session on Monday", "Gym session on Friday")
+
+    store.forget_memory("gym session")
+
+    assert index_rowids(db, "gym") == sorted([first["id"], second["id"]])
+
+
+def test_fr34_forget_uses_the_same_stems_as_find_same(db):
+    """forget matches by the stems find_same uses: a reordered, inflected, stopword-padded query finds the item."""
+    [mem] = add_mems("Annotation project deadline is in March")
+    text = "the deadline for the annotation project is March"
+    assert store.find_same(text)["id"] == mem["id"]
+
+    result = store.forget_memory(text)
+
+    assert result["deleted"]["id"] == mem["id"]
+    assert memory_rows(db) == []
+
+
+def test_fr34_forgotten_item_is_not_returned_by_search_memories(db):
+    """After forget, search_memories no longer returns the deleted item."""
+    gym, other = add_mems("Gym on Monday", "Gym bag is in the car")
+    assert gym["id"] in [m["id"] for m in store.search_memories("gym Monday", 5)]
+
+    store.forget_memory("gym Monday")
+
+    found = [m["id"] for m in store.search_memories("gym Monday", 5)]
+    assert gym["id"] not in found
+    assert found == [other["id"]]
+
+
+def test_fr34_forget_leaves_notes_and_reminders_untouched(db):
+    """Forgetting a memory deletes nothing from the notes and reminders tables."""
+    store.add_note("gym on Monday", MEM_TIME)
+    store.add_reminder("gym on Monday", "2026-10-21T09:00:00+05:30", MEM_TIME)
+    add_mems("Gym on Monday")
+
+    store.forget_memory("gym Monday")
+
+    assert table_count(db, "notes") == 1
+    assert table_count(db, "reminders") == 1
+    assert table_count(db, "memories") == 0
