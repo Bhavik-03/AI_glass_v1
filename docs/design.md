@@ -210,6 +210,7 @@ the last four.
 
 - The profile block, rendered by `profile.py`, at the top. Use it to pitch the answer at my
   level and weigh advice against my goals.
+  The quiz grader's instruction does not carry it: it judges one concept answer.
 - Current date, weekday and time in the configured time zone (Asia/Kolkata); home city.
 - Answer in at most 3 sentences and at most 60 words. A list says the total count and the
   first 5 items.
@@ -350,6 +351,7 @@ New values; every other v1 and v2 value stays.
 | server/config.py | `PROFILE_SCHEMA_PATH = "config/profile_schema.json"` | committed |
 | server/config.py | `PROFILE_VALUES_PATH = "data/profile.json"` | gitignored |
 | server/config.py | `PROFILE_MAX_LINES = 40` | rendered lines; checked at load and write |
+| server/config.py | `PROFILE_LINE_CHARS = 100` | wrap width of a rendered line (FR-28) |
 | server/config.py | `SETUP_SLOTS` = identity, goal_now, goal_long, exploring, style, | FR-29 |
 | | constraints | |
 | server/config.py | `SETUP_STOP_PHRASE = "stop setup"` | |

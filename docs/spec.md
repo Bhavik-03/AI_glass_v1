@@ -336,8 +336,9 @@ FR-26 onwards are new in v3.
 
 ### FR-28 Profile in every prompt
 
-- Requirement: The whole profile goes into the system instruction of every Gemini call,
-  including the writer call. It is capped at `PROFILE_MAX_LINES` (40) **rendered** lines —
+- Requirement: The whole profile goes into the system instruction of every Gemini call that
+  answers the user: the main `/query` call and the session writer. Not the quiz grader, which
+  judges one concept answer and gains nothing from the profile. It is capped at `PROFILE_MAX_LINES` (40) **rendered** lines —
   the lines that enter the instruction, not lines in the file. The cap is checked at load
   and at every write. Going over it is an error, not a silent truncation
 - Input → Output: Profile → part of every system instruction
@@ -347,7 +348,7 @@ FR-26 onwards are new in v3.
   over the cap is refused, the caller is told, and the stored profile is unchanged; a file
   whose length differs from what it renders - an empty slot renders nothing, a long value
   renders as several lines - is measured by what it renders;
-  an empty profile adds nothing to the instruction
+  an empty profile adds nothing to the instruction; the quiz grading call carries no profile
 
 ### FR-29 First-run setup
 
