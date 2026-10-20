@@ -1604,3 +1604,90 @@ def test_fr34_forget_leaves_notes_and_reminders_untouched(db):
     assert table_count(db, "notes") == 1
     assert table_count(db, "reminders") == 1
     assert table_count(db, "memories") == 0
+
+
+def table_rows(path, table: str) -> list[tuple]:
+    con = REAL_CONNECT(path)
+    try:
+        return con.execute(f"SELECT * FROM {table} ORDER BY id").fetchall()
+    finally:
+        con.close()
+
+
+def test_fr35_wipe_deletes_every_memory_row_and_returns_the_count(db):
+    """wipe_memories deletes every memory row and returns how many (8)."""
+    add_mems(*[f"separate point number {n}" for n in range(8)])
+    assert table_count(db, "memories") == 8
+
+    assert store.wipe_memories() == 8
+
+    assert table_count(db, "memories") == 0
+    assert memory_rows(db) == []
+
+
+def test_fr35_wipe_on_empty_store_returns_zero(db):
+    """wipe_memories on an empty store returns 0."""
+    assert store.wipe_memories() == 0
+    assert memory_rows(db) == []
+
+
+def test_fr35_wipe_leaves_no_index_entries(db):
+    """After a wipe the FTS index itself holds no entry for the deleted items."""
+    gym, cat = add_mems("Gym on Monday", "My cat likes Monday")
+    assert index_rowids(db, "monday") == sorted([gym["id"], cat["id"]])
+
+    store.wipe_memories()
+
+    assert index_rowids(db, "gym") == []
+    assert index_rowids(db, "monday") == []
+    assert index_rowids(db, "cat") == []
+
+
+def test_fr35_wiped_items_are_not_found_by_search(db):
+    """After a wipe, search_memories finds nothing."""
+    add_mems("Gym on Monday", "My cat likes Monday")
+
+    store.wipe_memories()
+
+    assert store.search_memories("gym Monday", 5) == []
+    assert store.count_matches("monday") == 0
+
+
+def test_fr35_wipe_leaves_notes_reminders_and_concepts_untouched(db):
+    """Notes, reminders and concepts rows are identical before and after a wipe."""
+    store.add_note("gym on Monday", MEM_TIME)
+    store.add_reminder("gym on Monday", "2026-10-21T09:00:00+05:30", MEM_TIME)
+    store.log_concept("LoRA", "Low-rank adapters", MEM_TIME)
+    add_mems("Gym on Monday", "My cat likes Monday")
+    before = {t: table_rows(db, t) for t in ("notes", "reminders", "concepts")}
+    assert all(len(rows) == 1 for rows in before.values())
+
+    assert store.wipe_memories() == 2
+
+    after = {t: table_rows(db, t) for t in ("notes", "reminders", "concepts")}
+    assert after == before
+
+
+def test_fr35_memories_added_after_a_wipe_work_normally(db):
+    """After a wipe, add_memory, search_memories and find_same work as on a new store."""
+    add_mems("Gym on Monday", "My cat likes Monday")
+    store.wipe_memories()
+
+    mem = store.add_memory(
+        "Annotation project deadline is in March", store.FACT, MEM_TIME
+    )
+
+    assert table_count(db, "memories") == 1
+    assert [m["id"] for m in store.search_memories("annotation", 5)] == [mem["id"]]
+    assert index_rowids(db, "annotation") == [mem["id"]]
+    assert store.find_same("Annotation project deadline is in March")["id"] == mem["id"]
+    assert store.search_memories("gym", 5) == []
+
+
+def test_fr35_second_wipe_returns_zero(db):
+    """A second wipe right after the first deletes nothing and returns 0."""
+    add_mems("Gym on Monday", "My cat likes Monday", "I study operating systems")
+
+    assert store.wipe_memories() == 3
+    assert store.wipe_memories() == 0
+    assert memory_rows(db) == []

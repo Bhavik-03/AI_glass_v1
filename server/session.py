@@ -10,6 +10,7 @@ _image: tuple[bytes, str] | None = None
 _last_answer_at: datetime | None = None
 _quiz: dict | None = None
 _quiz_asked_at: datetime | None = None
+_wipe_asked_at: datetime | None = None
 
 
 def add_turn(
@@ -43,12 +44,39 @@ def image(now: datetime) -> tuple[bytes, str] | None:
 
 
 def reset() -> None:
-    """Clear the session and any running quiz (FR-22)."""
-    global _quiz, _quiz_asked_at
+    """Clear the session, any running quiz and any pending wipe (FR-22, FR-35)."""
+    global _quiz, _quiz_asked_at, _wipe_asked_at
     with _lock:
         _clear()
         _quiz = None
         _quiz_asked_at = None
+        _wipe_asked_at = None
+
+
+def start_wipe(now: datetime) -> None:
+    """A wipe is waiting for its confirmation phrase, for SESSION_TTL_S from now (FR-35)."""
+    global _wipe_asked_at
+    with _lock:
+        _wipe_asked_at = now
+
+
+def pending_wipe(now: datetime) -> bool:
+    """Whether a wipe still waits for confirmation; an old one is dropped here (FR-35)."""
+    global _wipe_asked_at
+    with _lock:
+        if (
+            _wipe_asked_at is not None
+            and (now - _wipe_asked_at).total_seconds() >= config.SESSION_TTL_S
+        ):
+            _wipe_asked_at = None
+        return _wipe_asked_at is not None
+
+
+def end_wipe() -> None:
+    """Clear a pending wipe, whether it was confirmed or cancelled (FR-35)."""
+    global _wipe_asked_at
+    with _lock:
+        _wipe_asked_at = None
 
 
 def start_quiz(concepts: list[dict], now: datetime) -> None:

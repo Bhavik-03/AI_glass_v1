@@ -157,6 +157,13 @@ def forget_memory(query: str) -> dict:
     return {"candidates": matches}
 
 
+def wipe_memories() -> int:
+    """Delete every memory and its index entries; notes, reminders and concepts stay.
+    Returns how many were deleted (FR-35)."""
+    with _connect() as con:
+        return con.execute("DELETE FROM memories").rowcount
+
+
 def remember(text: str, type: str, created_at: str) -> dict:
     """Store a key point unless a near-verbatim repeat is already stored.
 
