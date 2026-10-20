@@ -1,6 +1,6 @@
 # Plan: AI Assistant v3 Memory
 
-## M13 (v3): Memory store | in progress
+## M13 (v3): Memory store | done
 Goal: memories table with a FTS5 index, `search_memories(query, k, since, until)`, `find_same` with a measured threshold · GitHub milestone: #13
 
 | Task | FR | Files | Done when | Test | Issue | Done |
