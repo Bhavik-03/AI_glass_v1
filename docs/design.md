@@ -83,18 +83,20 @@ state and one consequence.
 - NEW: it also holds the **setup state** (which slot is being asked, and the answers so far)
   and any **pending slot proposal** (the slot, the proposed value, and whether it was already
   declined this session). Both sit behind the same lock as the quiz state.
-- NEW: a session is marked **unwritten** when it expires, so the writer runs exactly once per
-  session and never twice.
 - NEW, and the reason the writer does not lose sessions: an expired session is **handed to a
   pending-write buffer before it is cleared**, by whichever read clears it. Without this, a
   `/query` arriving between expiry and the next poll would clear the turns first and the
   writer would have nothing to write. `/query` never runs the writer itself — that would add
   a Gemini call to the user's latency path — it only moves the turns aside.
-- The buffer holds at most `WRITER_PENDING_MAX` (3) expired sessions. The poll drains it. If
-  the client is closed the buffer fills, and the oldest is dropped with a log line rather
-  than growing without limit.
-- `POST /session/reset` clears the turns, the image, a running quiz, the setup state and any
-  pending proposal. It also marks the session written, so a reset session is never written
+- The buffer is the single source of truth for "not yet written": a session in it is
+  unwritten, and taking it out for the writer is what makes the writer run exactly once per
+  session. There is no separate flag, because a second mechanism for the same fact can
+  drift from the first. A session with no turns is never buffered.
+- The buffer holds at most `WRITER_PENDING_MAX` (3) expired sessions. The poll takes one per
+  call. If the client is closed the buffer fills, and the oldest is dropped with a log line
+  rather than growing without limit.
+- `POST /session/reset` clears the turns, the image, a running quiz, the setup state, any
+  pending proposal **and the pending-write buffer**, so a reset session is never written
   afterwards. This is what keeps eval rows from leaking memories into each other.
 - Restarting the server clears the session. Setup answers already written to disk survive;
   an unfinished setup restarts from the first unanswered slot.
@@ -203,12 +205,28 @@ The session ends 120 s after the last answer, but nothing runs at that moment: t
 only acts when asked. v3 reuses the poll the client already makes.
 
 - Every 10 s the idle client calls `GET /reminders/due`. If the pending-write buffer holds an
-  expired, unwritten session, the server runs the writer on it before answering the poll.
-  The session may have been moved there by the poll itself or by an earlier `/query`.
-- The writer is one Gemini call with no tools, a 10 s timeout and JSON output, in the same
-  shape as the v2 quiz grader: it gets the session's turns and the profile, and returns 0 to
-  3 key points.
+  expired session, the server runs the writer on it before answering the poll. The session
+  may have been moved there by the poll itself or by an earlier `/query`.
+- **One buffered session per poll.** The buffer holds up to 3, but three 10 s Gemini calls
+  would exceed the client's 20 s poll timeout (`POLL_TIMEOUT_S`); one call plus local work
+  fits. The next session waits for the next poll, 10 s later.
+- The writer is one Gemini call with no tools, the client's 10 s timeout (`LLM_TIMEOUT_S`; it
+  has no constant of its own) and JSON output, in the same shape as the v2 quiz grader: it
+  gets the session's turns and the profile, never the stored memories or an image, and
+  returns 0 to 3 key points. Not showing it the stored memories is deliberate: showing the
+  model existing wording is what caused issue #116.
 - Each returned point goes through the same word-limit and `find_same` checks as `remember`.
+  A point over `MEMORY_MAX_WORDS` is **rejected, never truncated**: cutting words can drop a
+  "not" and invert the point. More than `WRITER_MAX_POINTS` keeps the first 3. The spoken
+  count is the number of rows actually added, so a session whose points were all repeats says
+  nothing.
+- **Salience, with a worked case.** The rule is "would this still matter in a month", and
+  it separates a dated event from the standing fact behind it. "I have an interview next
+  week" is a dated event: it will not matter in a month, so it is **not kept**. If the
+  session shows that interview preparation is where the user's time is going, that is a
+  standing fact and **is kept** ("preparing for interviews, most study time goes there").
+  Dated events belong to the v4 planner, not to v3 memory. The writer prompt is written
+  around this distinction, and it is the clearest calibration of the salience judgement.
 - The spoken line ("Noted two things.") is delivered as a **notice row** in the reminders
   table, which the poll already knows how to fetch, speak and acknowledge. This is why v3
   needs no new endpoint and no new field: a notice is reminder-shaped. The table gets a
@@ -392,7 +410,7 @@ New values; every other v1 and v2 value stays.
 | server/config.py | `MEMORY_SAME_THRESHOLD` | FR-40; set by the M13 spike |
 | server/config.py | `WIPE_CONFIRM_PHRASE = "yes wipe everything"` | FR-35 |
 | server/config.py | `WIPE_REQUEST_PHRASE = "wipe my memories"` | FR-35; matched in `main.py` |
-| server/config.py | `WRITER_MAX_POINTS = 3`, `WRITER_TIMEOUT_S = 10` | FR-39 |
+| server/config.py | `WRITER_MAX_POINTS = 3` | FR-39; the writer call uses `LLM_TIMEOUT_S` |
 | server/config.py | `WRITER_PENDING_MAX = 3` | expired sessions awaiting the writer |
 | eval/config.py | `V3_QUESTIONS_PATH`, `V3_DATA_DIR`, `V3_SEED_PATH` | paths |
 | eval/config.py | `V3_MEDIAN_MAX_S = 5.3` | v3 target in spec.md |
