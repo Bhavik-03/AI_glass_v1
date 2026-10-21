@@ -119,16 +119,28 @@ Serves FR-26 to FR-29, FR-31.
   line that renders nothing, and a long value is one file line that renders as several
   lines. It is enforced **at load and at every write**. At load it fails fast at startup
   rather than silently on every query. At write, a confirmed
-  `update_profile` or setup answer that would take the profile over the cap is refused and
+  `propose_profile_update` or setup answer that would take the profile over the cap is refused and
   the caller is told; without that check a write could succeed and then stop the server
   starting next time.
 - Setup (FR-29) runs when the values file is missing or empty. The session holds the setup
   state, like the quiz state: each key press answers the current slot, and `SETUP_STOP_PHRASE`
-  ("stop setup") leaves setup keeping what was answered. While setup runs, `/query` skips the
+  ("stop setup") leaves setup keeping what was answered. Setup also runs when any of the six
+  setup slots is unanswered, and then asks only the unanswered ones, in schema order, so a
+  half-finished setup resumes after a restart instead of staying blank forever. "stop setup"
+  suppresses it for the rest of that server run. While setup runs, `/query` skips the
   Gemini call entirely — the next question is an answer to a setup slot, not a question.
-- A slot update outside setup (FR-31) needs a yes. The assistant proposes through its answer;
-  the session holds the pending proposal; the next turn's yes commits it. A declined proposal
-  is remembered for the session so it is not asked twice.
+- A slot update outside setup (FR-31) needs a yes. The assistant calls `propose_profile_update`
+  in its turn and asks the question in its answer; the session holds the pending proposal; the
+  next turn's yes commits it. A declined proposal is remembered for the session so it is not
+  asked twice.
+- `data/profile.json` stays a flat map of slot to text, plus one reserved key, `_set_on`: an
+  object of slot to `YYYY-MM-DD`, the date each slot was last written or confirmed. It never
+  renders, never counts toward the cap, and is not a slot. A hand-written file may omit it; a
+  slot with no date is never called stale, and nothing is stamped at load. `goal_now`'s date
+  drives FR-30. The stale line is appended to the answer by the server, not left to the model,
+  and registers a pending confirmation. A yes to it re-stamps the date and leaves the value
+  unchanged; re-stamping a date is not editing the goal. Without that, the line would repeat
+  every session for a goal that has not changed.
 
 ## Memory and recall
 
@@ -236,8 +248,9 @@ the last four.
   "clear everything"), tell them to say "wipe my memories" exactly. You have no wipe tool, and
   `forget` never deletes more than one item.
 - When the conversation repeatedly contradicts a profile slot, say so in one sentence and ask
-  whether to update it. Never call `update_profile` without a yes in the previous turn, and
-  do not ask twice in one session.
+  whether to update it by calling `propose_profile_update`, which writes nothing. You have no
+  tool that writes a slot: a write happens only when the user says yes on the next turn. Do not
+  propose a slot the user declined this session.
 
 ## Storage
 
@@ -282,7 +295,7 @@ plus four.
 | | | type, created_at}]}`; `count` is the total matches in the window, `items` at most 5 |
 | `forget` | `query` | `{deleted: {...}}`, or `{candidates: [...]}` when more than one |
 | | | matches, or `{error}` |
-| `update_profile` | `slot`, `value` | `{slot, value}` or `{error}` |
+| `propose_profile_update` | `slot`, `value` | `{slot, value, pending: true}` or `{error}` |
 
 Four decisions behind that list, each one keeping the count down. Thirteen declarations
 already go into every request, and a longer list is itself a source of wrong tool choices.
@@ -292,8 +305,12 @@ already go into every request, and a longer list is itself a source of wrong too
 - Wipe (FR-35) is **not** a tool. The confirmation phrase is matched in `main.py` against the
   transcript, exactly as `QUIZ_STOP_PHRASE` already is. Destructive and exact-match is server
   logic, not something a language model should be able to decide to call.
-- `update_profile` is only reachable after a yes; `main.py` refuses the call when no proposal
-  is pending.
+- `propose_profile_update` only records a pending proposal in the session; it writes nothing.
+  `main.py` commits it on the next turn when the transcript is a whole yes phrase
+  (`PROPOSAL_YES`), without calling Gemini, exactly as the wipe phrase is matched. Gemini has
+  no tool that writes a slot, so "no write without a yes" holds by construction. A no phrase
+  writes nothing and marks the slot declined for the session. Any other transcript drops the
+  proposal and the turn proceeds as a normal query: dropping is the safe failure.
 - Setup answers never reach Gemini at all.
 
 ## Logging

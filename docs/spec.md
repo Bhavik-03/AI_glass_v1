@@ -90,7 +90,8 @@ FR-26 onwards are new in v3.
   `web_search(query)` runs on the server against the web search API (key from an environment
   variable, timeout from config) and its results go back to Gemini; answers at most 3
   sentences and at most 60 words, except list answers (FR-8, FR-9 and others), which may
-  have up to 5 items; a list of more than 5 items says the total count and the first 5
+  have up to 5 items, and the FR-30 stale-goal line, which the server appends after the answer
+  and which these limits do not count; a list of more than 5 items says the total count and the first 5
   (newest notes, soonest reminders), and "tell me more" gives the next 5; "tell me more"
   follows the same limit
 - Input → Output: Question text → answer text, `searched` flag
@@ -356,27 +357,33 @@ FR-26 onwards are new in v3.
 
 ### FR-29 First-run setup
 
-- Requirement: When `data/profile.json` is missing or empty, the next question starts
-  setup instead: the assistant asks the six setup slots in schema order (identity, goal_now,
-  goal_long, exploring, style, constraints), one per key press, and writes the answers to
-  the file. The other slots stay empty. Setup can be left by saying "stop setup"; what was
-  answered is kept
+- Requirement: When `data/profile.json` is missing or empty, or any of the six setup slots
+  (identity, goal_now, goal_long, exploring, style, constraints) is unanswered, the next
+  question starts setup instead: the assistant asks the unanswered setup slots in schema
+  order, one per key press, and writes the answers to the file. The other slots stay empty.
+  Setup can be left by saying "stop setup"; what was answered is kept, and setup does not
+  start again until the server restarts
 - Input → Output: Spoken answers → `data/profile.json`
 - Acceptance: With no profile file, the first query is answered with the first setup
   question, not a normal answer; six answers fill six slots in the file and the seventh
   query is answered normally; "stop setup" leaves setup and keeps the slots already
-  answered; in the eval, six spoken answers fill all six slots correctly
+  answered, and the next query is answered normally; after a restart with three setup slots
+  answered, setup asks the other three and no more; in the eval, six spoken answers fill all six slots correctly
 
 ### FR-30 Stale goal check
 
 - Requirement: `goal_now` carries the date it was set. When it is more than
   `GOAL_STALE_DAYS` (31) days old, the assistant adds one line to its next answer saying the
   month goal may be out of date and asking whether it still holds. It says this at most once
-  per session and never edits the goal itself
+  per session and never edits the goal itself. A spoken yes to the line confirms the goal: it
+  sets the date to today and leaves the value as it is. Re-stamping a date is not editing the
+  goal. A no or any other reply changes nothing
 - Input → Output: Stale `goal_now` → one extra line in one answer
 - Acceptance: With `goal_now` set 32 days ago, the next answer carries the line and the
   following answer in the same session does not; with it set 30 days ago, no line; the
-  stored goal and its date are unchanged either way
+  stored goal and its date are unchanged either way; a yes on the turn after the line sets the
+  date to today and the goal is unchanged, so the line does not return in the next session; a
+  no leaves the date as it was
 
 ### FR-31 Slot update proposals
 
