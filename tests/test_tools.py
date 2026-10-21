@@ -1770,17 +1770,24 @@ def test_fr33_memory_tools_declared_with_description(name):
 SETUP_QUESTION = "Who are you? Tell me your name."
 
 
-def test_fr29_setup_prompt_first_names_stop_phrase_then_asks():
-    """FR-29: the first setup prompt is an intro that mentions the stop phrase, followed by the question."""
-    text = tools.setup_prompt(SETUP_QUESTION, first=True)
+def test_fr29_setup_prompt_names_stop_phrase_then_asks():
+    """FR-29: the opening setup prompt is an intro that mentions the stop phrase, followed by the question."""
+    text = tools.setup_prompt(SETUP_QUESTION)
     assert config.SETUP_STOP_PHRASE in text.lower()
     assert text.endswith(SETUP_QUESTION)
     assert text != SETUP_QUESTION
 
 
-def test_fr29_setup_prompt_later_is_exactly_the_question():
-    """FR-29: a later setup prompt is exactly the slot's question."""
-    assert tools.setup_prompt(SETUP_QUESTION, first=False) == SETUP_QUESTION
+def test_fr29_setup_noted_reads_the_value_back_then_asks_the_next_question():
+    """FR-29: the stored value is spoken back, then the next question, in one text."""
+    text = tools.setup_noted("a third-year student", SETUP_QUESTION)
+    assert text == f"I've noted a third-year student. Next: {SETUP_QUESTION}"
+
+
+def test_fr29_setup_noted_after_the_last_answer_ends_with_the_closing_line():
+    """FR-29: with no next question the value is read back and the closing line follows."""
+    text = tools.setup_noted("only evenings", None)
+    assert text == f"I've noted only evenings. {tools.SETUP_DONE}"
 
 
 def test_fr29_setup_done_and_stopped_texts():
