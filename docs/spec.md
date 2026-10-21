@@ -349,8 +349,8 @@ FR-26 onwards are new in v3.
 - Input → Output: Profile → part of every system instruction
 - Acceptance: A query made with a filled profile has every non-empty slot in the request
   (fake client); a profile rendering 41 lines fails at load with a clear message naming the
-  cap; a confirmed `update_profile` or setup answer that would take the rendered profile
-  over the cap is refused, the caller is told, and the stored profile is unchanged; a file
+  cap; a slot write that would take the rendered profile over the cap, whether
+  a setup answer or a proposal committed by a spoken yes (FR-31), is refused, the caller is told, and the stored profile is unchanged; a file
   whose length differs from what it renders - an empty slot renders nothing, a long value
   renders as several lines - is measured by what it renders;
   an empty profile adds nothing to the instruction; the quiz grading call carries no profile
