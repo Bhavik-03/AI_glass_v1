@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from server import config, search, session, store
+from server import config, profile, search, session, store
 
 # Larger integers can't be bound as SQLite parameters (OverflowError).
 SQLITE_MAX_INT = 2**63 - 1
@@ -179,6 +179,22 @@ DECLARATIONS = [
         ),
         "parameters_json_schema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "propose_profile_update",
+        "description": (
+            "Propose changing one profile slot, when the user asks to change it or their own "
+            "words repeatedly contradict it. It writes nothing: it only records the proposal. "
+            "Then ask the user for a yes in one sentence, repeating the new value."
+        ),
+        "parameters_json_schema": {
+            "type": "object",
+            "properties": {
+                "slot": {"type": "string", "description": "The profile slot name"},
+                "value": {"type": "string", "description": "The new text for the slot"},
+            },
+            "required": ["slot", "value"],
+        },
+    },
 ]
 
 
@@ -301,12 +317,46 @@ def _start_quiz(args: dict, now: datetime) -> dict:
     return {"count": len(concepts), "question": quiz_question(concepts[0]["name"])}
 
 
+def _propose_profile_update(args: dict, now: datetime) -> dict:
+    slot, value = args.get("slot"), args.get("value")
+    if not isinstance(slot, str) or slot not in {s["name"] for s in profile.slots()}:
+        return {"error": "propose_profile_update needs the name of a profile slot"}
+    if not isinstance(value, str) or not value.strip():
+        return {"error": "propose_profile_update needs the new value as text"}
+    if session.declined(slot, now):
+        return {
+            "error": f"the user declined a change to {slot} this session; do not ask again"
+        }
+    session.propose("update", slot, value.strip(), now)
+    return {"slot": slot, "value": value.strip(), "pending": True}
+
+
 def quiz_question(name: str) -> str:
     return config.QUIZ_QUESTION.format(name=name)
 
 
 def quiz_score_text(right: int, total: int) -> str:
     return f"{right} of {total} right"
+
+
+SETUP_INTRO = (
+    "Let's set up your profile. Answer each question; say {stop} to stop at any time."
+)
+SETUP_DONE = "That is everything. Your profile is set up."
+SETUP_STOPPED = "Setup stopped. I kept what you answered."
+
+
+def setup_prompt(question: str, first: bool) -> str:
+    """The spoken setup question; the first one opens with the intro (FR-29)."""
+    if not first:
+        return question
+    intro = SETUP_INTRO.format(stop=config.SETUP_STOP_PHRASE)
+    return f"{intro} {question}"
+
+
+def setup_refusal_text(reason: str, question: str) -> str:
+    """A refused setup answer: say why and ask the same question again (FR-29)."""
+    return f"I could not save that: {reason}. {question}"
 
 
 def _reminder_id(value: object) -> int | None:
@@ -343,6 +393,7 @@ _HANDLERS = {
     "remember": _remember,
     "search_memories": _search_memories,
     "forget": _forget,
+    "propose_profile_update": _propose_profile_update,
 }
 
 

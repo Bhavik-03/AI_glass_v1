@@ -182,6 +182,105 @@ def _quiz_answer(record: dict, quiz: dict, asked_at: datetime) -> Response:
     return Response(content=wav, media_type="audio/wav")
 
 
+def _setup_slots() -> list[str]:
+    """The setup slots still unanswered, in setup order; slots the schema lacks are skipped."""
+    known = {slot["name"] for slot in profile.slots()}
+    values = profile.values()
+    return [
+        name
+        for name in config.SETUP_SLOTS
+        if name in known and not values.get(name, "").strip()
+    ]
+
+
+def _setup_question(slot: str) -> str:
+    return next(s["question"] for s in profile.slots() if s["name"] == slot)
+
+
+def _setup_start(record: dict, slots: list[str], asked_at: datetime) -> Response:
+    """Answer the first query of a setup with the first question, not a normal answer
+    (FR-29)."""
+    record["answer"] = tools.setup_prompt(_setup_question(slots[0]), first=True)
+    wav = run_stage("tts", record["timings_ms"], tts.synthesize, record["answer"])
+    # Running only after the question was spoken, so a failure leaves no setup behind.
+    session.start_setup(slots, asked_at)
+    return Response(content=wav, media_type="audio/wav")
+
+
+def _setup_answer(record: dict, setup: dict, asked_at: datetime) -> Response:
+    """The transcript is the answer to the current slot, written and dated today; then the
+    next question or the end. "stop setup" keeps what was answered (FR-29)."""
+    timings = record["timings_ms"]
+    if config.SETUP_STOP_PHRASE in _normalised(record["question"]):
+        record["answer"] = tools.SETUP_STOPPED
+        wav = run_stage("tts", timings, tts.synthesize, record["answer"])
+        session.stop_setup()
+        return Response(content=wav, media_type="audio/wav")
+    slots, index = setup["slots"], setup["index"]
+    try:
+        profile.write(slots[index], record["question"].strip(), asked_at.date())
+    except profile.ProfileError as e:
+        record["answer"] = tools.setup_refusal_text(
+            _reason(e), _setup_question(slots[index])
+        )
+        wav = run_stage("tts", timings, tts.synthesize, record["answer"])
+        return Response(content=wav, media_type="audio/wav")
+    if index + 1 < len(slots):
+        record["answer"] = tools.setup_prompt(
+            _setup_question(slots[index + 1]), first=False
+        )
+    else:
+        record["answer"] = tools.SETUP_DONE
+    wav = run_stage("tts", timings, tts.synthesize, record["answer"])
+    # Moving on only after the answer was spoken, so a failure repeats the question.
+    session.advance_setup(asked_at)
+    return Response(content=wav, media_type="audio/wav")
+
+
+def _proposal_yes(record: dict, proposal: dict, asked_at: datetime) -> Response:
+    """A yes writes the proposed value, or for a confirmation re-stamps the date and keeps
+    the value; the answer says what happened. The proposal is consumed once spoken, so a
+    failed answer can be retried (FR-31, FR-30)."""
+    slot, value = proposal["slot"], proposal["value"]
+    spoken_slot = slot.replace("_", " ")
+    try:
+        profile.write(slot, value, asked_at.date())
+    except profile.ProfileError as e:
+        record["answer"] = f"I could not save that: {_reason(e)}"
+    else:
+        if proposal["kind"] == "confirm":
+            record["answer"] = f"Okay, I kept your {spoken_slot}: {value}."
+        else:
+            record["answer"] = f"Saved. Your {spoken_slot} is now: {value}."
+    wav = run_stage("tts", record["timings_ms"], tts.synthesize, record["answer"])
+    session.end_proposal()
+    return Response(content=wav, media_type="audio/wav")
+
+
+def _proposal_no(record: dict, proposal: dict) -> Response:
+    """A no writes nothing; a declined update is not proposed again this session, a
+    declined confirmation is not a decline of the slot (FR-31)."""
+    record["answer"] = "Okay, nothing changed."
+    wav = run_stage("tts", record["timings_ms"], tts.synthesize, record["answer"])
+    if proposal["kind"] == "update":
+        session.decline(proposal["slot"])
+    session.end_proposal()
+    return Response(content=wav, media_type="audio/wav")
+
+
+def _stale_line(asked_at: datetime) -> str | None:
+    """The line asking whether the month goal still holds, or None: said once per session,
+    and not when the model has just asked something else (FR-30)."""
+    days = profile.stale_days(asked_at.date())
+    if (
+        days is None
+        or session.stale_noted(asked_at)
+        or session.proposal(asked_at) is not None
+    ):
+        return None
+    return config.GOAL_STALE_LINE.format(days=days)
+
+
 def _answer(data: bytes | None, image: bytes | None, record: dict) -> Response:
     if problem := _audio_problem(data):
         return _error(400, problem, record)
@@ -201,8 +300,20 @@ def _answer(data: bytes | None, image: bytes | None, record: dict) -> Response:
         asked_at = now()
         if quiz := session.quiz(asked_at):
             return _quiz_answer(record, quiz, asked_at)
+        if setup := session.setup(asked_at):
+            return _setup_answer(record, setup, asked_at)
         if session.pending_wipe(asked_at):
             return _wipe_confirm(record)
+        if proposal := session.proposal(asked_at):
+            spoken_phrase = _normalised(record["question"])
+            if spoken_phrase in config.PROPOSAL_YES:
+                return _proposal_yes(record, proposal, asked_at)
+            if spoken_phrase in config.PROPOSAL_NO:
+                return _proposal_no(record, proposal)
+            # Neither: drop it and answer as a normal query, the safe failure.
+            session.end_proposal()
+        if (slots := _setup_slots()) and not session.setup_stopped():
+            return _setup_start(record, slots, asked_at)
         spoken = f" {_normalised(record['question'])} "
         if f" {config.WIPE_REQUEST_PHRASE} " in spoken:
             return _wipe_request(record, asked_at)
@@ -213,11 +324,22 @@ def _answer(data: bytes | None, image: bytes | None, record: dict) -> Response:
         record["answer"], record["searched"], record["tool_calls"] = run_stage(
             "llm", timings, llm.ask, record["question"], asked_at, turns, image_for_llm
         )
+        stale_line = _stale_line(asked_at)
+        if stale_line:
+            record["answer"] = f"{record['answer']} {stale_line}"
         wav = run_stage("tts", timings, tts.synthesize, record["answer"])
         # Only an answered question becomes a turn, so a failure never extends the session (FR-21).
         session.add_turn(
-            record["question"], record["answer"], asked_at, image=new_image
+            record["question"],
+            record["answer"],
+            asked_at,
+            image=new_image,
+            stale_noted=bool(stale_line),
         )
+        if stale_line:
+            # A yes to the line re-stamps the goal's date; the value stays as it is (FR-30).
+            slot = config.GOAL_STALE_SLOT
+            session.propose("confirm", slot, profile.values()[slot], asked_at)
     except StageFailed as e:
         record["tool_calls"] = e.tool_calls or record["tool_calls"]
         return _error(500, f"{e.stage}: {e.reason}", record)
