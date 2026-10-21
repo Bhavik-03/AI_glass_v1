@@ -416,11 +416,16 @@ FR-26 onwards are new in v3.
 
 - Requirement: "Remember that ..." stores exactly one item and speaks it back so the user
   can hear what was stored. Gemini shortens the spoken sentence to a key point within the
-  word limit and picks the type
+  word limit and picks the type. `remember` is called only when the user explicitly asks to
+  remember something. A bare statement of fact ("I have an interview next week") is
+  answered conversationally and stored by nothing; what is worth keeping is decided after
+  the session by the session writer (FR-39), under its salience rule. A statement is not a
+  recall question either, so it is not answered by listing what is stored
 - Input → Output: "Remember that ..." → one row, spoken confirmation
 - Acceptance: One command stores exactly one row, never two; the spoken answer contains the
-  stored text; in the eval, 10 commands are stored correctly (within the word limit, right
-  type) in at least 9 cases
+  stored text; a statement such as "I have an interview next week" stores no row and does
+  not call `search_memories`; in the eval, 10 commands are stored correctly (within the word
+  limit, right type) in at least 9 cases
 
 ### FR-34 Forget
 

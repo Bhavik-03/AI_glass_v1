@@ -86,4 +86,6 @@ Goal: frozen v3 set and seed, `record --set v3`, `run_eval_v3.py`, every quality
 
 When `eval/questions_v3.json` is written, its 20 recall questions must be an honest sample of how Bhavik would really ask: no quota of hard or easy ones. The zero-overlap fraction must be an outcome of that set, not a target imposed on it. FR-37's 90% is measured against those questions, so a set composed by quota would make the headline v3 metric meaningless. (The M14 probe set had a quota of 8 zero-overlap probes, which is why it reports two numbers and not one.)
 
+The same file must also include at least two bare statements of fact ("I have an interview next week") whose pass rule is that no row is stored and `search_memories` is not called. FR-33's scope is otherwise asserted only by an instruction-text test, which cannot show what the model does (issue #158). These are cases to include, not a quota, and they sit under the honest-sample rule above: write them as Bhavik would really say them.
+
 Two tasks to plan explicitly, not as sub-points: `run_eval_v3.py` backs up and restores `data/profile.json` as well as the tables, because a run that leaves a test profile behind changes every later answer; and the writer phase, 10 sessions with no `POST /session/reset` between them, each lapsing its 120 s TTL before the poll is called, about 20 minutes of wall clock.
