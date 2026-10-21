@@ -759,3 +759,227 @@ def test_fr30_reset_clears_the_stale_mark():
     session.add_turn("q", "a", T0, stale_noted=True)
     session.reset()
     assert session.stale_noted(T0 + secs(1)) is False
+
+
+SLOTS = ["identity", "goal_now", "goal_long"]
+
+
+def test_fr29_setup_config_values():
+    """Config names the six setup slots in order, the stop phrase and the 300 s wait."""
+    assert config.SETUP_SLOTS == (
+        "identity",
+        "goal_now",
+        "goal_long",
+        "exploring",
+        "style",
+        "constraints",
+    )
+    assert isinstance(config.SETUP_SLOTS, tuple)
+    assert config.SETUP_STOP_PHRASE == "stop setup"
+    assert config.SETUP_ANSWER_WAIT_S == 300
+
+
+def test_fr29_no_setup_by_default():
+    """With nothing started, setup() is None and the stopped mark is False."""
+    assert session.setup(T0) is None
+    assert session.setup_stopped() is False
+
+
+def test_fr29_start_setup_begins_at_first_slot():
+    """start_setup begins over the given slots with the first as current."""
+    session.start_setup(SLOTS, T0)
+    assert session.setup(T0 + secs(1)) == {"slots": SLOTS, "index": 0}
+
+
+def test_fr29_setup_returns_a_copy():
+    """Mutating the dict setup() returns does not change the session."""
+    session.start_setup(SLOTS, T0)
+    got = session.setup(T0)
+    got["index"] = 2
+    got["slots"].append("x")
+    assert session.setup(T0) == {"slots": SLOTS, "index": 0}
+
+
+def test_fr29_start_setup_does_not_keep_callers_list():
+    """Changing the list passed to start_setup afterwards does not change the session."""
+    slots = list(SLOTS)
+    session.start_setup(slots, T0)
+    slots.append("x")
+    assert session.setup(T0)["slots"] == SLOTS
+
+
+def test_fr29_advance_moves_to_next_slot():
+    """advance_setup returns the next slot name and moves the index."""
+    session.start_setup(SLOTS, T0)
+    assert session.advance_setup(T0 + secs(5)) == "goal_now"
+    assert session.setup(T0 + secs(5)) == {"slots": SLOTS, "index": 1}
+    assert session.advance_setup(T0 + secs(6)) == "goal_long"
+    assert session.setup(T0 + secs(6))["index"] == 2
+
+
+def test_fr29_advance_past_last_ends_setup():
+    """Advancing after the last slot returns None and setup is over, not stopped."""
+    session.start_setup(["identity", "goal_now"], T0)
+    assert session.advance_setup(T0 + secs(1)) == "goal_now"
+    assert session.advance_setup(T0 + secs(2)) is None
+    assert session.setup(T0 + secs(2)) is None
+    assert session.setup_stopped() is False
+
+
+def test_fr29_advance_with_no_setup_returns_none():
+    """advance_setup with no setup running returns None and does not raise."""
+    assert session.advance_setup(T0) is None
+    assert session.setup(T0) is None
+
+
+def test_fr29_setup_present_just_before_wait():
+    """A setup is still there 299 s after it started."""
+    session.start_setup(SLOTS, T0)
+    assert session.setup(T0 + secs(299)) is not None
+
+
+def test_fr29_setup_lapses_at_wait_and_stays_gone():
+    """A setup unanswered for 300 s ends quietly, for good."""
+    session.start_setup(SLOTS, T0)
+    assert session.setup(T0 + secs(300)) is None
+    assert session.setup(T0 + secs(1)) is None
+
+
+def test_fr29_lapse_does_not_set_stopped_mark():
+    """The 300 s lapse does not set the stopped mark."""
+    session.start_setup(SLOTS, T0)
+    assert session.setup(T0 + secs(300)) is None
+    assert session.setup_stopped() is False
+
+
+def test_fr29_wait_restarts_at_each_advance():
+    """Each advance restarts the 300 s wait for the new current slot."""
+    session.start_setup(SLOTS, T0)
+    session.advance_setup(T0 + secs(200))
+    assert session.setup(T0 + secs(499)) is not None
+    assert session.setup(T0 + secs(500)) is None
+
+
+def test_fr29_wait_follows_config(monkeypatch):
+    """The wait comes from config.SETUP_ANSWER_WAIT_S."""
+    monkeypatch.setattr(config, "SETUP_ANSWER_WAIT_S", 10)
+    session.start_setup(SLOTS, T0)
+    assert session.setup(T0 + secs(9)) is not None
+    assert session.setup(T0 + secs(10)) is None
+
+
+def test_fr29_end_setup_ends_without_stopped_mark():
+    """end_setup ends setup, is idempotent and sets no stopped mark."""
+    session.start_setup(SLOTS, T0)
+    session.end_setup()
+    session.end_setup()
+    assert session.setup(T0) is None
+    assert session.setup_stopped() is False
+
+
+def test_fr29_stop_setup_ends_and_sets_mark():
+    """stop_setup ends setup and sets the stopped mark."""
+    session.start_setup(SLOTS, T0)
+    session.stop_setup()
+    assert session.setup(T0) is None
+    assert session.setup_stopped() is True
+
+
+def test_fr29_stop_setup_with_none_running_still_marks():
+    """stop_setup with no setup running does not raise and sets the mark."""
+    session.stop_setup()
+    assert session.setup_stopped() is True
+
+
+def test_fr29_stopped_mark_survives_session_expiry():
+    """The stopped mark is not cleared by the 120 s session expiry."""
+    session.add_turn("q", "a", T0)
+    session.stop_setup()
+    assert session.turns(T0 + secs(200)) == []
+    assert session.setup_stopped() is True
+
+
+def test_fr29_stopped_mark_survives_end_setup():
+    """end_setup does not clear the stopped mark."""
+    session.stop_setup()
+    session.end_setup()
+    assert session.setup_stopped() is True
+
+
+def test_fr29_start_setup_possible_after_stop():
+    """Mechanically, setup can start while the stopped mark is set."""
+    session.stop_setup()
+    session.start_setup(SLOTS, T0)
+    assert session.setup(T0) == {"slots": SLOTS, "index": 0}
+    assert session.setup_stopped() is True
+
+
+def test_fr29_session_expiry_does_not_end_setup():
+    """The 120 s session expiry leaves a running setup alone."""
+    session.add_turn("q", "a", T0)
+    session.start_setup(SLOTS, T0 + secs(10))
+    assert session.turns(T0 + secs(150)) == []
+    assert session.setup(T0 + secs(150)) is not None
+
+
+def test_fr29_reset_clears_setup_stopped_proposal_declined():
+    """reset() clears setup, the stopped mark, a pending proposal and the declined set."""
+    session.start_setup(SLOTS, T0)
+    session.stop_setup()
+    session.start_setup(SLOTS, T0)
+    session.propose("update", "goal_now", "a", T0)
+    session.decline("goal_now")
+    session.reset()
+    assert session.setup(T0 + secs(1)) is None
+    assert session.setup_stopped() is False
+    assert session.proposal(T0 + secs(1)) is None
+    assert session.declined("goal_now", T0 + secs(1)) is False
+
+
+def test_fr29_setup_does_not_affect_turns_image_quiz_wipe_proposal():
+    """A running setup leaves turns, image, quiz, wipe and proposal untouched."""
+    session.add_turn("q", "a", T0, image=IMG)
+    session.start_quiz(CONCEPTS, T0)
+    session.start_wipe(T0)
+    session.propose("update", "goal_now", "a", T0)
+    session.start_setup(SLOTS, T0 + secs(1))
+    assert session.turns(T0 + secs(2)) == [{"question": "q", "answer": "a"}]
+    assert session.image(T0 + secs(2)) == IMG
+    assert session.quiz(T0 + secs(2))["index"] == 0
+    assert session.pending_wipe(T0 + secs(2)) is True
+    assert session.proposal(T0 + secs(2)) is not None
+
+
+def test_fr29_turns_quiz_wipe_do_not_clear_setup():
+    """Adding turns, starting a quiz or a wipe does not clear a running setup."""
+    session.start_setup(SLOTS, T0)
+    session.add_turn("q", "a", T0 + secs(1))
+    session.start_quiz(CONCEPTS, T0 + secs(2))
+    session.start_wipe(T0 + secs(3))
+    session.end_quiz()
+    session.end_wipe()
+    assert session.setup(T0 + secs(4)) == {"slots": SLOTS, "index": 0}
+
+
+def test_fr29_concurrent_setup_calls_do_not_raise():
+    """start_setup, advance_setup, setup and stop_setup are safe under many threads."""
+    errors: list[Exception] = []
+
+    def worker() -> None:
+        try:
+            for _ in range(20):
+                session.start_setup(list(SLOTS), T0)
+                session.advance_setup(T0 + secs(1))
+                session.setup(T0 + secs(2))
+                session.setup_stopped()
+                session.stop_setup()
+                session.end_setup()
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker) for _ in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []

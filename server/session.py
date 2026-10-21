@@ -15,6 +15,9 @@ _proposal: dict | None = None
 _proposal_asked_at: datetime | None = None
 _declined: set[str] = set()
 _stale_noted = False
+_setup: dict | None = None
+_setup_asked_at: datetime | None = None
+_setup_stopped = False
 
 
 def add_turn(
@@ -63,6 +66,7 @@ def reset() -> None:
     """Clear the session, any running quiz, pending wipe and pending proposal
     (FR-22, FR-35, FR-31)."""
     global _quiz, _quiz_asked_at, _wipe_asked_at, _proposal, _proposal_asked_at
+    global _setup, _setup_asked_at, _setup_stopped
     with _lock:
         _clear()
         _quiz = None
@@ -70,6 +74,9 @@ def reset() -> None:
         _wipe_asked_at = None
         _proposal = None
         _proposal_asked_at = None
+        _setup = None
+        _setup_asked_at = None
+        _setup_stopped = False
 
 
 def start_wipe(now: datetime) -> None:
@@ -142,6 +149,64 @@ def declined(slot: str, now: datetime) -> bool:
         return slot in _declined
 
 
+def start_setup(slots: list[str], now: datetime) -> None:
+    """Start asking the given profile slots in order; the wait for the first answer starts
+    now (FR-29)."""
+    global _setup, _setup_asked_at
+    with _lock:
+        _setup = {"slots": list(slots), "index": 0}
+        _setup_asked_at = now
+
+
+def setup(now: datetime) -> dict | None:
+    """The running setup, or None; one waiting SETUP_ANSWER_WAIT_S for an answer ends
+    quietly (FR-29). The session's own expiry does not end it."""
+    with _lock:
+        _expire_setup(now)
+        return None if _setup is None else {**_setup, "slots": list(_setup["slots"])}
+
+
+def advance_setup(now: datetime) -> str | None:
+    """Move to the next slot and return it; after the last one setup is over and the
+    result is None (FR-29)."""
+    global _setup, _setup_asked_at
+    with _lock:
+        _expire_setup(now)
+        if _setup is None:
+            return None
+        _setup["index"] += 1
+        _setup_asked_at = now
+        if _setup["index"] < len(_setup["slots"]):
+            return _setup["slots"][_setup["index"]]
+        _setup = None
+        _setup_asked_at = None
+        return None
+
+
+def end_setup() -> None:
+    """End setup; the answers already written stay (FR-29)."""
+    global _setup, _setup_asked_at
+    with _lock:
+        _setup = None
+        _setup_asked_at = None
+
+
+def stop_setup() -> None:
+    """End setup because the user said to stop; it does not restart until the server does
+    (FR-29)."""
+    global _setup, _setup_asked_at, _setup_stopped
+    with _lock:
+        _setup = None
+        _setup_asked_at = None
+        _setup_stopped = True
+
+
+def setup_stopped() -> bool:
+    """Whether the user stopped setup during this server run (FR-29)."""
+    with _lock:
+        return _setup_stopped
+
+
 def start_quiz(concepts: list[dict], now: datetime) -> None:
     """Start a quiz at the first concept; the wait for its answer starts now (FR-24)."""
     global _quiz, _quiz_asked_at
@@ -185,6 +250,16 @@ def end_quiz() -> None:
     with _lock:
         _quiz = None
         _quiz_asked_at = None
+
+
+def _expire_setup(now: datetime) -> None:
+    global _setup, _setup_asked_at
+    if (
+        _setup_asked_at is not None
+        and (now - _setup_asked_at).total_seconds() >= config.SETUP_ANSWER_WAIT_S
+    ):
+        _setup = None
+        _setup_asked_at = None
 
 
 def _expire_quiz(now: datetime) -> None:

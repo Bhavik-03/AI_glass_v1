@@ -36,6 +36,9 @@ MEMORY_RECALL_MAX = 5
 MEMORY_LIST_MAX = 5
 MEMORY_SAME_THRESHOLD = 0.9
 QUIZ_ANSWER_WAIT_S = 300
+SETUP_SLOTS = ("identity", "goal_now", "goal_long", "exploring", "style", "constraints")
+SETUP_STOP_PHRASE = "stop setup"
+SETUP_ANSWER_WAIT_S = 300
 # Whole phrases, as the normalised transcript: a yes commits a proposal, a no declines it.
 PROPOSAL_YES = frozenset(
     {
