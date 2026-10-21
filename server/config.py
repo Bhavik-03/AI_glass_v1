@@ -38,6 +38,8 @@ MEMORY_SAME_THRESHOLD = 0.9
 QUIZ_ANSWER_WAIT_S = 300
 SETUP_SLOTS = ("identity", "goal_now", "goal_long", "exploring", "style", "constraints")
 SETUP_STOP_PHRASE = "stop setup"
+# Whisper splits "setup" in two ("Stop. Set up."): "stop" must come right before it.
+SETUP_STOP_PATTERN = r"\bstop\s+set\s*up\b"
 SETUP_ANSWER_WAIT_S = 300
 # Whole phrases, as the normalised transcript: a yes commits a proposal, a no declines it.
 PROPOSAL_YES = frozenset(

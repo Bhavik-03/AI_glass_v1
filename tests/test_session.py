@@ -776,6 +776,7 @@ def test_fr29_setup_config_values():
     )
     assert isinstance(config.SETUP_SLOTS, tuple)
     assert config.SETUP_STOP_PHRASE == "stop setup"
+    assert config.SETUP_STOP_PATTERN == r"\bstop\s+set\s*up\b"
     assert config.SETUP_ANSWER_WAIT_S == 300
 
 
