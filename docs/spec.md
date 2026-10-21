@@ -363,13 +363,16 @@ FR-26 onwards are new in v3.
   order, one per key press, and writes the answers to the file. The other slots stay empty.
   After each answer the assistant reads the stored value back before asking the next
   question, so a mis-transcription is audible at once. Setup can be left by saying
-  "stop setup"; what was answered is kept, and setup does not start again until the server
+  "stop setup", with "setup" heard as one word or two ("stop set up"), because speech
+  recognition splits it; what was answered is kept, and setup does not start again until the server
   restarts
 - Input → Output: Spoken answers → `data/profile.json`
 - Acceptance: With no profile file, the first query is answered with the first setup
   question, not a normal answer; six answers fill six slots in the file and the seventh
-  query is answered normally; "stop setup" leaves setup and keeps the slots already
-  answered, and the next query is answered normally; a setup answer is spoken back, as the
+  query is answered normally; "stop setup", "stop set up", "Stop. Set up." and "Stop, set
+  up!" each leave setup and keep the slots already answered, while an answer that only
+  contains "set up" without "stop" right before it ("I want to set up a startup") is stored
+  as the answer; and the next query is answered normally; a setup answer is spoken back, as the
   stored value, in the same turn as the next question (or as the closing line after the last
   one); after a restart with three setup slots
   answered, setup asks the other three and no more; in the eval, six spoken answers fill all six slots correctly

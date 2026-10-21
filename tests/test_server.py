@@ -2908,6 +2908,66 @@ def test_fr29_stop_setup_ends_it_and_keeps_answers(
     assert len(fake_stages["llm"]) == 1
 
 
+@pytest.mark.parametrize(
+    "spoken",
+    [
+        "stop setup",
+        "stop set up",
+        "Stop. Set up.",
+        "Stop, set up!",
+        "stop  setup",
+        "Stop setup.",
+    ],
+)
+def test_fr29_stop_accepts_setup_as_one_word_or_two(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session, spoken
+):
+    """FR-29: 'stop setup' written as one word or two ends setup, as Whisper splits it;
+    nothing is stored for the stop utterance."""
+    from server import tools
+
+    _setup_env(monkeypatch, tmp_path)
+    _say(fake_stages, silent_wav, "start")
+    _say(fake_stages, silent_wav, SETUP_ANSWERS["identity"])
+    _say(fake_stages, silent_wav, spoken)
+    assert fake_stages["tts"][-1] == tools.SETUP_STOPPED
+    assert _answers_in_file() == {"identity": SETUP_ANSWERS["identity"]}
+
+
+@pytest.mark.parametrize(
+    "spoken",
+    [
+        "I want to set up a startup",
+        "set up",
+        "please stop and set up my lab",
+        "stop. then set up the repo",
+        "stop setups",
+        "nonstop set up",
+    ],
+)
+def test_fr29_set_up_without_stop_right_before_is_an_answer(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session, spoken
+):
+    """FR-29: an answer that only contains 'set up', without 'stop' immediately before it,
+    does not end setup and is stored as the answer."""
+    from server import tools
+
+    _setup_env(monkeypatch, tmp_path)
+    _say(fake_stages, silent_wav, "start")
+    _say(fake_stages, silent_wav, spoken)
+    assert fake_stages["tts"][-1] == _noted(spoken, "goal_now")
+    assert fake_stages["tts"][-1] != tools.SETUP_STOPPED
+    assert _answers_in_file() == {"identity": spoken}
+
+
+def test_fr29_quiz_and_wipe_phrases_are_unchanged():
+    """FR-29: only the setup stop match accepts a split word; the quiz and wipe phrases
+    keep their exact text."""
+    assert config.QUIZ_STOP_PHRASE == "stop quiz"
+    assert config.WIPE_REQUEST_PHRASE == "wipe my memories"
+    assert config.WIPE_CONFIRM_PHRASE == "yes wipe everything"
+
+
 def test_fr29_stop_before_any_answer_does_not_restart(
     fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
 ):

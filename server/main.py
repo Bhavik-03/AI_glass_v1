@@ -211,7 +211,7 @@ def _setup_answer(record: dict, setup: dict, asked_at: datetime) -> Response:
     """The transcript is the answer to the current slot, written and dated today; then the
     next question or the end. "stop setup" keeps what was answered (FR-29)."""
     timings = record["timings_ms"]
-    if config.SETUP_STOP_PHRASE in _normalised(record["question"]):
+    if re.search(config.SETUP_STOP_PATTERN, _normalised(record["question"])):
         record["answer"] = tools.SETUP_STOPPED
         wav = run_stage("tts", timings, tts.synthesize, record["answer"])
         session.stop_setup()
