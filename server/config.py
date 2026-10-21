@@ -28,6 +28,9 @@ PROFILE_MAX_LINES = 40
 PROFILE_LINE_CHARS = 100
 GOAL_STALE_DAYS = 31
 GOAL_STALE_SLOT = "goal_now"
+GOAL_STALE_LINE = (
+    "By the way, your goal for the month was set {days} days ago. Does it still hold?"
+)
 MEMORY_MAX_WORDS = 12
 MEMORY_RECALL_MAX = 5
 MEMORY_LIST_MAX = 5

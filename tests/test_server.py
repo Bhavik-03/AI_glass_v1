@@ -2366,3 +2366,265 @@ def test_fr28_startup_stops_when_profile_exceeds_line_cap(
     monkeypatch.setattr("server.config.PROFILE_MAX_LINES", 1)
     with pytest.raises(profile.ProfileError), TestClient(app):
         pass
+
+
+# --- stale goal_now line on a normal answer (FR-30) ---
+
+GOAL_TEXT = "crack the campus interviews"
+GOAL_SCHEMA = [
+    {"name": "identity", "description": "who", "question": "Who are you?"},
+    {"name": "goal_now", "description": "goal this month", "question": "Goal?"},
+]
+
+
+def _stale_profile(monkeypatch, tmp_path, set_on, goal=GOAL_TEXT):
+    """Load a profile whose goal_now was set on `set_on` (ISO date or None for no stamp)."""
+    values = {"identity": "student", "goal_now": goal}
+    if set_on is not None:
+        values["_set_on"] = {"goal_now": set_on}
+    _profile_files(monkeypatch, tmp_path, schema=GOAL_SCHEMA, values=values)
+    profile.load()
+
+
+def _stale_line(days: int) -> str:
+    return config.GOAL_STALE_LINE.format(days=days)
+
+
+def _spoken(answer=FAKE_ANSWER, days=32) -> str:
+    return f"{answer} {_stale_line(days)}"
+
+
+def test_fr30_32_day_old_goal_adds_line_to_spoken_and_logged_answer(
+    fake_stages, silent_wav, monkeypatch, tmp_path, log_path
+):
+    """FR-30: a goal_now set 32 days ago gets the stale line appended to the first
+    answer, before TTS: tts and the log line both carry it."""
+    _stale_profile(monkeypatch, tmp_path, "2026-09-07")
+    response = _post_query(silent_wav)
+    assert response.status_code == 200
+    assert response.content == FAKE_TTS_WAV
+    assert fake_stages["tts"] == [_spoken()]
+    assert "32" in fake_stages["tts"][0]
+    (line,) = _log_lines(log_path)
+    assert line["answer"] == _spoken()
+
+
+def test_fr30_line_said_once_per_session(
+    fake_stages, silent_wav, monkeypatch, tmp_path, clock
+):
+    """FR-30: the second answer within the same session (60 s later) has no line."""
+    _stale_profile(monkeypatch, tmp_path, "2026-09-07")
+    _post_query(silent_wav)
+    clock.at(60)
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["tts"] == [_spoken(), FAKE_ANSWER]
+
+
+def test_fr30_line_comes_again_after_session_lapses(
+    fake_stages, silent_wav, monkeypatch, tmp_path, clock
+):
+    """FR-30: after the session lapses (over 120 s) the line is said again."""
+    _stale_profile(monkeypatch, tmp_path, "2026-09-07")
+    _post_query(silent_wav)
+    clock.at(121)
+    _post_query(silent_wav)
+    assert fake_stages["tts"] == [_spoken(), _spoken()]
+
+
+def test_fr30_session_reset_lets_the_line_come_again(
+    fake_stages, silent_wav, monkeypatch, tmp_path, clock
+):
+    """FR-30: /session/reset clears the mark: the next answer carries the line again."""
+    _stale_profile(monkeypatch, tmp_path, "2026-09-07")
+    _post_query(silent_wav)
+    assert client.post("/session/reset").status_code == 200
+    clock.at(10)
+    _post_query(silent_wav)
+    assert fake_stages["tts"] == [_spoken(), _spoken()]
+
+
+def test_fr30_exactly_30_days_no_line_no_proposal(
+    fake_stages, silent_wav, monkeypatch, tmp_path, log_path
+):
+    """FR-30: a goal set 30 days ago is not stale: no line, no proposal."""
+    from server import session
+
+    _stale_profile(monkeypatch, tmp_path, "2026-09-09")
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["tts"] == [FAKE_ANSWER]
+    assert _log_lines(log_path)[0]["answer"] == FAKE_ANSWER
+    assert session.proposal(FIXED_NOW) is None
+    assert session.stale_noted(FIXED_NOW) is False
+
+
+def test_fr30_31_days_no_line(fake_stages, silent_wav, monkeypatch, tmp_path):
+    """FR-30: a goal set 31 days ago is not stale: the answer has no line."""
+    _stale_profile(monkeypatch, tmp_path, "2026-09-08")
+    _post_query(silent_wav)
+    assert fake_stages["tts"] == [FAKE_ANSWER]
+
+
+def test_fr30_goal_without_set_on_date_no_line(
+    fake_stages, silent_wav, monkeypatch, tmp_path
+):
+    """FR-30: a goal with no _set_on date is never stale: no line."""
+    _stale_profile(monkeypatch, tmp_path, None)
+    _post_query(silent_wav)
+    assert fake_stages["tts"] == [FAKE_ANSWER]
+
+
+def test_fr30_empty_goal_no_line(fake_stages, silent_wav, monkeypatch, tmp_path):
+    """FR-30: an empty goal_now (even with an old date) gets no line."""
+    _stale_profile(monkeypatch, tmp_path, "2026-09-07", goal="")
+    _post_query(silent_wav)
+    assert fake_stages["tts"] == [FAKE_ANSWER]
+
+
+def test_fr30_line_leaves_stored_goal_and_date_unchanged(
+    fake_stages, silent_wav, monkeypatch, tmp_path
+):
+    """FR-30: saying the line writes nothing: the values file bytes are unchanged."""
+    _stale_profile(monkeypatch, tmp_path, "2026-09-07")
+    path = tmp_path / "profile.json"
+    before = path.read_bytes()
+    _post_query(silent_wav)
+    assert path.read_bytes() == before
+    assert profile.values()["goal_now"] == GOAL_TEXT
+
+
+def test_fr30_line_is_in_follow_up_context(
+    fake_stages, silent_wav, monkeypatch, tmp_path, clock
+):
+    """FR-30: the saved turn's answer includes the line, so a follow-up sees it in llm.ask turns."""
+    _stale_profile(monkeypatch, tmp_path, "2026-09-07")
+    _post_query(silent_wav)
+    clock.at(30)
+    _post_query(silent_wav)
+    assert fake_stages["llm_turns"][1] == [
+        {"question": FAKE_TRANSCRIPT, "answer": _spoken()}
+    ]
+
+
+def test_fr30_line_records_confirm_proposal_with_current_goal(
+    fake_stages, silent_wav, monkeypatch, tmp_path
+):
+    """FR-30: after the line is spoken a confirm proposal for goal_now with its
+    current text is pending, and the mark is set."""
+    from server import session
+
+    _stale_profile(monkeypatch, tmp_path, "2026-09-07")
+    _post_query(silent_wav)
+    assert session.proposal(FIXED_NOW) == {
+        "kind": "confirm",
+        "slot": "goal_now",
+        "value": GOAL_TEXT,
+    }
+    assert session.stale_noted(FIXED_NOW) is True
+
+
+def test_fr30_no_line_on_quiz_answer_turn(
+    fake_stages, silent_wav, monkeypatch, tmp_path
+):
+    """FR-30: a quiz-answer turn gets no stale line, and does not mark it."""
+    from server import session
+
+    _stale_profile(monkeypatch, tmp_path, "2026-09-07")
+    _start_quiz("LoRA", "Attention")
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["llm"] == []
+    assert "32" not in fake_stages["tts"][0]
+    assert _stale_line(32) not in fake_stages["tts"][0]
+    assert session.stale_noted(FIXED_NOW) is False
+    assert session.proposal(FIXED_NOW) is None
+
+
+def test_fr30_no_line_on_wipe_request_turn(
+    fake_stages, silent_wav, monkeypatch, tmp_path
+):
+    """FR-30: the wipe-request turn gets no stale line and records no proposal."""
+    from server import session
+
+    _stale_profile(monkeypatch, tmp_path, "2026-09-07")
+    _request_wipe(fake_stages, silent_wav)
+    assert _stale_line(32) not in fake_stages["tts"][0]
+    assert session.stale_noted(FIXED_NOW) is False
+    assert session.proposal(FIXED_NOW) is None
+
+
+def test_fr30_no_line_on_wipe_confirm_turn(
+    fake_stages, silent_wav, monkeypatch, tmp_path
+):
+    """FR-30: the wipe-confirm turn gets no stale line and records no proposal."""
+    from server import session
+
+    _stale_profile(monkeypatch, tmp_path, "2026-09-07")
+    _store_memories(2)
+    _request_wipe(fake_stages, silent_wav)
+    assert _say(fake_stages, silent_wav, WIPE_CONFIRM).status_code == 200
+    assert _stale_line(32) not in fake_stages["tts"][1]
+    assert session.stale_noted(FIXED_NOW) is False
+    assert session.proposal(FIXED_NOW) is None
+
+
+def test_fr30_pending_proposal_skips_the_line(
+    fake_stages, silent_wav, monkeypatch, tmp_path, log_path
+):
+    """FR-30: if a proposal is pending when ask returns (here ask itself proposes),
+    the stale line is skipped and the pending proposal is left as it was."""
+    from server import session
+
+    _stale_profile(monkeypatch, tmp_path, "2026-09-07")
+
+    def ask(question, now, turns=(), image=None):
+        session.propose("update", "identity", "new identity", now)
+        return FAKE_ANSWER, False, []
+
+    monkeypatch.setattr("server.llm.ask", ask)
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["tts"] == [FAKE_ANSWER]
+    assert _log_lines(log_path)[0]["answer"] == FAKE_ANSWER
+    assert session.proposal(FIXED_NOW) == {
+        "kind": "update",
+        "slot": "identity",
+        "value": "new identity",
+    }
+
+
+def test_fr30_tts_failure_leaves_line_unsaid(
+    fake_stages, silent_wav, monkeypatch, tmp_path, clock
+):
+    """FR-30: a TTS failure (500) sets no mark and no proposal; the next successful
+    query carries the line."""
+    from server import session
+
+    def fail(text):
+        raise RuntimeError("no voice")
+
+    _stale_profile(monkeypatch, tmp_path, "2026-09-07")
+    working = server.tts.synthesize
+    monkeypatch.setattr("server.tts.synthesize", fail)
+    response = _post_query(silent_wav)
+    assert response.status_code == 500
+    assert response.json() == {"error": "tts: no voice"}
+    assert session.stale_noted(FIXED_NOW) is False
+    assert session.proposal(FIXED_NOW) is None
+    monkeypatch.setattr("server.tts.synthesize", working)
+    clock.at(5)
+    assert _post_query(silent_wav).status_code == 200
+    assert fake_stages["tts"][-1] == _spoken()
+
+
+def test_fr30_failed_llm_query_has_no_line(
+    fake_stages, silent_wav, monkeypatch, tmp_path, log_path
+):
+    """FR-30: a failed query (llm 500) gets no stale line in the response or log."""
+    from server import session
+
+    _stale_profile(monkeypatch, tmp_path, "2026-09-07")
+    _make_stage_raise(monkeypatch, fake_stages, "llm", RuntimeError("boom"))
+    response = _post_query(silent_wav)
+    assert response.status_code == 500
+    assert response.json() == {"error": "llm: boom"}
+    assert fake_stages["tts"] == []
+    assert _stale_line(32) not in log_path.read_text(encoding="utf-8")
+    assert session.stale_noted(FIXED_NOW) is False

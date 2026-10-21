@@ -14,14 +14,19 @@ _wipe_asked_at: datetime | None = None
 _proposal: dict | None = None
 _proposal_asked_at: datetime | None = None
 _declined: set[str] = set()
+_stale_noted = False
 
 
 def add_turn(
-    question: str, answer: str, now: datetime, image: tuple[bytes, str] | None = None
+    question: str,
+    answer: str,
+    now: datetime,
+    image: tuple[bytes, str] | None = None,
+    stale_noted: bool = False,
 ) -> None:
     """Keep a finished turn and any new image; the session lasts SESSION_TTL_S from this
-    answer (FR-21)."""
-    global _image, _last_answer_at
+    answer (FR-21). stale_noted marks that the stale-goal line was spoken in it (FR-30)."""
+    global _image, _last_answer_at, _stale_noted
     with _lock:
         _expire(now)
         _turns.append({"question": question, "answer": answer})
@@ -30,6 +35,14 @@ def add_turn(
         if image is not None:
             _image = image
         _last_answer_at = now
+        _stale_noted = _stale_noted or stale_noted
+
+
+def stale_noted(now: datetime) -> bool:
+    """Whether the stale-goal line was already said in this session (FR-30)."""
+    with _lock:
+        _expire(now)
+        return _stale_noted
 
 
 def turns(now: datetime) -> list[dict]:
@@ -193,7 +206,8 @@ def _expire(now: datetime) -> None:
 
 
 def _clear() -> None:
-    global _image, _last_answer_at
+    global _image, _last_answer_at, _stale_noted
+    _stale_noted = False
     _turns.clear()
     _declined.clear()
     _image = None

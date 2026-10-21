@@ -690,3 +690,72 @@ def test_fr31_concurrent_proposal_calls_do_not_raise():
     for t in threads:
         t.join()
     assert errors == []
+
+
+def test_fr30_goal_stale_line_formats_with_days():
+    """config.GOAL_STALE_LINE has a {days} slot and formats with the day count."""
+    assert "{days}" in config.GOAL_STALE_LINE
+    line = config.GOAL_STALE_LINE.format(days=32)
+    assert "32" in line
+    assert "{" not in line
+
+
+def test_fr30_stale_not_noted_by_default():
+    """With nothing said, stale_noted() is False."""
+    assert session.stale_noted(T0) is False
+
+
+def test_fr30_add_turn_with_stale_noted_marks_it():
+    """add_turn(stale_noted=True) marks the stale line as said this session."""
+    session.add_turn("q", "a", T0, stale_noted=True)
+    assert session.stale_noted(T0 + secs(1)) is True
+
+
+def test_fr30_add_turn_without_stale_noted_leaves_it_false():
+    """add_turn with the default stale_noted=False does not mark the line."""
+    session.add_turn("q", "a", T0)
+    assert session.stale_noted(T0 + secs(1)) is False
+
+
+def test_fr30_later_turn_without_flag_does_not_clear_the_mark():
+    """add_turn(stale_noted=False) does not clear an existing mark."""
+    session.add_turn("q1", "a1", T0, stale_noted=True)
+    session.add_turn("q2", "a2", T0 + secs(30), stale_noted=False)
+    session.add_turn("q3", "a3", T0 + secs(40))
+    assert session.stale_noted(T0 + secs(50)) is True
+
+
+def test_fr30_stale_mark_present_just_before_ttl():
+    """The mark is still set 119 s after the last answer."""
+    session.add_turn("q", "a", T0, stale_noted=True)
+    assert session.stale_noted(T0 + secs(119)) is True
+
+
+def test_fr30_stale_mark_clears_when_session_expires():
+    """The mark clears SESSION_TTL_S after the last answer, checked on read, for good."""
+    session.add_turn("q", "a", T0, stale_noted=True)
+    assert session.stale_noted(T0 + secs(120)) is False
+    assert session.stale_noted(T0 + secs(1)) is False
+
+
+def test_fr30_new_turn_extends_the_stale_mark():
+    """The mark lives 120 s from the last answer, not the first."""
+    session.add_turn("q1", "a1", T0, stale_noted=True)
+    session.add_turn("q2", "a2", T0 + secs(100))
+    assert session.stale_noted(T0 + secs(200)) is True
+    assert session.stale_noted(T0 + secs(220)) is False
+
+
+def test_fr30_stale_mark_follows_ttl_config(monkeypatch):
+    """The mark lifetime comes from config.SESSION_TTL_S."""
+    monkeypatch.setattr(config, "SESSION_TTL_S", 10)
+    session.add_turn("q", "a", T0, stale_noted=True)
+    assert session.stale_noted(T0 + secs(9)) is True
+    assert session.stale_noted(T0 + secs(10)) is False
+
+
+def test_fr30_reset_clears_the_stale_mark():
+    """reset() clears the mark."""
+    session.add_turn("q", "a", T0, stale_noted=True)
+    session.reset()
+    assert session.stale_noted(T0 + secs(1)) is False

@@ -182,6 +182,19 @@ def _quiz_answer(record: dict, quiz: dict, asked_at: datetime) -> Response:
     return Response(content=wav, media_type="audio/wav")
 
 
+def _stale_line(asked_at: datetime) -> str | None:
+    """The line asking whether the month goal still holds, or None: said once per session,
+    and not when the model has just asked something else (FR-30)."""
+    days = profile.stale_days(asked_at.date())
+    if (
+        days is None
+        or session.stale_noted(asked_at)
+        or session.proposal(asked_at) is not None
+    ):
+        return None
+    return config.GOAL_STALE_LINE.format(days=days)
+
+
 def _answer(data: bytes | None, image: bytes | None, record: dict) -> Response:
     if problem := _audio_problem(data):
         return _error(400, problem, record)
@@ -213,11 +226,22 @@ def _answer(data: bytes | None, image: bytes | None, record: dict) -> Response:
         record["answer"], record["searched"], record["tool_calls"] = run_stage(
             "llm", timings, llm.ask, record["question"], asked_at, turns, image_for_llm
         )
+        stale_line = _stale_line(asked_at)
+        if stale_line:
+            record["answer"] = f"{record['answer']} {stale_line}"
         wav = run_stage("tts", timings, tts.synthesize, record["answer"])
         # Only an answered question becomes a turn, so a failure never extends the session (FR-21).
         session.add_turn(
-            record["question"], record["answer"], asked_at, image=new_image
+            record["question"],
+            record["answer"],
+            asked_at,
+            image=new_image,
+            stale_noted=bool(stale_line),
         )
+        if stale_line:
+            # A yes to the line re-stamps the goal's date; the value stays as it is (FR-30).
+            slot = config.GOAL_STALE_SLOT
+            session.propose("confirm", slot, profile.values()[slot], asked_at)
     except StageFailed as e:
         record["tool_calls"] = e.tool_calls or record["tool_calls"]
         return _error(500, f"{e.stage}: {e.reason}", record)
