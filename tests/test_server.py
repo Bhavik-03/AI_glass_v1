@@ -3026,3 +3026,376 @@ def test_fr29_every_setup_turn_writes_one_complete_log_line(
     for line in lines:
         assert line["tool_calls"] == []
         assert line["error"] is None
+
+
+# --- yes or no to a profile proposal (FR-31, FR-30) ---
+
+NEW_GOAL = "finish the compilers project"
+TODAY_ISO = "2026-10-09"
+NOTHING_CHANGED = "Okay, nothing changed."
+
+
+def _proposal_env(monkeypatch, tmp_path, set_on=TODAY_ISO):
+    """Profile with identity and goal_now filled (no setup); returns the values path."""
+    _stale_profile(monkeypatch, tmp_path, set_on)
+    return tmp_path / "profile.json"
+
+
+def _propose_update(slot="goal_now", value=NEW_GOAL, now=FIXED_NOW):
+    from server import session
+
+    session.propose("update", slot, value, now)
+
+
+def _propose_confirm(now=FIXED_NOW):
+    from server import session
+
+    session.propose("confirm", "goal_now", GOAL_TEXT, now)
+
+
+def _file_json(path) -> dict:
+    return json.loads(path.read_text("utf-8"))
+
+
+@pytest.mark.parametrize(
+    "transcript", ["yes", "Yes.", "yes please", "  YES,  please! "]
+)
+def test_fr31_yes_writes_the_proposed_value_dated_today(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session, transcript
+):
+    """FR-31: a whole-phrase yes (normalised) to an update proposal writes the slot
+    with today's date and consumes the proposal."""
+    from server import session
+
+    path = _proposal_env(monkeypatch, tmp_path, set_on="2026-08-01")
+    _propose_update()
+    assert _say(fake_stages, silent_wav, transcript).status_code == 200
+    data = _file_json(path)
+    assert data["goal_now"] == NEW_GOAL
+    assert data["_set_on"]["goal_now"] == TODAY_ISO
+    assert profile.values()["goal_now"] == NEW_GOAL
+    assert session.proposal(FIXED_NOW) is None
+
+
+def test_fr31_yes_speaks_saved_with_slot_name_and_value(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
+):
+    """FR-31: the spoken answer to a yes starts with 'Saved' and names the slot
+    (underscores as spaces) and the value."""
+    _proposal_env(monkeypatch, tmp_path)
+    _propose_update()
+    response = _say(fake_stages, silent_wav, "yes")
+    assert response.status_code == 200
+    assert response.content == FAKE_TTS_WAV
+    spoken = fake_stages["tts"][-1]
+    assert spoken.startswith("Saved")
+    assert "goal now" in spoken
+    assert NEW_GOAL in spoken
+
+
+def test_fr31_yes_does_not_call_gemini(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
+):
+    """FR-31: Gemini is not called on a yes turn."""
+    _proposal_env(monkeypatch, tmp_path)
+    _propose_update()
+    _forbid_llm(monkeypatch)
+    assert _say(fake_stages, silent_wav, "yes").status_code == 200
+    assert fake_stages["llm"] == []
+
+
+@pytest.mark.parametrize("transcript", ["no", "No.", "no thanks"])
+def test_fr31_no_writes_nothing_and_says_nothing_changed(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session, transcript
+):
+    """FR-31: a no leaves the values file bytes unchanged, consumes the proposal and
+    speaks 'Okay, nothing changed.' without calling Gemini."""
+    from server import session
+
+    path = _proposal_env(monkeypatch, tmp_path)
+    before = path.read_bytes()
+    _propose_update()
+    _forbid_llm(monkeypatch)
+    response = _say(fake_stages, silent_wav, transcript)
+    assert response.status_code == 200
+    assert response.content == FAKE_TTS_WAV
+    assert fake_stages["tts"][-1] == NOTHING_CHANGED
+    assert path.read_bytes() == before
+    assert session.proposal(FIXED_NOW) is None
+
+
+def test_fr31_no_to_update_declines_that_slot_for_the_session(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
+):
+    """FR-31: after a no, the slot is declined: propose_profile_update for it errors in
+    the same session while another slot still works."""
+    from server import session, tools
+
+    _proposal_env(monkeypatch, tmp_path)
+    _propose_update()
+    _say(fake_stages, silent_wav, "no")
+    assert session.declined("goal_now", FIXED_NOW) is True
+    declined = tools.run(
+        "propose_profile_update", {"slot": "goal_now", "value": "again"}, FIXED_NOW
+    )
+    assert "error" in declined
+    other = tools.run(
+        "propose_profile_update", {"slot": "identity", "value": "a builder"}, FIXED_NOW
+    )
+    assert "error" not in other
+    assert session.proposal(FIXED_NOW)["slot"] == "identity"
+
+
+def test_fr31_yes_to_confirm_keeps_value_and_restamps_date(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
+):
+    """FR-30/FR-31: yes to a stale-goal confirm re-stamps the date to today and leaves
+    the value untouched; the goal is no longer stale."""
+    from server import session
+
+    path = _proposal_env(monkeypatch, tmp_path, set_on="2026-09-07")
+    assert profile.stale_days(FIXED_NOW.date()) == 32
+    _propose_confirm()
+    assert _say(fake_stages, silent_wav, "yes").status_code == 200
+    data = _file_json(path)
+    assert data["goal_now"] == GOAL_TEXT
+    assert data["_set_on"]["goal_now"] == TODAY_ISO
+    assert profile.stale_days(FIXED_NOW.date()) is None
+    assert session.proposal(FIXED_NOW) is None
+
+
+def test_fr30_yes_to_confirm_speaks_kept_with_the_value(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
+):
+    """FR-30: the spoken answer to a confirm yes starts with 'Okay, I kept' and
+    contains the goal; Gemini is not called."""
+    _proposal_env(monkeypatch, tmp_path, set_on="2026-09-07")
+    _propose_confirm()
+    _forbid_llm(monkeypatch)
+    assert _say(fake_stages, silent_wav, "yes").status_code == 200
+    spoken = fake_stages["tts"][-1]
+    assert spoken.startswith("Okay, I kept")
+    assert GOAL_TEXT in spoken
+
+
+def test_fr30_after_confirm_a_new_session_has_no_stale_line(
+    fake_stages, silent_wav, monkeypatch, tmp_path, clock, fresh_session
+):
+    """FR-30: after the confirm yes, a query in a new session (over 120 s later) gets
+    no stale line."""
+    _proposal_env(monkeypatch, tmp_path, set_on="2026-09-07")
+    _propose_confirm()
+    _say(fake_stages, silent_wav, "yes")
+    clock.at(200)
+    assert _say(fake_stages, silent_wav, FAKE_TRANSCRIPT).status_code == 200
+    assert fake_stages["tts"][-1] == FAKE_ANSWER
+
+
+def test_fr30_no_to_confirm_changes_nothing_and_does_not_decline(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
+):
+    """FR-30: a no to a confirm writes nothing, the date stays old (still stale), the
+    slot is not declined, and a later propose_profile_update for it works."""
+    from server import session, tools
+
+    path = _proposal_env(monkeypatch, tmp_path, set_on="2026-09-07")
+    before = path.read_bytes()
+    _propose_confirm()
+    _say(fake_stages, silent_wav, "no")
+    assert fake_stages["tts"][-1] == NOTHING_CHANGED
+    assert path.read_bytes() == before
+    assert profile.stale_days(FIXED_NOW.date()) is not None
+    assert session.declined("goal_now", FIXED_NOW) is False
+    out = tools.run(
+        "propose_profile_update", {"slot": "goal_now", "value": NEW_GOAL}, FIXED_NOW
+    )
+    assert "error" not in out
+
+
+@pytest.mark.parametrize(
+    "transcript",
+    ["yes update it", "yes but later", "what is a compiler", "no way jose", "yes yes"],
+)
+@pytest.mark.parametrize("kind", ["update", "confirm"])
+def test_fr31_anything_else_drops_the_proposal_and_answers_normally(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session, kind, transcript
+):
+    """FR-31: any other utterance (near-misses included) drops the proposal, writes
+    nothing, and the turn goes to Gemini once with the real transcript."""
+    from server import session
+
+    path = _proposal_env(monkeypatch, tmp_path)
+    before = path.read_bytes()
+    if kind == "update":
+        _propose_update()
+    else:
+        _propose_confirm()
+    assert _say(fake_stages, silent_wav, transcript).status_code == 200
+    assert [q for q, _ in fake_stages["llm"]] == [transcript]
+    assert path.read_bytes() == before
+    assert session.proposal(FIXED_NOW) is None
+
+
+@pytest.mark.parametrize("transcript", ["yes", "no"])
+def test_fr31_yes_with_no_pending_proposal_is_a_normal_query(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session, transcript
+):
+    """FR-31: yes or no with no proposal pending goes to Gemini and writes nothing."""
+    path = _proposal_env(monkeypatch, tmp_path)
+    before = path.read_bytes()
+    assert _say(fake_stages, silent_wav, transcript).status_code == 200
+    assert [q for q, _ in fake_stages["llm"]] == [transcript]
+    assert path.read_bytes() == before
+
+
+def test_fr31_proposal_older_than_session_ttl_is_not_matched(
+    fake_stages, silent_wav, monkeypatch, tmp_path, clock, fresh_session
+):
+    """FR-31: a proposal older than SESSION_TTL_S is gone: a yes is a normal query and
+    nothing is written."""
+    path = _proposal_env(monkeypatch, tmp_path)
+    before = path.read_bytes()
+    _propose_update()
+    clock.at(config.SESSION_TTL_S + 1)
+    assert _say(fake_stages, silent_wav, "yes").status_code == 200
+    assert [q for q, _ in fake_stages["llm"]] == ["yes"]
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("how", ["cap", "error"])
+def test_fr31_refused_write_speaks_could_not_save(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session, how
+):
+    """FR-31: a write refused (over the line cap, or ProfileError) speaks 'I could not
+    save that', leaves the file unchanged, answers 200 and consumes the proposal."""
+    from server import session
+
+    path = _proposal_env(monkeypatch, tmp_path)
+    before = path.read_bytes()
+    if how == "cap":
+        monkeypatch.setattr("server.config.PROFILE_MAX_LINES", 1)
+    else:
+
+        def refuse(*args, **kwargs):
+            raise profile.ProfileError("too long")
+
+        monkeypatch.setattr(profile, "write", refuse)
+    _propose_update()
+    response = _say(fake_stages, silent_wav, "yes")
+    assert response.status_code == 200
+    assert fake_stages["tts"][-1].startswith("I could not save that")
+    assert path.read_bytes() == before
+    assert session.proposal(FIXED_NOW) is None
+
+
+def test_fr31_tts_failure_on_yes_returns_500_and_retry_still_commits(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
+):
+    """FR-31: a TTS failure on the yes turn returns 500 {"error": "tts: boom"}; the
+    proposal stays pending so a retried yes commits."""
+    from server import session
+
+    path = _proposal_env(monkeypatch, tmp_path)
+    _propose_update()
+    working = server.tts.synthesize
+
+    def fail(text):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("server.tts.synthesize", fail)
+    response = _say(fake_stages, silent_wav, "yes")
+    assert response.status_code == 500
+    assert response.json() == {"error": "tts: boom"}
+    assert session.proposal(FIXED_NOW) is not None
+    monkeypatch.setattr("server.tts.synthesize", working)
+    assert _say(fake_stages, silent_wav, "yes").status_code == 200
+    assert _file_json(path)["goal_now"] == NEW_GOAL
+
+
+@pytest.mark.parametrize(
+    "kind, transcript", [("update", "yes"), ("update", "no"), ("confirm", "yes")]
+)
+def test_fr31_yes_or_no_turn_writes_one_clean_log_line(
+    fake_stages,
+    silent_wav,
+    monkeypatch,
+    tmp_path,
+    log_path,
+    fresh_session,
+    kind,
+    transcript,
+):
+    """FR-31: a yes or no turn writes one JSONL line: question = transcript, answer =
+    the spoken text, empty tool_calls, error None."""
+    _proposal_env(monkeypatch, tmp_path, set_on="2026-09-07")
+    if kind == "update":
+        _propose_update()
+    else:
+        _propose_confirm()
+    assert _say(fake_stages, silent_wav, transcript).status_code == 200
+    (line,) = _log_lines(log_path)
+    assert line["question"] == transcript
+    assert line["answer"] == fake_stages["tts"][-1]
+    assert line["tool_calls"] == []
+    assert line["error"] is None
+
+
+# --- no path writes a slot without a yes, except setup (FR-31) ---
+
+SWEEP_ARGS = {
+    "query": "weather",
+    "text": "hacked",
+    "content": "hacked",
+    "slot": "goal_now",
+    "value": "hacked",
+    "due_at": "2026-10-10T10:00:00+05:30",
+    "id": 1,
+    "name": "LoRA",
+    "summary": "s",
+    "kind": "update",
+    "category": "fact",
+}
+
+
+def test_fr31_no_tool_writes_a_profile_slot(monkeypatch, tmp_path, db, fixed_now):
+    """FR-31: running every declared tool (empty args, broad args, and a valid
+    propose_profile_update) never changes the values file, profile.values() or set_on."""
+    from server import session, tools
+
+    path = _proposal_env(monkeypatch, tmp_path)
+    session.reset()
+
+    def no_network(*args, **kwargs):
+        raise OSError("network disabled in tests")
+
+    monkeypatch.setattr("socket.socket.connect", no_network)
+    slots = ("identity", "goal_now")
+
+    def state():
+        return (
+            path.read_bytes(),
+            dict(profile.values()),
+            [profile.set_on(s) for s in slots],
+        )
+
+    before = state()
+    for name in [d["name"] for d in tools.DECLARATIONS]:
+        for args in ({}, dict(SWEEP_ARGS)):
+            tools.run(name, args, fixed_now)
+            assert state() == before, name
+    out = tools.run(
+        "propose_profile_update", {"slot": "goal_now", "value": NEW_GOAL}, fixed_now
+    )
+    assert "error" not in out
+    assert state() == before
+    session.reset()
+
+
+def test_fr31_no_declared_tool_writes_the_profile_directly():
+    """FR-31: no declared tool is named update_/write_/set_ and touches the profile."""
+    from server import tools
+
+    for d in tools.DECLARATIONS:
+        text = f"{d['name']} {d.get('description', '')}".lower()
+        if d["name"].startswith(("update_", "write_", "set_")):
+            assert "profile" not in text, d["name"]

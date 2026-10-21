@@ -237,6 +237,37 @@ def _setup_answer(record: dict, setup: dict, asked_at: datetime) -> Response:
     return Response(content=wav, media_type="audio/wav")
 
 
+def _proposal_yes(record: dict, proposal: dict, asked_at: datetime) -> Response:
+    """A yes writes the proposed value, or for a confirmation re-stamps the date and keeps
+    the value; the answer says what happened. The proposal is consumed once spoken, so a
+    failed answer can be retried (FR-31, FR-30)."""
+    slot, value = proposal["slot"], proposal["value"]
+    spoken_slot = slot.replace("_", " ")
+    try:
+        profile.write(slot, value, asked_at.date())
+    except profile.ProfileError as e:
+        record["answer"] = f"I could not save that: {_reason(e)}"
+    else:
+        if proposal["kind"] == "confirm":
+            record["answer"] = f"Okay, I kept your {spoken_slot}: {value}."
+        else:
+            record["answer"] = f"Saved. Your {spoken_slot} is now: {value}."
+    wav = run_stage("tts", record["timings_ms"], tts.synthesize, record["answer"])
+    session.end_proposal()
+    return Response(content=wav, media_type="audio/wav")
+
+
+def _proposal_no(record: dict, proposal: dict) -> Response:
+    """A no writes nothing; a declined update is not proposed again this session, a
+    declined confirmation is not a decline of the slot (FR-31)."""
+    record["answer"] = "Okay, nothing changed."
+    wav = run_stage("tts", record["timings_ms"], tts.synthesize, record["answer"])
+    if proposal["kind"] == "update":
+        session.decline(proposal["slot"])
+    session.end_proposal()
+    return Response(content=wav, media_type="audio/wav")
+
+
 def _stale_line(asked_at: datetime) -> str | None:
     """The line asking whether the month goal still holds, or None: said once per session,
     and not when the model has just asked something else (FR-30)."""
@@ -273,6 +304,14 @@ def _answer(data: bytes | None, image: bytes | None, record: dict) -> Response:
             return _setup_answer(record, setup, asked_at)
         if session.pending_wipe(asked_at):
             return _wipe_confirm(record)
+        if proposal := session.proposal(asked_at):
+            spoken_phrase = _normalised(record["question"])
+            if spoken_phrase in config.PROPOSAL_YES:
+                return _proposal_yes(record, proposal, asked_at)
+            if spoken_phrase in config.PROPOSAL_NO:
+                return _proposal_no(record, proposal)
+            # Neither: drop it and answer as a normal query, the safe failure.
+            session.end_proposal()
         if (slots := _setup_slots()) and not session.setup_stopped():
             return _setup_start(record, slots, asked_at)
         spoken = f" {_normalised(record['question'])} "
