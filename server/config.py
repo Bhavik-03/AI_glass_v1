@@ -33,6 +33,24 @@ MEMORY_RECALL_MAX = 5
 MEMORY_LIST_MAX = 5
 MEMORY_SAME_THRESHOLD = 0.9
 QUIZ_ANSWER_WAIT_S = 300
+# Whole phrases, as the normalised transcript: a yes commits a proposal, a no declines it.
+PROPOSAL_YES = frozenset(
+    {
+        "yes",
+        "yeah",
+        "yep",
+        "sure",
+        "okay",
+        "ok",
+        "yes please",
+        "please do",
+        "go ahead",
+        "do it",
+    }
+)
+PROPOSAL_NO = frozenset(
+    {"no", "nope", "no thanks", "no thank you", "not now", "never mind", "nevermind"}
+)
 QUIZ_QUESTION = "Explain {name} in one sentence."
 QUIZ_STOP_PHRASE = "stop quiz"
 WIPE_REQUEST_PHRASE = "wipe my memories"

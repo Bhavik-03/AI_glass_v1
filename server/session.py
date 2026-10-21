@@ -11,6 +11,9 @@ _last_answer_at: datetime | None = None
 _quiz: dict | None = None
 _quiz_asked_at: datetime | None = None
 _wipe_asked_at: datetime | None = None
+_proposal: dict | None = None
+_proposal_asked_at: datetime | None = None
+_declined: set[str] = set()
 
 
 def add_turn(
@@ -44,13 +47,16 @@ def image(now: datetime) -> tuple[bytes, str] | None:
 
 
 def reset() -> None:
-    """Clear the session, any running quiz and any pending wipe (FR-22, FR-35)."""
-    global _quiz, _quiz_asked_at, _wipe_asked_at
+    """Clear the session, any running quiz, pending wipe and pending proposal
+    (FR-22, FR-35, FR-31)."""
+    global _quiz, _quiz_asked_at, _wipe_asked_at, _proposal, _proposal_asked_at
     with _lock:
         _clear()
         _quiz = None
         _quiz_asked_at = None
         _wipe_asked_at = None
+        _proposal = None
+        _proposal_asked_at = None
 
 
 def start_wipe(now: datetime) -> None:
@@ -77,6 +83,50 @@ def end_wipe() -> None:
     global _wipe_asked_at
     with _lock:
         _wipe_asked_at = None
+
+
+def propose(kind: str, slot: str, value: str, now: datetime) -> None:
+    """Hold one profile proposal, kind "update" or "confirm", waiting for a yes or a no
+    for SESSION_TTL_S from now; a new one replaces it (FR-31)."""
+    global _proposal, _proposal_asked_at
+    with _lock:
+        _proposal = {"kind": kind, "slot": slot, "value": value}
+        _proposal_asked_at = now
+
+
+def proposal(now: datetime) -> dict | None:
+    """The pending proposal, or None; an old one is dropped here (FR-31)."""
+    global _proposal, _proposal_asked_at
+    with _lock:
+        if (
+            _proposal_asked_at is not None
+            and (now - _proposal_asked_at).total_seconds() >= config.SESSION_TTL_S
+        ):
+            _proposal = None
+            _proposal_asked_at = None
+        return None if _proposal is None else dict(_proposal)
+
+
+def end_proposal() -> None:
+    """Clear the pending proposal, whether it was answered or dropped (FR-31)."""
+    global _proposal, _proposal_asked_at
+    with _lock:
+        _proposal = None
+        _proposal_asked_at = None
+
+
+def decline(slot: str) -> None:
+    """Remember that the user said no to a proposal for this slot, for this session
+    (FR-31)."""
+    with _lock:
+        _declined.add(slot)
+
+
+def declined(slot: str, now: datetime) -> bool:
+    """Whether the user declined a proposal for this slot in this session (FR-31)."""
+    with _lock:
+        _expire(now)
+        return slot in _declined
 
 
 def start_quiz(concepts: list[dict], now: datetime) -> None:
@@ -145,5 +195,6 @@ def _expire(now: datetime) -> None:
 def _clear() -> None:
     global _image, _last_answer_at
     _turns.clear()
+    _declined.clear()
     _image = None
     _last_answer_at = None

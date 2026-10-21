@@ -447,3 +447,246 @@ def test_fr35_second_start_wipe_restarts_the_clock():
     session.start_wipe(T0 + secs(100))
     assert session.pending_wipe(T0 + secs(100 + config.SESSION_TTL_S - 1)) is True
     assert session.pending_wipe(T0 + secs(100 + config.SESSION_TTL_S)) is False
+
+
+def _normalised(phrase: str) -> str:
+    import re
+
+    return " ".join(re.sub(r"[^\w\s]", " ", phrase.lower()).split())
+
+
+def test_fr31_proposal_phrase_sets_are_frozensets_of_str():
+    """PROPOSAL_YES and PROPOSAL_NO are frozensets of str."""
+    for phrases in (config.PROPOSAL_YES, config.PROPOSAL_NO):
+        assert isinstance(phrases, frozenset)
+        assert phrases
+        assert all(isinstance(p, str) for p in phrases)
+
+
+def test_fr31_proposal_phrases_are_normalised():
+    """Each phrase is lower case, only word characters and single spaces."""
+    for p in config.PROPOSAL_YES | config.PROPOSAL_NO:
+        assert p == _normalised(p)
+        assert p == p.strip()
+
+
+def test_fr31_proposal_yes_and_no_are_disjoint():
+    """No phrase is both a yes and a no."""
+    assert config.PROPOSAL_YES.isdisjoint(config.PROPOSAL_NO)
+
+
+def test_fr31_proposal_known_phrases_present():
+    """yes and yes please are yes phrases; no is a no phrase."""
+    assert "yes" in config.PROPOSAL_YES
+    assert "yes please" in config.PROPOSAL_YES
+    assert "no" in config.PROPOSAL_NO
+
+
+def test_fr31_no_proposal_by_default():
+    """With nothing proposed, proposal() returns None."""
+    assert session.proposal(T0) is None
+
+
+def test_fr31_propose_and_read():
+    """propose sets the pending proposal as {kind, slot, value}."""
+    session.propose("update", "goal_now", "crack interviews", T0)
+    assert session.proposal(T0 + secs(1)) == {
+        "kind": "update",
+        "slot": "goal_now",
+        "value": "crack interviews",
+    }
+
+
+def test_fr31_proposal_read_does_not_consume():
+    """Reading the proposal leaves it pending."""
+    session.propose("confirm", "goal_now", "v", T0)
+    first = session.proposal(T0 + secs(1))
+    assert session.proposal(T0 + secs(2)) == first
+
+
+def test_fr31_second_propose_replaces_first():
+    """At most one proposal is pending: a second propose replaces the first."""
+    session.propose("update", "goal_now", "a", T0)
+    session.propose("confirm", "name", "b", T0 + secs(5))
+    assert session.proposal(T0 + secs(6)) == {
+        "kind": "confirm",
+        "slot": "name",
+        "value": "b",
+    }
+
+
+def test_fr31_proposal_returns_a_copy():
+    """Mutating the dict from proposal() does not change the session."""
+    session.propose("update", "goal_now", "a", T0)
+    got = session.proposal(T0 + secs(1))
+    got["value"] = "changed"
+    got["slot"] = "other"
+    assert session.proposal(T0 + secs(2)) == {
+        "kind": "update",
+        "slot": "goal_now",
+        "value": "a",
+    }
+
+
+def test_fr31_proposal_present_just_before_ttl():
+    """The proposal is there 119 s after it was asked."""
+    session.propose("update", "goal_now", "a", T0)
+    assert session.proposal(T0 + secs(119)) is not None
+
+
+def test_fr31_proposal_gone_at_ttl_and_stays_gone():
+    """At 120 s the proposal is None, and stays None."""
+    session.propose("update", "goal_now", "a", T0)
+    assert session.proposal(T0 + secs(120)) is None
+    assert session.proposal(T0 + secs(121)) is None
+    assert session.proposal(T0 + secs(1)) is None
+
+
+def test_fr31_proposal_ttl_follows_config(monkeypatch):
+    """The proposal lifetime comes from config.SESSION_TTL_S."""
+    monkeypatch.setattr(config, "SESSION_TTL_S", 10)
+    session.propose("update", "goal_now", "a", T0)
+    assert session.proposal(T0 + secs(9)) is not None
+    assert session.proposal(T0 + secs(10)) is None
+
+
+def test_fr31_second_propose_restarts_the_clock():
+    """The 120 s counts from the time the latest proposal was asked."""
+    session.propose("update", "goal_now", "a", T0)
+    session.propose("update", "goal_now", "b", T0 + secs(100))
+    assert session.proposal(T0 + secs(100 + 119)) is not None
+    assert session.proposal(T0 + secs(100 + 120)) is None
+
+
+def test_fr31_end_proposal_clears_it():
+    """end_proposal clears the pending proposal."""
+    session.propose("update", "goal_now", "a", T0)
+    session.end_proposal()
+    assert session.proposal(T0 + secs(1)) is None
+
+
+def test_fr31_end_proposal_with_none_pending_is_safe():
+    """end_proposal with nothing pending does not raise, and can be repeated."""
+    session.end_proposal()
+    session.end_proposal()
+    assert session.proposal(T0) is None
+
+
+def test_fr31_nothing_declined_by_default():
+    """With nothing declined, declined(slot) is False."""
+    assert session.declined("goal_now", T0) is False
+
+
+def test_fr31_decline_marks_only_that_slot():
+    """Declining one slot does not mark others."""
+    session.decline("goal_now")
+    assert session.declined("goal_now", T0 + secs(1)) is True
+    assert session.declined("name", T0 + secs(1)) is False
+
+
+def test_fr31_decline_is_idempotent():
+    """Declining the same slot twice is safe."""
+    session.decline("goal_now")
+    session.decline("goal_now")
+    assert session.declined("goal_now", T0) is True
+
+
+def test_fr31_decline_survives_turns_within_ttl():
+    """Adding turns within the TTL keeps the declined set."""
+    session.add_turn("q0", "a0", T0)
+    session.decline("goal_now")
+    session.add_turn("q1", "a1", T0 + secs(60))
+    session.add_turn("q2", "a2", T0 + secs(110))
+    assert session.declined("goal_now", T0 + secs(200)) is True
+
+
+def test_fr31_declined_clears_when_session_expires():
+    """The declined set clears SESSION_TTL_S after the last answer, checked on read."""
+    session.add_turn("q", "a", T0)
+    session.decline("goal_now")
+    assert session.declined("goal_now", T0 + secs(119)) is True
+    assert session.declined("goal_now", T0 + secs(120)) is False
+
+
+def test_fr31_declined_expiry_is_for_good():
+    """After expiry is seen, the slot is not declined even for an earlier time."""
+    session.add_turn("q", "a", T0)
+    session.decline("goal_now")
+    assert session.declined("goal_now", T0 + secs(121)) is False
+    assert session.declined("goal_now", T0 + secs(122)) is False
+    assert session.declined("goal_now", T0 + secs(1)) is False
+
+
+def test_fr31_new_turn_extends_declined_window():
+    """The declined set lives 120 s from the last answer, not the first."""
+    session.add_turn("q1", "a1", T0)
+    session.decline("goal_now")
+    session.add_turn("q2", "a2", T0 + secs(100))
+    assert session.declined("goal_now", T0 + secs(200)) is True
+    assert session.declined("goal_now", T0 + secs(220)) is False
+
+
+def test_fr31_reset_drops_proposal_and_declined():
+    """reset() drops a pending proposal and the declined set."""
+    session.propose("update", "goal_now", "a", T0)
+    session.decline("goal_now")
+    session.reset()
+    assert session.proposal(T0 + secs(1)) is None
+    assert session.declined("goal_now", T0 + secs(1)) is False
+
+
+def test_fr31_proposal_does_not_affect_turns_image_quiz_wipe():
+    """A pending proposal and declined set leave turns, image, quiz and wipe untouched."""
+    session.add_turn("q", "a", T0, image=IMG)
+    session.start_quiz(CONCEPTS, T0)
+    session.start_wipe(T0)
+    session.propose("update", "goal_now", "a", T0 + secs(1))
+    session.decline("name")
+    assert session.turns(T0 + secs(2)) == [{"question": "q", "answer": "a"}]
+    assert session.image(T0 + secs(2)) == IMG
+    assert session.quiz(T0 + secs(2))["index"] == 0
+    assert session.pending_wipe(T0 + secs(2)) is True
+
+
+def test_fr31_turns_quiz_wipe_do_not_clear_proposal_or_declined():
+    """Adding turns, starting a quiz or a wipe does not clear the proposal or declined set."""
+    session.propose("update", "goal_now", "a", T0)
+    session.decline("name")
+    session.add_turn("q", "a", T0 + secs(1))
+    session.start_quiz(CONCEPTS, T0 + secs(2))
+    session.start_wipe(T0 + secs(3))
+    session.end_quiz()
+    session.end_wipe()
+    assert session.proposal(T0 + secs(4)) is not None
+    assert session.declined("name", T0 + secs(4)) is True
+
+
+def test_fr31_session_expiry_does_not_drop_proposal_before_its_own_ttl():
+    """Turns expiring does not remove a proposal asked later, while its own 120 s runs."""
+    session.add_turn("q", "a", T0)
+    session.propose("update", "goal_now", "a", T0 + secs(100))
+    assert session.turns(T0 + secs(150)) == []
+    assert session.proposal(T0 + secs(150)) is not None
+
+
+def test_fr31_concurrent_proposal_calls_do_not_raise():
+    """propose, proposal, decline and declined are safe under many threads."""
+    errors: list[Exception] = []
+
+    def worker(i: int) -> None:
+        try:
+            for _ in range(20):
+                session.propose("update", f"slot{i}", "v", T0)
+                session.proposal(T0 + secs(1))
+                session.decline(f"slot{i}")
+                session.declined(f"slot{i}", T0 + secs(1))
+                session.end_proposal()
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
