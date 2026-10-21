@@ -359,3 +359,166 @@ def test_fr28_failed_load_keeps_previous_profile(monkeypatch, tmp_path):
         profile.load()
     assert profile.render() == before == "a: good"
     assert profile.values() == {"a": "good"}
+
+
+def test_fr28_write_shows_in_values_and_render(monkeypatch, tmp_path):
+    """write(slot, value) updates the held profile: values() and render() show it."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a"), _slot("b")])
+    _use_values(monkeypatch, tmp_path)
+    profile.load()
+    profile.write("b", "beta")
+    assert profile.values() == {"b": "beta"}
+    assert profile.render() == "b: beta"
+    assert profile.line_count() == 1
+
+
+def test_fr28_write_saves_json_to_values_file(monkeypatch, tmp_path):
+    """write(slot, value) saves the value to the values file as JSON of slot to text."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a"), _slot("b")])
+    path = _use_values(monkeypatch, tmp_path, {"a": "alpha"})
+    profile.load()
+    profile.write("b", "beta")
+    assert json.loads(path.read_text(encoding="utf-8")) == {"a": "alpha", "b": "beta"}
+
+
+def test_fr28_write_survives_reload(monkeypatch, tmp_path):
+    """A write that fits survives a reload."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a"), _slot("b")])
+    _use_values(monkeypatch, tmp_path)
+    profile.load()
+    profile.write("a", "alpha")
+    held = profile.values()
+    profile.load()
+    assert profile.values() == held == {"a": "alpha"}
+    assert profile.render() == "a: alpha"
+
+
+def test_fr28_write_overwrite_keeps_other_slots(monkeypatch, tmp_path):
+    """Overwriting a slot replaces its value and keeps the other slots."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a"), _slot("b")])
+    path = _use_values(monkeypatch, tmp_path, {"a": "old", "b": "keep"})
+    profile.load()
+    profile.write("a", "new")
+    assert profile.values() == {"a": "new", "b": "keep"}
+    assert json.loads(path.read_text(encoding="utf-8")) == {"a": "new", "b": "keep"}
+    profile.load()
+    assert profile.values() == {"a": "new", "b": "keep"}
+
+
+def test_fr28_write_empty_string_clears_slot(monkeypatch, tmp_path):
+    """A write of an empty string is allowed and clears the slot."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    _use_values(monkeypatch, tmp_path, {"a": "old"})
+    profile.load()
+    profile.write("a", "")
+    assert profile.render() == ""
+    assert profile.line_count() == 0
+
+
+def test_fr28_write_unknown_slot_refused_file_untouched(monkeypatch, tmp_path):
+    """An unknown slot is refused; the file and the held profile are unchanged."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    path = _use_values(monkeypatch, tmp_path, {"a": "x"})
+    profile.load()
+    before = path.read_bytes()
+    with pytest.raises(profile.ProfileError) as exc:
+        profile.write("ghost", "boo")
+    assert str(exc.value).strip()
+    assert path.read_bytes() == before
+    assert profile.values() == {"a": "x"}
+
+
+def test_fr28_write_unknown_slot_no_file_stays_missing(monkeypatch, tmp_path):
+    """An unknown slot write with no values file does not create the file."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    path = _use_values(monkeypatch, tmp_path)
+    profile.load()
+    with pytest.raises(profile.ProfileError):
+        profile.write("ghost", "boo")
+    assert not path.exists()
+    assert profile.values() == {}
+
+
+@pytest.mark.parametrize(
+    "bad", [5, None, ["x"], b"x"], ids=["int", "none", "list", "bytes"]
+)
+def test_fr28_write_non_string_refused(monkeypatch, tmp_path, bad):
+    """A value that is not a string is refused; nothing changes."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    path = _use_values(monkeypatch, tmp_path, {"a": "x"})
+    profile.load()
+    before = path.read_bytes()
+    with pytest.raises(profile.ProfileError) as exc:
+        profile.write("a", bad)
+    assert str(exc.value).strip()
+    assert path.read_bytes() == before
+    assert profile.values() == {"a": "x"}
+
+
+def test_fr28_write_over_cap_refused_existing_file_unchanged(monkeypatch, tmp_path):
+    """A write taking the profile over 40 lines is refused; file bytes and held profile unchanged."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a"), _slot("b")])
+    path = _use_values(monkeypatch, tmp_path, {"a": "short"})
+    profile.load()
+    before_bytes = path.read_bytes()
+    before_render = profile.render()
+    with pytest.raises(profile.ProfileError) as exc:
+        profile.write("b", " ".join(["word"] * 900))
+    assert "40" in str(exc.value)
+    assert path.read_bytes() == before_bytes
+    assert profile.values() == {"a": "short"}
+    assert profile.render() == before_render
+
+
+def test_fr28_write_over_cap_refused_no_file_stays_missing(monkeypatch, tmp_path):
+    """A refused over-cap write with no values file does not create one."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    path = _use_values(monkeypatch, tmp_path)
+    profile.load()
+    with pytest.raises(profile.ProfileError) as exc:
+        profile.write("a", " ".join(["word"] * 900))
+    assert "40" in str(exc.value)
+    assert not path.exists()
+    assert profile.values() == {}
+    assert profile.render() == ""
+
+
+def test_fr28_write_40_lines_accepted_41_refused(monkeypatch, tmp_path):
+    """A write rendering exactly 40 lines is accepted; one rendering 41 is refused."""
+    names = _many(41)
+    _use_schema(monkeypatch, tmp_path, [_slot(x) for x in names])
+    path = _use_values(monkeypatch, tmp_path)
+    profile.load()
+    for name in names[:40]:
+        profile.write(name, "v")
+    assert profile.line_count() == 40
+    before = path.read_bytes()
+    with pytest.raises(profile.ProfileError) as exc:
+        profile.write(names[40], "v")
+    assert "40" in str(exc.value)
+    assert profile.line_count() == 40
+    assert path.read_bytes() == before
+    profile.load()
+    assert profile.line_count() == 40
+
+
+def test_fr28_write_one_long_slot_wrapping_over_cap_refused(monkeypatch, tmp_path):
+    """One slot whose value wraps past 40 rendered lines is refused though it is a single slot."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    _use_values(monkeypatch, tmp_path)
+    profile.load()
+    with pytest.raises(profile.ProfileError) as exc:
+        profile.write("a", " ".join(["word"] * 900))
+    assert "40" in str(exc.value)
+    assert profile.values() == {}
+
+
+def test_fr28_write_creates_parent_folder(monkeypatch, tmp_path):
+    """write creates the values file's parent folder if missing, as indented JSON."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    path = tmp_path / "newdir" / "sub" / "profile.json"
+    monkeypatch.setattr("server.config.PROFILE_VALUES_PATH", path)
+    profile.load()
+    profile.write("a", "hi")
+    assert json.loads(path.read_text(encoding="utf-8")) == {"a": "hi"}
+    assert "\n" in path.read_text(encoding="utf-8")

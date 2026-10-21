@@ -109,3 +109,23 @@ def render() -> str:
 
 def line_count() -> int:
     return len(_render_lines(_slots, _values))
+
+
+def write(slot: str, value: str) -> None:
+    """Save one slot to the values file. Refused, with nothing changed, for an unknown
+    slot, a value that is not text, or a profile that would render over the cap (FR-28)."""
+    global _values
+    if slot not in {s["name"] for s in _slots}:
+        raise ProfileError(f"profile has no slot {slot}")
+    if not isinstance(value, str):
+        raise ProfileError(f"the value of {slot} must be text")
+    new_values = {**_values, slot: value}
+    _check_cap(_render_lines(_slots, new_values))
+    path = config.PROFILE_VALUES_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(
+        json.dumps(new_values, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    tmp.replace(path)
+    _values = new_values
