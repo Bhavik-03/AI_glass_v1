@@ -984,3 +984,179 @@ def test_fr29_concurrent_setup_calls_do_not_raise():
     for t in threads:
         t.join()
     assert errors == []
+
+
+def test_fr39_pending_max_config_value():
+    """config.WRITER_PENDING_MAX is 3."""
+    assert config.WRITER_PENDING_MAX == 3
+
+
+def test_fr39_take_expired_with_fresh_session_is_none():
+    """Nothing happens for a fresh session: take_expired returns None."""
+    assert session.take_expired(T0) is None
+
+
+def test_fr39_live_session_is_never_returned():
+    """A session not yet expired (119 s) is not returned by take_expired."""
+    session.add_turn("q", "a", T0)
+    assert session.take_expired(T0 + secs(119)) is None
+    assert session.turns(T0 + secs(119)) == [{"question": "q", "answer": "a"}]
+
+
+def test_fr39_take_expired_returns_turns_of_expired_session():
+    """take_expired expires a due session and returns its turns, oldest first."""
+    session.add_turn("q1", "a1", T0)
+    session.add_turn("q2", "a2", T0 + secs(10))
+    got = session.take_expired(T0 + secs(10 + 120))
+    assert got == [
+        {"question": "q1", "answer": "a1"},
+        {"question": "q2", "answer": "a2"},
+    ]
+
+
+def test_fr39_each_buffered_session_returned_once():
+    """A second take_expired for the same session returns None."""
+    session.add_turn("q", "a", T0)
+    assert session.take_expired(T0 + secs(130)) is not None
+    assert session.take_expired(T0 + secs(131)) is None
+
+
+def test_fr39_turns_read_buffers_expired_session():
+    """turns() clearing an expired session moves its turns into the buffer."""
+    session.add_turn("q", "a", T0)
+    assert session.turns(T0 + secs(130)) == []
+    assert session.take_expired(T0 + secs(131)) == [{"question": "q", "answer": "a"}]
+
+
+def test_fr39_image_read_buffers_expired_session():
+    """image() clearing an expired session moves its turns into the buffer."""
+    session.add_turn("q", "a", T0, image=IMG)
+    assert session.image(T0 + secs(130)) is None
+    assert session.take_expired(T0 + secs(131)) == [{"question": "q", "answer": "a"}]
+
+
+def test_fr39_declined_read_buffers_expired_session():
+    """declined() clearing an expired session moves its turns into the buffer."""
+    session.add_turn("q", "a", T0)
+    assert session.declined("goal_now", T0 + secs(130)) is False
+    assert session.take_expired(T0 + secs(131)) == [{"question": "q", "answer": "a"}]
+
+
+def test_fr39_stale_noted_read_buffers_expired_session():
+    """stale_noted() clearing an expired session moves its turns into the buffer."""
+    session.add_turn("q", "a", T0, stale_noted=True)
+    assert session.stale_noted(T0 + secs(130)) is False
+    assert session.take_expired(T0 + secs(131)) == [{"question": "q", "answer": "a"}]
+
+
+def test_fr39_add_turn_after_expiry_keeps_old_turns_in_buffer():
+    """add_turn at T0+130 s buffers the old turns; take_expired returns the OLD turns."""
+    session.add_turn("old", "old a", T0)
+    session.add_turn("new", "new a", T0 + secs(130))
+    assert session.take_expired(T0 + secs(131)) == [
+        {"question": "old", "answer": "old a"}
+    ]
+
+
+def test_fr39_new_turn_after_expiry_stays_live():
+    """After the old turns are taken, the new turn is still the live session."""
+    session.add_turn("old", "old a", T0)
+    session.add_turn("new", "new a", T0 + secs(130))
+    session.take_expired(T0 + secs(131))
+    assert session.turns(T0 + secs(132)) == [{"question": "new", "answer": "new a"}]
+    assert session.take_expired(T0 + secs(133)) is None
+
+
+def test_fr39_fourth_session_drops_oldest_with_warning(caplog):
+    """A fourth buffered session drops the oldest with a WARNING; 2, 3, 4 remain in order."""
+    caplog.set_level("WARNING")
+    for i in range(4):
+        session.add_turn(f"q{i}", f"a{i}", T0 + secs(200 * i))
+    now = T0 + secs(200 * 3 + 130)
+    session.turns(now)
+    assert any(r.levelname == "WARNING" for r in caplog.records)
+    got = [session.take_expired(now + secs(1)) for _ in range(3)]
+    assert [g[0]["question"] for g in got] == ["q1", "q2", "q3"]
+    assert session.take_expired(now + secs(2)) is None
+
+
+def test_fr39_pending_max_follows_config(monkeypatch):
+    """With WRITER_PENDING_MAX at 2, only the two newest buffered sessions remain."""
+    monkeypatch.setattr(config, "WRITER_PENDING_MAX", 2)
+    for i in range(3):
+        session.add_turn(f"q{i}", f"a{i}", T0 + secs(200 * i))
+    now = T0 + secs(200 * 2 + 130)
+    session.turns(now)
+    got = [session.take_expired(now + secs(1)) for _ in range(2)]
+    assert [g[0]["question"] for g in got] == ["q1", "q2"]
+    assert session.take_expired(now + secs(2)) is None
+
+
+def test_fr39_setup_only_session_is_never_buffered():
+    """A setup-only session (no add_turn) leaves take_expired returning None."""
+    session.start_setup(SLOTS, T0)
+    session.advance_setup(T0 + secs(1))
+    session.end_setup()
+    assert session.take_expired(T0 + secs(1000)) is None
+
+
+def test_fr39_reset_clears_buffer():
+    """reset() clears the buffer: a buffered session is not returned afterwards."""
+    session.add_turn("q", "a", T0)
+    session.turns(T0 + secs(130))
+    session.reset()
+    assert session.take_expired(T0 + secs(131)) is None
+
+
+def test_fr39_reset_clears_expired_unbuffered_session():
+    """reset() on an expired but not yet buffered session leaves nothing to take."""
+    session.add_turn("q", "a", T0)
+    session.reset()
+    assert session.take_expired(T0 + secs(130)) is None
+
+
+def test_fr39_reset_live_session_never_returned_later():
+    """A live session that is reset is never later returned by take_expired."""
+    session.add_turn("q", "a", T0)
+    session.reset()
+    assert session.take_expired(T0 + secs(500)) is None
+
+
+def test_fr39_buffering_does_not_end_running_quiz():
+    """A running quiz is still alive after the session expires and is buffered."""
+    session.add_turn("q", "a", T0)
+    session.start_quiz(CONCEPTS, T0)
+    later = T0 + secs(130)
+    assert session.take_expired(later) == [{"question": "q", "answer": "a"}]
+    assert session.quiz(later) is not None
+
+
+def test_fr39_concurrent_take_expired_returns_to_one_caller():
+    """Concurrent take_expired calls on one buffered session give its turns to one caller."""
+    session.add_turn("q", "a", T0)
+    results: list = []
+    barrier = threading.Barrier(20)
+
+    def worker() -> None:
+        barrier.wait()
+        results.append(session.take_expired(T0 + secs(130)))
+
+    threads = [threading.Thread(target=worker) for _ in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(results) == 20
+    assert [r for r in results if r is not None] == [[{"question": "q", "answer": "a"}]]
+
+
+def test_fr39_returned_turns_are_copies():
+    """Mutating the returned turns does not alter the buffer or later results."""
+    session.add_turn("q", "a", T0)
+    session.add_turn("q2", "a2", T0 + secs(1))
+    session.turns(T0 + secs(200))
+    first = session.take_expired(T0 + secs(201))
+    first[0]["question"] = "changed"
+    first.append({"question": "x", "answer": "y"})
+    session.add_turn("r", "b", T0 + secs(300))
+    assert session.take_expired(T0 + secs(301)) is None

@@ -1,11 +1,16 @@
+import logging
 import threading
 from datetime import datetime
 
 from server import config
 
+log = logging.getLogger(__name__)
+
 # /query runs in FastAPI's thread pool, so every access holds the lock (FR-21).
 _lock = threading.Lock()
 _turns: list[dict] = []
+# Expired sessions' turns waiting for the session writer; this is the unwritten set (FR-39).
+_pending: list[list[dict]] = []
 _image: tuple[bytes, str] | None = None
 _last_answer_at: datetime | None = None
 _quiz: dict | None = None
@@ -63,12 +68,13 @@ def image(now: datetime) -> tuple[bytes, str] | None:
 
 
 def reset() -> None:
-    """Clear the session, any running quiz, pending wipe and pending proposal
-    (FR-22, FR-35, FR-31)."""
+    """Clear the session, any running quiz, pending wipe, pending proposal and the
+    pending-write buffer, so a reset session is never written (FR-22, FR-35, FR-31, FR-39)."""
     global _quiz, _quiz_asked_at, _wipe_asked_at, _proposal, _proposal_asked_at
     global _setup, _setup_asked_at, _setup_stopped
     with _lock:
         _clear()
+        _pending.clear()
         _quiz = None
         _quiz_asked_at = None
         _wipe_asked_at = None
@@ -77,6 +83,14 @@ def reset() -> None:
         _setup = None
         _setup_asked_at = None
         _setup_stopped = False
+
+
+def take_expired(now: datetime) -> list[dict] | None:
+    """Remove and return the turns of the oldest expired session waiting for the writer,
+    or None; a live session is never returned (FR-39)."""
+    with _lock:
+        _expire(now)
+        return _pending.pop(0) if _pending else None
 
 
 def start_wipe(now: datetime) -> None:
@@ -277,6 +291,13 @@ def _expire(now: datetime) -> None:
         _last_answer_at is not None
         and (now - _last_answer_at).total_seconds() >= config.SESSION_TTL_S
     ):
+        # Hand the turns to the writer before clearing, so a /query arriving before the
+        # next poll cannot destroy them (FR-39).
+        if _turns:
+            _pending.append([dict(t) for t in _turns])
+            while len(_pending) > config.WRITER_PENDING_MAX:
+                _pending.pop(0)
+                log.warning("writer buffer full: dropped the oldest expired session")
         _clear()
 
 
