@@ -44,7 +44,7 @@ Rank distribution of the 12 hits (re-run with rank reporting, same probes): rank
 
 Notes: T3 is a stop-and-report gate. The tools in T4 to T10 sit on the `search_memories` interface and do not depend on FTS5 being the backend. The ranking harness replaces the old planned-task paragraph for it. A forget query that includes a word the stored item lacks finds nothing by design: failing to delete beats deleting wrongly, so the instruction (T9) has Gemini search first and forget with the item's own words.
 
-## M15 (v3): Profile | in progress
+## M15 (v3): Profile | done
 Goal: schema and values JSON, load errors, rendered 40-line cap at load and write, profile in every system instruction · GitHub milestone: #15
 
 | Task | FR | Files | Done when | Test | Issue | Done |
