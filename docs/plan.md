@@ -60,7 +60,7 @@ Manual checks: put a real `data/profile.json` in place and ask "what do you know
 
 Notes: decisions settled at planning: a malformed values file fails at startup, like the schema; the quiz grader does not get the profile; `PROFILE_LINE_CHARS` (100) is a new config value, now listed in design.md's config table. Setup (FR-29) and the `goal_now` `set_on` date (FR-30) are M16; the flat slot-to-text values format here may need a small extension then. CLAUDE.md needs no change: its structure section already lists `config/`, `profile.py` and `profile.json`, and `data/` is already gitignored.
 
-## M16 (v3): Setup and goals | in progress
+## M16 (v3): Setup and goals | done
 Goal: first-run setup and resume, "stop setup", the stale `goal_now` line with its confirmation, slot-update proposals behind a yes · GitHub milestone: #16
 
 | Task | FR | Files | Done when | Test | Issue | Done |
