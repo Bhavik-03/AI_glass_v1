@@ -211,6 +211,8 @@ the last four.
 - The profile block, rendered by `profile.py`, at the top. Use it to pitch the answer at my
   level and weigh advice against my goals.
   The quiz grader's instruction does not carry it: it judges one concept answer.
+  The profile is always true: questions about who the user is are answered from it, and the
+  "say you do not know" rule below covers past conversations and stored facts only.
 - Current date, weekday and time in the configured time zone (Asia/Kolkata); home city.
 - Answer in at most 3 sentences and at most 60 words. A list says the total count and the
   first 5 items.
