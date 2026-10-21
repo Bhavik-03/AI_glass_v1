@@ -346,12 +346,17 @@ SETUP_DONE = "That is everything. Your profile is set up."
 SETUP_STOPPED = "Setup stopped. I kept what you answered."
 
 
-def setup_prompt(question: str, first: bool) -> str:
-    """The spoken setup question; the first one opens with the intro (FR-29)."""
-    if not first:
-        return question
+def setup_prompt(question: str) -> str:
+    """The opening setup question, after the intro (FR-29)."""
     intro = SETUP_INTRO.format(stop=config.SETUP_STOP_PHRASE)
     return f"{intro} {question}"
+
+
+def setup_noted(value: str, question: str | None) -> str:
+    """The stored answer read back, then the next question or the closing line, so a
+    speech-recognition error is audible at once (FR-29)."""
+    follow = SETUP_DONE if question is None else f"Next: {question}"
+    return f"I've noted {value}. {follow}"
 
 
 def setup_refusal_text(reason: str, question: str) -> str:

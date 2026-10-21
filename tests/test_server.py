@@ -1,5 +1,6 @@
 import inspect
 import io
+import itertools
 import json
 import wave
 from datetime import datetime, timedelta
@@ -2682,13 +2683,16 @@ def _answers_in_file() -> dict:
 def _first(slot: str) -> str:
     from server import tools
 
-    return tools.setup_prompt(_schema_questions()[slot], first=True)
+    return tools.setup_prompt(_schema_questions()[slot])
 
 
-def _next(slot: str) -> str:
+def _noted(value: str, next_slot: str | None = None) -> str:
+    """What is spoken after an answer: the stored value read back, then the next question
+    (or the closing line after the last one)."""
     from server import tools
 
-    return tools.setup_prompt(_schema_questions()[slot], first=False)
+    question = _schema_questions()[next_slot] if next_slot else None
+    return tools.setup_noted(value, question)
 
 
 def _forbid_llm(monkeypatch):
@@ -2738,13 +2742,13 @@ def test_fr29_full_setup_writes_six_answers_each_dated_today(
     _forbid_llm(monkeypatch)
     order = list(SETUP_ANSWERS)
     assert order == list(config.SETUP_SLOTS)
-    from server import tools
-
     assert _say(fake_stages, silent_wav, "start").status_code == 200
     for slot in order:
         padded = f"  {SETUP_ANSWERS[slot]}  "
         assert _say(fake_stages, silent_wav, padded).status_code == 200
-    expected = [_first("identity")] + [_next(s) for s in order[1:]] + [tools.SETUP_DONE]
+    expected = [_first("identity")]
+    expected += [_noted(SETUP_ANSWERS[a], b) for a, b in itertools.pairwise(order)]
+    expected += [_noted(SETUP_ANSWERS["constraints"])]
     assert fake_stages["tts"] == expected
     assert _answers_in_file() == SETUP_ANSWERS
     stamps = _file_values()["_set_on"]
@@ -2752,6 +2756,39 @@ def test_fr29_full_setup_writes_six_answers_each_dated_today(
         assert stamps[slot] == FIXED_NOW.date().isoformat()
         assert profile.set_on(slot) == FIXED_NOW.date()
     assert set(stamps) == set(order)
+
+
+def test_fr29_answer_is_read_back_with_the_next_question_in_one_turn(
+    fake_stages, silent_wav, monkeypatch, tmp_path, log_path, fresh_session
+):
+    """FR-29: a setup answer is spoken back, as the stored value, in the same turn as the
+    next question. A mis-transcription is therefore audible at once, even a failed stop
+    phrase that was stored as the answer."""
+    _setup_env(monkeypatch, tmp_path)
+    _say(fake_stages, silent_wav, "start")
+    _say(fake_stages, silent_wav, SETUP_ANSWERS["identity"])
+    _say(fake_stages, silent_wav, "  Stop, send up.  ")
+    spoken = fake_stages["tts"][-1]
+    assert "Stop, send up." in spoken
+    assert spoken.endswith(_schema_questions()["goal_long"])
+    assert _answers_in_file()["goal_now"] == "Stop, send up."
+    assert len(fake_stages["tts"]) == 3
+    assert _log_lines(log_path)[-1]["answer"] == spoken
+
+
+def test_fr29_read_back_after_the_last_answer_ends_with_the_closing_line(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
+):
+    """FR-29: the last answer is read back too, followed by the closing line."""
+    from server import tools
+
+    done = {s: SETUP_ANSWERS[s] for s in list(SETUP_ANSWERS)[:-1]}
+    _setup_env(monkeypatch, tmp_path, values=done)
+    _say(fake_stages, silent_wav, "start")
+    _say(fake_stages, silent_wav, SETUP_ANSWERS["constraints"])
+    spoken = fake_stages["tts"][-1]
+    assert SETUP_ANSWERS["constraints"] in spoken
+    assert spoken.endswith(tools.SETUP_DONE)
 
 
 def test_fr29_query_after_setup_is_answered_normally(
@@ -2785,8 +2822,6 @@ def test_fr29_asks_only_unanswered_slots_in_order(
 ):
     """FR-29: with identity, goal_now, goal_long answered, setup asks exploring, style,
     constraints in that order, then ends."""
-    from server import tools
-
     done = {s: SETUP_ANSWERS[s] for s in ("identity", "goal_now", "goal_long")}
     _setup_env(monkeypatch, tmp_path, values=done)
     _say(fake_stages, silent_wav, "start")
@@ -2794,9 +2829,9 @@ def test_fr29_asks_only_unanswered_slots_in_order(
         _say(fake_stages, silent_wav, SETUP_ANSWERS[slot])
     assert fake_stages["tts"] == [
         _first("exploring"),
-        _next("style"),
-        _next("constraints"),
-        tools.SETUP_DONE,
+        _noted(SETUP_ANSWERS["exploring"], "style"),
+        _noted(SETUP_ANSWERS["style"], "constraints"),
+        _noted(SETUP_ANSWERS["constraints"]),
     ]
     assert _answers_in_file() == SETUP_ANSWERS
     assert fake_stages["llm"] == []
@@ -2827,8 +2862,6 @@ def test_fr29_slot_missing_from_schema_is_skipped(
     fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
 ):
     """FR-29: a setup slot absent from the schema is not asked."""
-    from server import tools
-
     slots = [s for s in json.loads(REAL_SCHEMA_PATH.read_text("utf-8"))]
     slots = [s for s in slots if s["name"] != "goal_now"]
     _setup_env(monkeypatch, tmp_path, schema=json.dumps(slots))
@@ -2836,8 +2869,8 @@ def test_fr29_slot_missing_from_schema_is_skipped(
     for slot in ("identity", "goal_long", "exploring", "style", "constraints"):
         _say(fake_stages, silent_wav, SETUP_ANSWERS[slot])
     asked = fake_stages["tts"]
-    assert asked[1] == _next("goal_long")
-    assert asked[-1] == tools.SETUP_DONE
+    assert asked[1] == _noted(SETUP_ANSWERS["identity"], "goal_long")
+    assert asked[-1] == _noted(SETUP_ANSWERS["constraints"])
     assert "goal_now" not in _answers_in_file()
 
 
@@ -2912,7 +2945,7 @@ def test_fr29_wipe_phrase_in_setup_is_just_the_answer(
     _say(fake_stages, silent_wav, "start")
     _say(fake_stages, silent_wav, "wipe my memories")
     assert _answers_in_file() == {"identity": "wipe my memories"}
-    assert fake_stages["tts"][-1] == _next("goal_now")
+    assert fake_stages["tts"][-1] == _noted("wipe my memories", "goal_now")
     assert session.pending_wipe(FIXED_NOW) is False
 
 
@@ -2947,7 +2980,7 @@ def test_fr29_refused_write_speaks_refusal_and_keeps_the_question(
     refusing["on"] = False
     _say(fake_stages, silent_wav, SETUP_ANSWERS["identity"])
     assert _answers_in_file() == {"identity": SETUP_ANSWERS["identity"]}
-    assert fake_stages["tts"][-1] == _next("goal_now")
+    assert fake_stages["tts"][-1] == _noted(SETUP_ANSWERS["identity"], "goal_now")
 
 
 def test_fr29_line_cap_refusal_keeps_file_and_question(
@@ -2984,7 +3017,7 @@ def test_fr29_tts_failure_returns_500_and_does_not_advance(
     monkeypatch.setattr("server.tts.synthesize", working)
     _say(fake_stages, silent_wav, "Asha again")
     assert _answers_in_file()["identity"] == "Asha again"
-    assert fake_stages["tts"][-1] == _next("goal_now")
+    assert fake_stages["tts"][-1] == _noted("Asha again", "goal_now")
 
 
 def test_fr29_waiting_over_the_answer_limit_restarts_from_unanswered(
@@ -3020,7 +3053,7 @@ def test_fr29_every_setup_turn_writes_one_complete_log_line(
     assert [line["question"] for line in lines[1:]] == utterances[1:]
     assert [line["answer"] for line in lines] == [
         _first("identity"),
-        _next("goal_now"),
+        _noted(SETUP_ANSWERS["identity"], "goal_now"),
         tools.SETUP_STOPPED,
     ]
     for line in lines:

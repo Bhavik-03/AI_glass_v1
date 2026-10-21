@@ -200,7 +200,7 @@ def _setup_question(slot: str) -> str:
 def _setup_start(record: dict, slots: list[str], asked_at: datetime) -> Response:
     """Answer the first query of a setup with the first question, not a normal answer
     (FR-29)."""
-    record["answer"] = tools.setup_prompt(_setup_question(slots[0]), first=True)
+    record["answer"] = tools.setup_prompt(_setup_question(slots[0]))
     wav = run_stage("tts", record["timings_ms"], tts.synthesize, record["answer"])
     # Running only after the question was spoken, so a failure leaves no setup behind.
     session.start_setup(slots, asked_at)
@@ -225,12 +225,10 @@ def _setup_answer(record: dict, setup: dict, asked_at: datetime) -> Response:
         )
         wav = run_stage("tts", timings, tts.synthesize, record["answer"])
         return Response(content=wav, media_type="audio/wav")
-    if index + 1 < len(slots):
-        record["answer"] = tools.setup_prompt(
-            _setup_question(slots[index + 1]), first=False
-        )
-    else:
-        record["answer"] = tools.SETUP_DONE
+    next_question = (
+        _setup_question(slots[index + 1]) if index + 1 < len(slots) else None
+    )
+    record["answer"] = tools.setup_noted(profile.values()[slots[index]], next_question)
     wav = run_stage("tts", timings, tts.synthesize, record["answer"])
     # Moving on only after the answer was spoken, so a failure repeats the question.
     session.advance_setup(asked_at)
