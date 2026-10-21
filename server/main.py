@@ -13,12 +13,13 @@ from fastapi import FastAPI, File, Response, UploadFile
 from fastapi.responses import JSONResponse
 from PIL import Image
 
-from server import config, llm, logger, session, store, stt, tools, tts
+from server import config, llm, logger, profile, session, store, stt, tools, tts
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     store.init()
+    profile.load()
     stt.load()
     tts.load()
     yield

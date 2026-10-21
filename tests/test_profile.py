@@ -20,6 +20,13 @@ DEFAULT_NAMES = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def _restore_profile_state(monkeypatch):
+    """The module holds the loaded profile; no test here leaks it into another file."""
+    monkeypatch.setattr(profile, "_slots", [])
+    monkeypatch.setattr(profile, "_values", {})
+
+
 def _slot(name: str) -> dict:
     return {"name": name, "description": f"{name} desc", "question": f"{name}?"}
 
