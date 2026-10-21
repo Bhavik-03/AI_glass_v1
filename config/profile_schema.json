@@ -1,0 +1,52 @@
+[
+  {
+    "name": "identity",
+    "description": "Who the user is: name, studies, background.",
+    "question": "Who are you? Tell me your name, what you study and a little about yourself."
+  },
+  {
+    "name": "goal_now",
+    "description": "The main goal for about the next month.",
+    "question": "What is your main goal for this month?"
+  },
+  {
+    "name": "goal_mid",
+    "description": "The goal for about the next six months.",
+    "question": "What do you want to have achieved in about six months?"
+  },
+  {
+    "name": "goal_long",
+    "description": "The multi-year goal.",
+    "question": "What is your long-term goal, over the next few years?"
+  },
+  {
+    "name": "interests",
+    "description": "Topics the user enjoys.",
+    "question": "Which topics are you most interested in?"
+  },
+  {
+    "name": "exploring",
+    "description": "Subjects the user is exploring or learning right now.",
+    "question": "What are you exploring or learning right now?"
+  },
+  {
+    "name": "understanding",
+    "description": "How well the user understands the main subjects, and the weak spots.",
+    "question": "How well do you understand your main subjects, and where are you weak?"
+  },
+  {
+    "name": "skillset",
+    "description": "Skills and tools the user already has.",
+    "question": "Which skills and tools do you already use?"
+  },
+  {
+    "name": "style",
+    "description": "How the user wants answers given.",
+    "question": "How do you want me to answer: short or detailed, simple or technical?"
+  },
+  {
+    "name": "constraints",
+    "description": "Limits to respect: time, health, budget, equipment.",
+    "question": "Is there any limit I should respect, like time, budget or equipment?"
+  }
+]
