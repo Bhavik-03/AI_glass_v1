@@ -16,6 +16,8 @@ FACT = "fact"
 PROJECT = "project"
 PREFERENCE = "preference"
 SESSION = "session"
+REMINDER = "reminder"
+NOTICE = "notice"
 
 DATE_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}")
 
@@ -37,7 +39,8 @@ CREATE TABLE IF NOT EXISTS reminders (
     text TEXT NOT NULL,
     due_at TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT '{PENDING}'
+    status TEXT NOT NULL DEFAULT '{PENDING}',
+    kind TEXT NOT NULL DEFAULT '{REMINDER}'
 );
 CREATE TABLE IF NOT EXISTS concepts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,6 +82,13 @@ def init() -> None:
     config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _connect() as con:
         con.executescript(SCHEMA)
+        # CREATE TABLE IF NOT EXISTS leaves a database made before v3 without `kind`.
+        if "kind" not in {
+            r["name"] for r in con.execute("PRAGMA table_info(reminders)")
+        }:
+            con.execute(
+                f"ALTER TABLE reminders ADD COLUMN kind TEXT NOT NULL DEFAULT '{REMINDER}'"
+            )
 
 
 def _check_length(text: str) -> None:
@@ -295,16 +305,30 @@ def add_reminder(text: str, due_at: str, created_at: str) -> dict:
     return {"id": cur.lastrowid, "text": text, "due_at": due_at}
 
 
+def add_notice(text: str, now: str) -> dict:
+    """Store a spoken notice, due now, that the reminder poll delivers (FR-39)."""
+    with _connect() as con:
+        cur = con.execute(
+            "INSERT INTO reminders (text, due_at, created_at, status, kind)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (text, now, now, PENDING, NOTICE),
+        )
+    return {"id": cur.lastrowid, "text": text, "due_at": now}
+
+
 def list_pending() -> list[dict]:
+    """Pending reminders; a notice is not one."""
     with _connect() as con:
         rows = con.execute(
-            "SELECT id, text, due_at FROM reminders WHERE status = ? ORDER BY due_at, id",
-            (PENDING,),
+            "SELECT id, text, due_at FROM reminders"
+            " WHERE status = ? AND kind = ? ORDER BY due_at, id",
+            (PENDING, REMINDER),
         ).fetchall()
     return [dict(row) for row in rows]
 
 
 def list_due(now: str) -> list[dict]:
+    """Due reminders and notices alike: the poll delivers both."""
     with _connect() as con:
         rows = con.execute(
             "SELECT id, text, due_at FROM reminders"
@@ -322,23 +346,33 @@ def _fetch(con: sqlite3.Connection, reminder_id: int) -> dict | None:
 
 
 def get(reminder_id: int) -> dict | None:
+    """The reminder or notice, with its kind."""
     with _connect() as con:
-        return _fetch(con, reminder_id)
+        item = _fetch(con, reminder_id)
+        if item:
+            item["kind"] = con.execute(
+                "SELECT kind FROM reminders WHERE id = ?", (reminder_id,)
+            ).fetchone()["kind"]
+        return item
 
 
-def _move_pending(con: sqlite3.Connection, reminder_id: int, status: str) -> int:
-    """One conditional UPDATE, so a concurrent change can't slip in between check and write."""
+def _move_pending(
+    con: sqlite3.Connection, reminder_id: int, status: str, kind: str | None = None
+) -> int:
+    """One conditional UPDATE, so a concurrent change can't slip in between check and write.
+    With `kind`, only a row of that kind moves."""
     cur = con.execute(
-        "UPDATE reminders SET status = ? WHERE id = ? AND status = ?",
-        (status, reminder_id, PENDING),
+        "UPDATE reminders SET status = ? WHERE id = ? AND status = ?"
+        " AND kind = COALESCE(?, kind)",
+        (status, reminder_id, PENDING, kind),
     )
     return cur.rowcount
 
 
 def cancel(reminder_id: int) -> dict | None:
-    """Cancel a pending reminder; None if the id is unknown or not pending."""
+    """Cancel a pending reminder; None if the id is unknown, not pending or a notice."""
     with _connect() as con:
-        if _move_pending(con, reminder_id, CANCELLED):
+        if _move_pending(con, reminder_id, CANCELLED, REMINDER):
             return _fetch(con, reminder_id)
     return None
 

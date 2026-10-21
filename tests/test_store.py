@@ -279,10 +279,10 @@ def test_fr12_list_due_does_not_change_status(db):
 
 
 def test_fr12_get_returns_reminder(db):
-    """get returns {id, text, due_at} for an existing reminder."""
+    """get returns {id, text, due_at} and its kind for an existing reminder."""
     added = store.add_reminder("call mom", DUE_A, CREATED)
 
-    assert store.get(added["id"]) == added
+    assert store.get(added["id"]) == {**added, "kind": "reminder"}
 
 
 def test_fr12_get_unknown_id_returns_none(db):
@@ -1691,3 +1691,204 @@ def test_fr35_second_wipe_returns_zero(db):
     assert store.wipe_memories() == 3
     assert store.wipe_memories() == 0
     assert memory_rows(db) == []
+
+
+def reminder_columns(path) -> list[str]:
+    con = REAL_CONNECT(path)
+    try:
+        return [r[1] for r in con.execute("PRAGMA table_info(reminders)")]
+    finally:
+        con.close()
+
+
+def kind_of(path, row_id: int) -> str:
+    con = REAL_CONNECT(path)
+    try:
+        row = con.execute("SELECT kind FROM reminders WHERE id = ?", (row_id,))
+        return row.fetchone()[0]
+    finally:
+        con.close()
+
+
+def old_db(monkeypatch, tmp_path):
+    """A database made before v3: reminders without a kind column, two rows."""
+    path = tmp_path / "old.db"
+    con = REAL_CONNECT(path)
+    try:
+        with con:
+            con.execute(
+                "CREATE TABLE reminders (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                " text TEXT NOT NULL, due_at TEXT NOT NULL,"
+                " created_at TEXT NOT NULL, status TEXT NOT NULL)"
+            )
+            con.execute(
+                "INSERT INTO reminders (text, due_at, created_at, status)"
+                " VALUES ('old pending', ?, ?, 'pending')",
+                (DUE_A, CREATED),
+            )
+            con.execute(
+                "INSERT INTO reminders (text, due_at, created_at, status)"
+                " VALUES ('old delivered', ?, ?, 'delivered')",
+                (DUE_B, CREATED),
+            )
+    finally:
+        con.close()
+    monkeypatch.setattr("server.config.DB_PATH", path)
+    return path
+
+
+def test_fr39_fresh_database_has_kind_column_default_reminder(db):
+    """A fresh database's reminders table has a kind column, and add_reminder rows get kind 'reminder'."""
+    assert "kind" in reminder_columns(db)
+
+    added = store.add_reminder("call mom", DUE_A, CREATED)
+
+    assert kind_of(db, added["id"]) == "reminder"
+
+
+def test_fr39_init_adds_kind_to_old_database_and_keeps_rows_as_reminders(
+    monkeypatch, tmp_path
+):
+    """init() on a pre-v3 database adds the kind column and keeps every row, each as a reminder."""
+    path = old_db(monkeypatch, tmp_path)
+    assert "kind" not in reminder_columns(path)
+
+    store.init()
+
+    assert "kind" in reminder_columns(path)
+    assert reminder_rows(path) == [
+        (1, "old pending", DUE_A, "pending"),
+        (2, "old delivered", DUE_B, "delivered"),
+    ]
+    assert kind_of(path, 1) == "reminder"
+    assert kind_of(path, 2) == "reminder"
+
+
+def test_fr39_init_twice_on_old_database_does_not_fail(monkeypatch, tmp_path):
+    """A second init() after the migration does not fail and changes no row."""
+    path = old_db(monkeypatch, tmp_path)
+    store.init()
+    before = reminder_rows(path)
+
+    store.init()
+
+    assert reminder_rows(path) == before
+    assert reminder_columns(path).count("kind") == 1
+
+
+def test_fr39_old_reminder_still_works_after_migration(monkeypatch, tmp_path):
+    """A reminder created before the migration is listed, due, ackable and cancellable afterwards."""
+    path = old_db(monkeypatch, tmp_path)
+    store.init()
+    old = {"id": 1, "text": "old pending", "due_at": DUE_A}
+
+    assert store.list_pending() == [old]
+    assert store.list_due(NOW) == [old]
+    assert store.get(1)["kind"] == "reminder"
+    assert store.ack(1) == old
+    assert status_of(path, 1) == store.DELIVERED
+    assert store.list_due(NOW) == []
+
+    other = store.add_reminder("new one", DUE_A, CREATED)
+    assert store.cancel(other["id"]) == other
+
+
+def test_fr39_old_pending_reminder_is_cancellable_after_migration(
+    monkeypatch, tmp_path
+):
+    """cancel of a pre-v3 pending reminder returns it and sets it cancelled."""
+    path = old_db(monkeypatch, tmp_path)
+    store.init()
+
+    assert store.cancel(1) == {"id": 1, "text": "old pending", "due_at": DUE_A}
+    assert status_of(path, 1) == store.CANCELLED
+
+
+def test_fr39_add_notice_stores_pending_notice_due_now_and_returns_dict(db):
+    """add_notice stores one pending row of kind notice due at now and returns a dict."""
+    notice = store.add_notice("I saved 2 points from our session", NOW)
+
+    assert isinstance(notice, dict)
+    assert notice["text"] == "I saved 2 points from our session"
+    assert notice["due_at"] == NOW
+    rows = reminder_rows(db)
+    assert rows == [
+        (notice["id"], "I saved 2 points from our session", NOW, store.PENDING)
+    ]
+    assert kind_of(db, notice["id"]) == "notice"
+
+
+def test_fr39_list_pending_never_sees_a_notice(db):
+    """list_pending (behind list_reminders) leaves out notices."""
+    reminder = store.add_reminder("call mom", DUE_A, CREATED)
+    store.add_notice("saved 1 point", NOW)
+
+    assert store.list_pending() == [reminder]
+
+
+def test_fr39_cancel_of_notice_returns_none_and_leaves_it_pending(db):
+    """cancel of a notice id returns None and the notice stays pending."""
+    notice = store.add_notice("saved 1 point", NOW)
+
+    assert store.cancel(notice["id"]) is None
+    assert status_of(db, notice["id"]) == store.PENDING
+    assert [r["id"] for r in store.list_due(NOW)] == [notice["id"]]
+
+
+def test_fr39_list_due_returns_reminders_and_notices_with_three_keys(db):
+    """list_due returns due reminders and notices, each with exactly id, text, due_at."""
+    reminder = store.add_reminder("call mom", DUE_A, CREATED)
+    notice = store.add_notice("saved 1 point", NOW)
+
+    due = store.list_due(NOW)
+
+    assert all(set(r) == {"id", "text", "due_at"} for r in due)
+    assert {r["id"] for r in due} == {reminder["id"], notice["id"]}
+    assert {r["text"] for r in due} == {"call mom", "saved 1 point"}
+
+
+def test_fr39_list_due_orders_notices_and_reminders_by_due_at_then_id(db):
+    """list_due orders reminders and notices together, oldest due_at first, ties by id."""
+    first_tie = store.add_notice("tie notice", DUE_B)
+    early = store.add_reminder("early reminder", DUE_A, CREATED)
+    second_tie = store.add_reminder("tie reminder", DUE_B, CREATED)
+    third_tie = store.add_notice("another tie notice", DUE_B)
+
+    due = store.list_due("2026-10-09T18:00:00+05:30")
+
+    assert [r["id"] for r in due] == [
+        early["id"],
+        first_tie["id"],
+        second_tie["id"],
+        third_tie["id"],
+    ]
+
+
+def test_fr39_list_due_excludes_future_notice(db):
+    """list_due does not return a notice whose due_at is after now."""
+    store.add_notice("future notice", DUE_C)
+
+    assert store.list_due(NOW) == []
+
+
+def test_fr39_get_tells_the_kind(db):
+    """get returns the kind: 'reminder' for a reminder, 'notice' for a notice."""
+    reminder = store.add_reminder("call mom", DUE_A, CREATED)
+    notice = store.add_notice("saved 1 point", NOW)
+
+    assert store.get(reminder["id"])["kind"] == "reminder"
+    assert store.get(notice["id"])["kind"] == "notice"
+    assert store.get(notice["id"])["text"] == "saved 1 point"
+
+
+def test_fr39_ack_of_notice_marks_delivered_and_leaves_list_due(db):
+    """ack of a notice makes it delivered and it leaves list_due."""
+    notice = store.add_notice("saved 1 point", NOW)
+    assert [r["id"] for r in store.list_due(NOW)] == [notice["id"]]
+
+    result = store.ack(notice["id"])
+
+    assert result is not None
+    assert result["id"] == notice["id"]
+    assert status_of(db, notice["id"]) == store.DELIVERED
+    assert store.list_due(NOW) == []
