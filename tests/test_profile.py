@@ -102,3 +102,117 @@ def test_fr26_malformed_schema_raises_clear_error(
     message = str(exc.value)
     assert message.strip()
     assert mention in message
+
+
+def _use_values(monkeypatch, tmp_path, content=None):
+    path = tmp_path / "profile.json"
+    if content is not None:
+        text = content if isinstance(content, str) else json.dumps(content)
+        path.write_text(text, encoding="utf-8")
+    monkeypatch.setattr("server.config.PROFILE_VALUES_PATH", path)
+    return path
+
+
+def test_fr27_values_load_from_json_file(monkeypatch, tmp_path):
+    """Values load from a JSON file of slot to text."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a"), _slot("b")])
+    _use_values(monkeypatch, tmp_path, {"a": "alpha text", "b": "beta text"})
+    profile.load()
+    assert profile.values() == {"a": "alpha text", "b": "beta text"}
+
+
+def test_fr27_hand_edit_shows_after_reload(monkeypatch, tmp_path):
+    """An edit by hand shows up after a reload."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    path = _use_values(monkeypatch, tmp_path, {"a": "old"})
+    profile.load()
+    assert profile.values() == {"a": "old"}
+    path.write_text(json.dumps({"a": "new"}), encoding="utf-8")
+    profile.load()
+    assert profile.values() == {"a": "new"}
+
+
+def test_fr27_missing_file_gives_empty_profile(monkeypatch, tmp_path):
+    """A missing file gives an empty profile and does not crash."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    _use_values(monkeypatch, tmp_path)
+    profile.load()
+    assert profile.values() == {}
+
+
+@pytest.mark.parametrize("content", ["", "  \n\t\n"], ids=["zero_byte", "whitespace"])
+def test_fr27_empty_file_gives_empty_profile(monkeypatch, tmp_path, content):
+    """An empty file gives an empty profile and does not crash."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    _use_values(monkeypatch, tmp_path, content)
+    profile.load()
+    assert profile.values() == {}
+
+
+def test_fr27_unknown_slot_ignored_and_warned(monkeypatch, tmp_path, caplog):
+    """A value for a slot not in the schema is ignored and logged as a warning."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    _use_values(monkeypatch, tmp_path, {"a": "kept", "ghost": "dropped"})
+    with caplog.at_level("WARNING"):
+        profile.load()
+    assert profile.values() == {"a": "kept"}
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("ghost" in r.getMessage() for r in warnings)
+
+
+def test_fr27_removed_schema_slot_drops_value_on_reload(monkeypatch, tmp_path, caplog):
+    """A slot removed from the schema loses its value after reload (unknown, logged)."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a"), _slot("b")])
+    _use_values(monkeypatch, tmp_path, {"a": "x", "b": "y"})
+    profile.load()
+    assert profile.values() == {"a": "x", "b": "y"}
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    with caplog.at_level("WARNING"):
+        profile.load()
+    assert profile.values() == {"a": "x"}
+    assert any("unknown slot b" in r.getMessage() for r in caplog.records)
+
+
+def test_fr27_empty_string_slot_allowed(monkeypatch, tmp_path):
+    """An empty slot is allowed."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a"), _slot("b")])
+    _use_values(monkeypatch, tmp_path, {"a": ""})
+    profile.load()
+    assert profile.values() == {"a": ""}
+
+
+def test_fr27_values_returns_a_copy(monkeypatch, tmp_path):
+    """values() returns a copy; changing it does not change the profile."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    _use_values(monkeypatch, tmp_path, {"a": "x"})
+    profile.load()
+    profile.values()["a"] = "changed"
+    assert profile.values() == {"a": "x"}
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "{not json",
+        '["a", "b"]',
+        '"just text"',
+        '{"a": 5}',
+        '{"a": ["x"]}',
+        '{"a": null}',
+    ],
+    ids=[
+        "invalid_json",
+        "top_level_list",
+        "top_level_string",
+        "number_value",
+        "list_value",
+        "null_value",
+    ],
+)
+def test_fr27_malformed_values_raise_error_naming_file(monkeypatch, tmp_path, content):
+    """Invalid JSON or a value that is not text fails with a message naming the file."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    _use_values(monkeypatch, tmp_path, content)
+    with pytest.raises(profile.ProfileError) as exc:
+        profile.load()
+    assert "profile.json" in str(exc.value)
