@@ -124,7 +124,11 @@ Serves FR-26 to FR-29, FR-31.
   starting next time.
 - Setup (FR-29) runs when the values file is missing or empty. The session holds the setup
   state, like the quiz state: each key press answers the current slot, and `SETUP_STOP_PHRASE`
-  ("stop setup") leaves setup keeping what was answered. Setup also runs when any of the six
+  ("stop setup") leaves setup keeping what was answered. The match accepts "setup" as one word
+  or two (`SETUP_STOP_PATTERN`, `stop` immediately before `set up`, never a bare "set up"):
+  Whisper split it in two of two logged runs ("Stop, send up.", "Stop. Set up."), so the only
+  way out failed about half the time. No setup answer plausibly contains "stop set up", so
+  this is one tight pattern, not loose matching. The quiz and wipe phrases are unchanged. Setup also runs when any of the six
   setup slots is unanswered, and then asks only the unanswered ones, in schema order, so a
   half-finished setup resumes after a restart instead of staying blank forever. "stop setup"
   suppresses it for the rest of that server run. Each answer is read back in the same turn as
@@ -375,7 +379,8 @@ New values; every other v1 and v2 value stays.
 | server/config.py | `PROFILE_LINE_CHARS = 100` | wrap width of a rendered line (FR-28) |
 | server/config.py | `SETUP_SLOTS` = identity, goal_now, goal_long, exploring, style, | FR-29 |
 | | constraints | |
-| server/config.py | `SETUP_STOP_PHRASE = "stop setup"` | |
+| server/config.py | `SETUP_STOP_PHRASE = "stop setup"` | spoken in the intro |
+| server/config.py | `SETUP_STOP_PATTERN = r"\bstop\s+set\s*up\b"` | the match, on the normalised transcript |
 | server/config.py | `GOAL_STALE_DAYS = 31` | FR-30 |
 | server/config.py | `MEMORY_MAX_WORDS = 12` | FR-32 |
 | server/config.py | `MEMORY_RECALL_MAX = 5`, `MEMORY_LIST_MAX = 5` | FR-36, FR-37 |
