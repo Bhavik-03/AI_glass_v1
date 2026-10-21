@@ -420,7 +420,10 @@ def spoken_when(due: datetime, now: datetime) -> str:
 
 
 def reminder_text(reminder: dict, now: datetime) -> str:
-    """Spoken form of a due reminder: 'Reminder, 5 pm: …' or 'Missed reminder, …' (FR-13)."""
+    """Spoken form of a due reminder: 'Reminder, 5 pm: …' or 'Missed reminder, …' (FR-13).
+    A notice is spoken as stored (FR-39)."""
+    if reminder.get("kind") == store.NOTICE:
+        return reminder["text"]
     due = datetime.fromisoformat(reminder["due_at"])
     missed = (now - due).total_seconds() >= config.MISSED_AFTER_S
     prefix = "Missed reminder" if missed else "Reminder"

@@ -3492,3 +3492,73 @@ def test_fr31_no_declared_tool_writes_the_profile_directly():
         text = f"{d['name']} {d.get('description', '')}".lower()
         if d["name"].startswith(("update_", "write_", "set_")):
             assert "profile" not in text, d["name"]
+
+
+# --- notices on the reminder endpoints (FR-39, FR-13, FR-14) ---
+
+NOTICE = "Noted two things."
+
+
+def _notice(due_at: str = EQUAL) -> int:
+    from server import store
+
+    return store.add_notice(NOTICE, due_at)["id"]
+
+
+@pytest.mark.parametrize("due_at", [PAST, EQUAL])
+def test_fr39_notice_audio_is_the_stored_text_with_no_prefix(fake_stages, due_at):
+    """FR-39: a notice's audio speaks its stored text exactly, with no Reminder or
+    Missed reminder prefix, even when due an hour ago; returned as audio/wav."""
+    nid = _notice(due_at)
+    response = client.get(f"/reminders/{nid}/audio")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.content == FAKE_TTS_WAV
+    assert fake_stages["tts"] == [NOTICE]
+
+
+def test_fr39_reminder_audio_keeps_its_prefix_beside_a_notice(fake_stages):
+    """FR-13: a reminder's audio is unchanged ("Reminder, ..." and "Missed
+    reminder, ...") while a notice exists."""
+    _notice()
+    fresh = _add("call the lab", EQUAL)
+    missed = _add("call the lab", PAST)
+    assert client.get(f"/reminders/{fresh}/audio").status_code == 200
+    assert client.get(f"/reminders/{missed}/audio").status_code == 200
+    assert fake_stages["tts"] == [
+        "Reminder, 2 pm: call the lab",
+        "Missed reminder, 1 pm: call the lab",
+    ]
+
+
+def test_fr39_due_returns_a_notice_with_exactly_id_text_due_at(fixed_now):
+    """FR-39: /reminders/due lists a pending notice due at or before now, with
+    JSON keys exactly id, text, due_at, alongside reminders."""
+    reminder = _add("call the lab", PAST)
+    old = _notice(PAST)
+    equal = _notice(EQUAL)
+    _notice(FUTURE)
+    response = client.get("/reminders/due")
+    assert response.status_code == 200
+    body = response.json()
+    assert {r["id"] for r in body} == {reminder, old, equal}
+    assert all(set(r) == {"id", "text", "due_at"} for r in body)
+    by_id = {r["id"]: r for r in body}
+    assert by_id[old] == {"id": old, "text": NOTICE, "due_at": PAST}
+    assert by_id[equal]["text"] == NOTICE
+    assert by_id[equal]["due_at"] == EQUAL
+
+
+def test_fr39_ack_notice_marks_it_delivered_and_is_idempotent(fixed_now):
+    """FR-39/FR-14: acking a notice gives 200 {"status": "ok"}, it never shows in
+    /reminders/due again, and a second ack is also 200."""
+    nid = _notice()
+    assert [r["id"] for r in client.get("/reminders/due").json()] == [nid]
+    first = client.post(f"/reminders/{nid}/ack")
+    assert first.status_code == 200
+    assert first.json() == {"status": "ok"}
+    assert client.get("/reminders/due").status_code == 204
+    second = client.post(f"/reminders/{nid}/ack")
+    assert second.status_code == 200
+    assert second.json() == {"status": "ok"}
+    assert client.get("/reminders/due").status_code == 204

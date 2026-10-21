@@ -1974,3 +1974,51 @@ def test_fr31_propose_creates_no_values_file(monkeypatch, tmp_path, fixed_now):
     )
     assert out["pending"] is True
     assert not path.exists()
+
+
+# --- notices are not reminders (FR-39, FR-13) ---
+
+NOTICE_TEXT = "Noted two things."
+
+
+def _notice(now_iso=FIXED_ISO, text=NOTICE_TEXT):
+    return store.add_notice(text, now_iso)["id"]
+
+
+@pytest.mark.parametrize("age_s", [-3600, 0, 59, 60, 3600, 86400 * 3])
+def test_fr39_reminder_text_of_a_notice_is_the_stored_text(age_s):
+    """FR-39: reminder_text of a notice returns exactly its text, for any age."""
+    due = datetime(2026, 10, 9, 14, 0, tzinfo=IST)
+    notice = {
+        "id": 1,
+        "text": NOTICE_TEXT,
+        "due_at": due.isoformat(),
+        "kind": "notice",
+    }
+    out = tools.reminder_text(notice, due + timedelta(seconds=age_s))
+    assert out == NOTICE_TEXT
+
+
+def test_fr39_list_reminders_never_lists_a_notice(db, fixed_now):
+    """FR-39: list_reminders omits notices, whether due in the past or the future."""
+    _notice("2026-10-09T13:00:00+05:30")
+    _notice("2026-10-09T18:00:00+05:30")
+    real = add_pending("call the lab", DUE_A)["id"]
+    out = tools.run("list_reminders", {}, fixed_now)
+    assert [r["id"] for r in out["reminders"]] == [real]
+
+
+def test_fr39_list_reminders_with_only_a_notice_is_empty(db, fixed_now):
+    """FR-39: with only a notice stored, list_reminders returns an empty list."""
+    _notice()
+    out = tools.run("list_reminders", {}, fixed_now)
+    assert out["reminders"] == []
+
+
+def test_fr39_cancel_reminder_refuses_a_notice_and_keeps_it_pending(db, fixed_now):
+    """FR-39: cancel_reminder with a notice's id returns an error dict and the
+    notice is still due."""
+    nid = _notice()
+    out = tools.run("cancel_reminder", {"id": nid}, fixed_now)
+    assert "error" in out
+    assert [r["id"] for r in store.list_due(FIXED_ISO)] == [nid]
