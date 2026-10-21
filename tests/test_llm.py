@@ -1675,3 +1675,165 @@ def test_fr37_store_is_never_sent_with_the_first_request(monkeypatch) -> None:
     call = fake.models.calls[0]
     assert sent_text(call) == "what is the weather?"
     assert "annotation note number" not in call["config"].system_instruction
+
+
+# --- profile in the system instruction (FR-28) ---
+
+PROFILE_SCHEMA = [
+    {"name": "identity", "description": "who", "question": "Who are you?"},
+    {"name": "goal", "description": "aim", "question": "What is your goal?"},
+    {"name": "style", "description": "tone", "question": "How to talk?"},
+]
+IDENTITY_LINE = "identity: second-year engineering student"
+GOAL_LINE = "goal: learn machine learning"
+
+
+def _load_profile(monkeypatch, tmp_path, values: dict) -> None:
+    """Isolated profile state: empty first, then loaded from tmp_path files."""
+    from server import profile
+
+    monkeypatch.setattr(profile, "_slots", [])
+    monkeypatch.setattr(profile, "_values", {})
+    schema_path = tmp_path / "profile_schema.json"
+    values_path = tmp_path / "profile.json"
+    schema_path.write_text(json.dumps(PROFILE_SCHEMA), encoding="utf-8")
+    values_path.write_text(json.dumps(values), encoding="utf-8")
+    monkeypatch.setattr(config, "PROFILE_SCHEMA_PATH", schema_path)
+    monkeypatch.setattr(config, "PROFILE_VALUES_PATH", values_path)
+    profile.load()
+
+
+def _filled(monkeypatch, tmp_path) -> None:
+    _load_profile(
+        monkeypatch,
+        tmp_path,
+        {
+            "identity": "second-year engineering student",
+            "goal": "learn machine learning",
+            "style": "",
+        },
+    )
+
+
+def test_fr28_instruction_carries_every_non_empty_slot(monkeypatch, tmp_path) -> None:
+    """With a filled profile the system instruction contains each non-empty slot line."""
+    _filled(monkeypatch, tmp_path)
+    text = llm.system_instruction(fixed_now())
+    assert IDENTITY_LINE in text
+    assert GOAL_LINE in text
+
+
+def test_fr28_empty_slot_is_not_in_instruction(monkeypatch, tmp_path) -> None:
+    """A slot whose value is an empty string does not appear in the instruction."""
+    _filled(monkeypatch, tmp_path)
+    assert "style:" not in llm.system_instruction(fixed_now())
+
+
+def test_fr28_empty_profile_adds_nothing(monkeypatch, tmp_path) -> None:
+    """An empty profile leaves the instruction exactly as with nothing ever loaded."""
+    from server import profile
+
+    monkeypatch.setattr(profile, "_slots", [])
+    monkeypatch.setattr(profile, "_values", {})
+    never_loaded = llm.system_instruction(fixed_now())
+    _load_profile(monkeypatch, tmp_path, {})
+    assert llm.system_instruction(fixed_now()) == never_loaded
+    _load_profile(monkeypatch, tmp_path, {"identity": "", "goal": "  ", "style": ""})
+    assert llm.system_instruction(fixed_now()) == never_loaded
+
+
+def test_fr28_filled_instruction_extends_the_empty_one(monkeypatch, tmp_path) -> None:
+    """The filled-profile instruction contains the empty-profile instruction text unchanged."""
+    from server import profile
+
+    monkeypatch.setattr(profile, "_slots", [])
+    monkeypatch.setattr(profile, "_values", {})
+    empty = llm.system_instruction(fixed_now())
+    _filled(monkeypatch, tmp_path)
+    filled = llm.system_instruction(fixed_now())
+    assert len(filled) > len(empty)
+    assert IDENTITY_LINE not in empty
+
+
+def test_fr28_ask_first_request_carries_profile(monkeypatch, tmp_path) -> None:
+    """The /query request path (llm.ask) sends every non-empty slot in the system instruction."""
+    _filled(monkeypatch, tmp_path)
+    fake = install_fake(monkeypatch, [text_response("answer")])
+    llm.ask("hi", fixed_now())
+    sent = fake.models.calls[0]["config"].system_instruction
+    assert IDENTITY_LINE in sent
+    assert GOAL_LINE in sent
+
+
+def test_fr28_ask_read_at_request_time(monkeypatch, tmp_path) -> None:
+    """The profile is read at request time: a reload between two asks changes the second request."""
+    _load_profile(monkeypatch, tmp_path, {"identity": "first value"})
+    fake = install_fake(monkeypatch, [text_response("a"), text_response("b")])
+    llm.ask("one", fixed_now())
+    _load_profile(monkeypatch, tmp_path, {"identity": "second value"})
+    llm.ask("two", fixed_now())
+    first = fake.models.calls[0]["config"].system_instruction
+    second = fake.models.calls[1]["config"].system_instruction
+    assert "identity: first value" in first
+    assert "identity: second value" in second
+    assert "first value" not in second
+
+
+def test_fr28_every_call_after_a_tool_round_carries_profile(
+    monkeypatch, tmp_path
+) -> None:
+    """The call that follows a tool round also carries the profile."""
+    _filled(monkeypatch, tmp_path)
+    fake = install_fake(monkeypatch, [call_response(), text_response("done")])
+    install_run(monkeypatch, SEARCH_RESULT)
+    llm.ask("q?", fixed_now())
+    assert len(fake.models.calls) == 2
+    for call in fake.models.calls:
+        sent = call["config"].system_instruction
+        assert IDENTITY_LINE in sent
+        assert GOAL_LINE in sent
+
+
+def test_fr28_final_call_without_tools_carries_profile(monkeypatch, tmp_path) -> None:
+    """The last call without tools (made at the deadline) carries the profile too."""
+    _filled(monkeypatch, tmp_path)
+    clock, _ = scripted_clock(monkeypatch)
+
+    def advance() -> None:
+        clock.t = 6.0
+
+    fake = install_fake(monkeypatch, [call_response(), text_response("final answer")])
+    install_run(monkeypatch, SEARCH_RESULT, on_call=advance)
+    answer, _, _ = llm.ask("q?", fixed_now())
+    assert answer == "final answer"
+    final = fake.models.calls[1]
+    assert mode_of(final) == types.FunctionCallingConfigMode.NONE.value
+    sent = final["config"].system_instruction
+    assert IDENTITY_LINE in sent
+    assert GOAL_LINE in sent
+
+
+def test_fr28_empty_profile_ask_instruction_unchanged(monkeypatch, tmp_path) -> None:
+    """With an empty profile every request's instruction equals system_instruction(now) built with nothing loaded."""
+    from server import profile
+
+    monkeypatch.setattr(profile, "_slots", [])
+    monkeypatch.setattr(profile, "_values", {})
+    baseline = llm.system_instruction(fixed_now())
+    _load_profile(monkeypatch, tmp_path, {})
+    fake = install_fake(monkeypatch, [text_response("answer")])
+    llm.ask("hi", fixed_now())
+    assert fake.models.calls[0]["config"].system_instruction == baseline
+
+
+def test_fr28_grade_instruction_unchanged_with_filled_profile(
+    monkeypatch, tmp_path
+) -> None:
+    """The quiz grading call carries no profile: its instruction is GRADE_INSTRUCTION."""
+    _filled(monkeypatch, tmp_path)
+    fake = install_fake(monkeypatch, [text_response(grade_json())])
+    llm.grade("LoRA", "Low-rank adapters.", "adapters")
+    sent = fake.models.calls[0]["config"].system_instruction
+    assert sent == llm.GRADE_INSTRUCTION
+    assert IDENTITY_LINE not in sent
+    assert GOAL_LINE not in sent

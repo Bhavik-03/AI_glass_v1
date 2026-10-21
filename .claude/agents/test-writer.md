@@ -1,7 +1,7 @@
 ---
 name: test-writer
 description: Writes pytest tests for one FR from docs/spec.md before the code exists. Use when asked to write tests for an FR.
-tools: Read, Grep, Glob, Write, Edit
+tools: Read, Grep, Glob, Edit
 model: sonnet
 maxTurns: 20
 skills:
@@ -17,10 +17,10 @@ Steps:
 
 Rules:
 - Never open `server/`, `client_pc/` or `firmware/`. Test the spec, not the code.
-- Write only inside `tests/`. Don't run the tests.
+- Write only inside `tests/`, and only with Edit - add tests to a file, never replace one. If the file you need does not exist, stop and say so rather than creating it. Don't run the tests.
 - Don't fake criteria that need hardware or human judgement.
 
 Report (max 15 lines):
-- Files written
+- Files edited
 - Each test name → the criterion it checks
 - Manual checks: criteria not testable in pytest

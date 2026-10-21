@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import server.main
-from server import config
+from server import config, profile
 from server.main import app
 
 # Values returned by the fakes in conftest.py
@@ -19,6 +19,15 @@ FAKE_TTS_WAV = b"RIFF-fake-wav-bytes"
 FIXED_NOW = datetime(2026, 10, 9, 14, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def isolated_profile(tmp_path, monkeypatch):
+    """The lifespan loads the profile: never the real data/profile.json, and no state
+    left behind for other tests."""
+    monkeypatch.setattr(config, "PROFILE_VALUES_PATH", tmp_path / "no_profile.json")
+    monkeypatch.setattr(profile, "_slots", [])
+    monkeypatch.setattr(profile, "_values", {})
 
 
 @pytest.fixture(autouse=True)
@@ -2142,3 +2151,218 @@ def test_fr17_memories_used_is_an_int_in_every_line(
     assert len(lines) == 3
     for line in lines:
         assert type(line["memories_used"]) is int
+
+
+# --- profile_lines in every /query log line (FR-17) ---
+
+SECRET = "REAL-SECRET-VALUE"
+THREE_SLOT_SCHEMA = [
+    {"name": "identity", "description": "who", "question": "Who are you?"},
+    {"name": "goal", "description": "aim", "question": "What is your goal?"},
+    {"name": "city", "description": "where", "question": "Where do you live?"},
+]
+
+
+def _fill_profile(monkeypatch, tmp_path, values):
+    _profile_files(monkeypatch, tmp_path, schema=THREE_SLOT_SCHEMA, values=values)
+    profile.load()
+
+
+def _three_filled(monkeypatch, tmp_path):
+    _fill_profile(
+        monkeypatch,
+        tmp_path,
+        {"identity": SECRET, "goal": f"{SECRET} goal", "city": f"{SECRET} city"},
+    )
+
+
+def test_fr17_profile_lines_counts_filled_slots(
+    fake_stages, silent_wav, monkeypatch, tmp_path, log_path
+):
+    """FR-17: a filled profile of 3 slots logs profile_lines 3."""
+    _three_filled(monkeypatch, tmp_path)
+    assert _post_query(silent_wav).status_code == 200
+    (line,) = _log_lines(log_path)
+    assert line["profile_lines"] == 3
+    assert type(line["profile_lines"]) is int
+
+
+def test_fr17_profile_lines_counts_wrapped_lines(
+    fake_stages, silent_wav, monkeypatch, tmp_path, log_path
+):
+    """FR-17: a long value that wraps at PROFILE_LINE_CHARS counts every rendered line."""
+    long_value = " ".join(["word"] * (config.PROFILE_LINE_CHARS))
+    _fill_profile(
+        monkeypatch, tmp_path, {"identity": "short", "goal": long_value, "city": "x"}
+    )
+    expected = len(profile.render().splitlines())
+    assert expected > 3
+    assert _post_query(silent_wav).status_code == 200
+    (line,) = _log_lines(log_path)
+    assert line["profile_lines"] == expected == profile.line_count()
+
+
+def test_fr17_profile_lines_zero_for_empty_profile(fake_stages, silent_wav, log_path):
+    """FR-17: an empty profile logs profile_lines 0."""
+    assert _post_query(silent_wav).status_code == 200
+    (line,) = _log_lines(log_path)
+    assert line["profile_lines"] == 0
+
+
+def test_fr17_profile_lines_logged_on_audio_400(
+    fake_stages, monkeypatch, tmp_path, log_path
+):
+    """FR-17: a 400 for missing audio still logs profile_lines (3 for a filled profile)."""
+    _three_filled(monkeypatch, tmp_path)
+    response = client.post("/query")
+    assert response.status_code == 400
+    assert set(response.json()) == {"error"}
+    (line,) = _log_lines(log_path)
+    assert line["profile_lines"] == 3
+
+
+def test_fr17_profile_lines_zero_on_audio_400_empty_profile(fake_stages, log_path):
+    """FR-17: a 400 for missing audio with an empty profile logs profile_lines 0."""
+    assert client.post("/query").status_code == 400
+    (line,) = _log_lines(log_path)
+    assert line["profile_lines"] == 0
+
+
+def test_fr17_profile_lines_logged_on_no_speech_400(
+    fake_stages, silent_wav, monkeypatch, tmp_path, log_path
+):
+    """FR-17: a "no speech detected" 400 still logs profile_lines (3 for a filled profile)."""
+    _three_filled(monkeypatch, tmp_path)
+    monkeypatch.setattr("server.stt.transcribe", lambda wav: "   ")
+    response = _post_query(silent_wav)
+    assert response.status_code == 400
+    assert response.json() == {"error": "no speech detected"}
+    (line,) = _log_lines(log_path)
+    assert line["profile_lines"] == 3
+
+
+@pytest.mark.parametrize("stage", ["stt", "llm", "tts"])
+def test_fr17_profile_lines_logged_on_stage_failure(
+    fake_stages, silent_wav, monkeypatch, tmp_path, log_path, stage
+):
+    """FR-17: a 500 from a failed stage still logs profile_lines (3 for a filled profile)."""
+    _three_filled(monkeypatch, tmp_path)
+    _make_stage_raise(monkeypatch, fake_stages, stage, RuntimeError("boom"))
+    response = _post_query(silent_wav)
+    assert response.status_code == 500
+    assert response.json() == {"error": f"{stage}: boom"}
+    (line,) = _log_lines(log_path)
+    assert line["profile_lines"] == 3
+
+
+def test_fr17_profile_lines_zero_on_stage_failure_empty_profile(
+    fake_stages, silent_wav, monkeypatch, log_path
+):
+    """FR-17: a 500 llm failure with an empty profile logs profile_lines 0."""
+    _make_stage_raise(monkeypatch, fake_stages, "llm", RuntimeError("boom"))
+    assert _post_query(silent_wav).status_code == 500
+    (line,) = _log_lines(log_path)
+    assert line["profile_lines"] == 0
+
+
+def test_fr17_profile_lines_never_logs_profile_text(
+    fake_stages, silent_wav, monkeypatch, tmp_path, log_path
+):
+    """FR-17: the log line holds only the line count, never any profile text."""
+    _three_filled(monkeypatch, tmp_path)
+    assert _post_query(silent_wav).status_code == 200
+    client.post("/query")
+    _make_stage_raise(monkeypatch, fake_stages, "llm", RuntimeError("boom"))
+    _post_query(silent_wav)
+    lines = _log_lines(log_path)
+    assert len(lines) == 3
+    for line in lines:
+        assert line["profile_lines"] == 3
+        assert SECRET not in json.dumps(line)
+    assert SECRET not in log_path.read_text(encoding="utf-8")
+
+
+# --- profile loaded at startup (FR-26, FR-27, FR-28) ---
+
+PROFILE_SCHEMA = [
+    {"name": "identity", "description": "who", "question": "Who are you?"},
+    {"name": "goal", "description": "aim", "question": "What is your goal?"},
+]
+
+
+def _profile_files(monkeypatch, tmp_path, schema=None, values=None):
+    """Point the profile paths at tmp_path and reset module state (restored by monkeypatch).
+    schema/values may be a str (written raw), a JSON-able object, or None (values: no file)."""
+    from server import profile
+
+    monkeypatch.setattr(profile, "_slots", [])
+    monkeypatch.setattr(profile, "_values", {})
+    schema_path = tmp_path / "profile_schema.json"
+    values_path = tmp_path / "profile.json"
+    raw = schema if isinstance(schema, str) else json.dumps(schema or PROFILE_SCHEMA)
+    schema_path.write_text(raw, encoding="utf-8")
+    if values is not None:
+        raw = values if isinstance(values, str) else json.dumps(values)
+        values_path.write_text(raw, encoding="utf-8")
+    monkeypatch.setattr("server.config.PROFILE_SCHEMA_PATH", schema_path)
+    monkeypatch.setattr("server.config.PROFILE_VALUES_PATH", values_path)
+
+
+def test_fr27_startup_loads_profile_schema_and_values(
+    fake_stages, db, monkeypatch, tmp_path
+):
+    """FR-26/27: entering the lifespan loads the profile schema and values files."""
+    from server import profile
+
+    _profile_files(
+        monkeypatch,
+        tmp_path,
+        values={"identity": "second-year engineering student", "goal": ""},
+    )
+    assert profile.render() == ""
+    with TestClient(app):
+        assert profile.render() == "identity: second-year engineering student"
+
+
+def test_fr27_startup_with_missing_values_file_has_empty_profile(
+    fake_stages, db, monkeypatch, tmp_path
+):
+    """FR-27: a missing values file does not stop startup; the profile is empty."""
+    from server import profile
+
+    _profile_files(monkeypatch, tmp_path)
+    with TestClient(app):
+        assert profile.render() == ""
+
+
+@pytest.mark.parametrize("bad", ["{not json", "[1, 2"], ids=["brace", "bracket"])
+def test_fr26_startup_stops_on_malformed_schema(
+    fake_stages, db, monkeypatch, tmp_path, bad
+):
+    """FR-26: a malformed schema file stops startup with ProfileError."""
+    from server import profile
+
+    _profile_files(monkeypatch, tmp_path, schema=bad, values={})
+    with pytest.raises(profile.ProfileError), TestClient(app):
+        pass
+
+
+def test_fr27_startup_stops_on_malformed_values(fake_stages, db, monkeypatch, tmp_path):
+    """FR-27: a malformed values file stops startup with ProfileError."""
+    from server import profile
+
+    _profile_files(monkeypatch, tmp_path, values="{not json")
+    with pytest.raises(profile.ProfileError), TestClient(app):
+        pass
+
+
+def test_fr28_startup_stops_when_profile_exceeds_line_cap(
+    fake_stages, db, monkeypatch, tmp_path
+):
+    """FR-28: a profile rendering over PROFILE_MAX_LINES stops startup with ProfileError."""
+    from server import profile
+
+    _profile_files(monkeypatch, tmp_path, values={"identity": "a", "goal": "b"})
+    monkeypatch.setattr("server.config.PROFILE_MAX_LINES", 1)
+    with pytest.raises(profile.ProfileError), TestClient(app):
+        pass

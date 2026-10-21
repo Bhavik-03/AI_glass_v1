@@ -6,10 +6,10 @@ from datetime import datetime
 from google import genai
 from google.genai import types
 
-from server import config, store, tools
+from server import config, profile, store, tools
 
 SYSTEM_INSTRUCTION = """\
-You are a voice assistant. Your answers are spoken aloud.
+{profile}You are a voice assistant. Your answers are spoken aloud.
 The user is an engineering student learning AI/ML: give an ambiguous term its AI/ML meaning \
 (LoRA is the fine-tuning method, not LoRa radio).
 Now: {weekday} {day} {month_year}, {time} ({iso}), time zone {timezone}.
@@ -38,6 +38,10 @@ offset, based on the time above.
 - Never put memory content in a web_search query.
 Existing concept names: {concept_names}"""
 
+PROFILE_HEADER = (
+    "About the user (pitch answers to this level and weigh advice against these goals):"
+)
+
 GRADE_INSTRUCTION = """You grade one spoken answer to a quiz question about a concept.
 The answer was transcribed by speech recognition: judge its meaning and ignore speech recognition errors, such as misheard or misspelled words.
 Reply as JSON: correct is true when the answer shows the concept's meaning, otherwise false. feedback is one short line: right or wrong plus a short correction when wrong. It is spoken aloud, so use plain words."""
@@ -53,7 +57,9 @@ _clock = time.monotonic
 def system_instruction(now: datetime, concept_names: Sequence[str] = ()) -> str:
     """Fill the system instruction with the current time, the home city (FR-6) and the
     existing concept names, so Gemini reuses them (FR-23)."""
+    rendered = profile.render()
     return SYSTEM_INSTRUCTION.format(
+        profile=f"{PROFILE_HEADER}\n{rendered}\n" if rendered else "",
         weekday=now.strftime("%A"),
         day=now.day,
         month_year=now.strftime("%B %Y"),
