@@ -300,6 +300,7 @@ def query(
     finally:
         record["concept"] = _concept(record["tool_calls"])
         record["memories_used"] = _memories_used(record["tool_calls"])
+        record["profile_lines"] = profile.line_count()
         logger.log_query(record)
 
 

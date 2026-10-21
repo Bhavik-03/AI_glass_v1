@@ -2153,6 +2153,135 @@ def test_fr17_memories_used_is_an_int_in_every_line(
         assert type(line["memories_used"]) is int
 
 
+# --- profile_lines in every /query log line (FR-17) ---
+
+SECRET = "REAL-SECRET-VALUE"
+THREE_SLOT_SCHEMA = [
+    {"name": "identity", "description": "who", "question": "Who are you?"},
+    {"name": "goal", "description": "aim", "question": "What is your goal?"},
+    {"name": "city", "description": "where", "question": "Where do you live?"},
+]
+
+
+def _fill_profile(monkeypatch, tmp_path, values):
+    _profile_files(monkeypatch, tmp_path, schema=THREE_SLOT_SCHEMA, values=values)
+    profile.load()
+
+
+def _three_filled(monkeypatch, tmp_path):
+    _fill_profile(
+        monkeypatch,
+        tmp_path,
+        {"identity": SECRET, "goal": f"{SECRET} goal", "city": f"{SECRET} city"},
+    )
+
+
+def test_fr17_profile_lines_counts_filled_slots(
+    fake_stages, silent_wav, monkeypatch, tmp_path, log_path
+):
+    """FR-17: a filled profile of 3 slots logs profile_lines 3."""
+    _three_filled(monkeypatch, tmp_path)
+    assert _post_query(silent_wav).status_code == 200
+    (line,) = _log_lines(log_path)
+    assert line["profile_lines"] == 3
+    assert type(line["profile_lines"]) is int
+
+
+def test_fr17_profile_lines_counts_wrapped_lines(
+    fake_stages, silent_wav, monkeypatch, tmp_path, log_path
+):
+    """FR-17: a long value that wraps at PROFILE_LINE_CHARS counts every rendered line."""
+    long_value = " ".join(["word"] * (config.PROFILE_LINE_CHARS))
+    _fill_profile(
+        monkeypatch, tmp_path, {"identity": "short", "goal": long_value, "city": "x"}
+    )
+    expected = len(profile.render().splitlines())
+    assert expected > 3
+    assert _post_query(silent_wav).status_code == 200
+    (line,) = _log_lines(log_path)
+    assert line["profile_lines"] == expected == profile.line_count()
+
+
+def test_fr17_profile_lines_zero_for_empty_profile(fake_stages, silent_wav, log_path):
+    """FR-17: an empty profile logs profile_lines 0."""
+    assert _post_query(silent_wav).status_code == 200
+    (line,) = _log_lines(log_path)
+    assert line["profile_lines"] == 0
+
+
+def test_fr17_profile_lines_logged_on_audio_400(
+    fake_stages, monkeypatch, tmp_path, log_path
+):
+    """FR-17: a 400 for missing audio still logs profile_lines (3 for a filled profile)."""
+    _three_filled(monkeypatch, tmp_path)
+    response = client.post("/query")
+    assert response.status_code == 400
+    assert set(response.json()) == {"error"}
+    (line,) = _log_lines(log_path)
+    assert line["profile_lines"] == 3
+
+
+def test_fr17_profile_lines_zero_on_audio_400_empty_profile(fake_stages, log_path):
+    """FR-17: a 400 for missing audio with an empty profile logs profile_lines 0."""
+    assert client.post("/query").status_code == 400
+    (line,) = _log_lines(log_path)
+    assert line["profile_lines"] == 0
+
+
+def test_fr17_profile_lines_logged_on_no_speech_400(
+    fake_stages, silent_wav, monkeypatch, tmp_path, log_path
+):
+    """FR-17: a "no speech detected" 400 still logs profile_lines (3 for a filled profile)."""
+    _three_filled(monkeypatch, tmp_path)
+    monkeypatch.setattr("server.stt.transcribe", lambda wav: "   ")
+    response = _post_query(silent_wav)
+    assert response.status_code == 400
+    assert response.json() == {"error": "no speech detected"}
+    (line,) = _log_lines(log_path)
+    assert line["profile_lines"] == 3
+
+
+@pytest.mark.parametrize("stage", ["stt", "llm", "tts"])
+def test_fr17_profile_lines_logged_on_stage_failure(
+    fake_stages, silent_wav, monkeypatch, tmp_path, log_path, stage
+):
+    """FR-17: a 500 from a failed stage still logs profile_lines (3 for a filled profile)."""
+    _three_filled(monkeypatch, tmp_path)
+    _make_stage_raise(monkeypatch, fake_stages, stage, RuntimeError("boom"))
+    response = _post_query(silent_wav)
+    assert response.status_code == 500
+    assert response.json() == {"error": f"{stage}: boom"}
+    (line,) = _log_lines(log_path)
+    assert line["profile_lines"] == 3
+
+
+def test_fr17_profile_lines_zero_on_stage_failure_empty_profile(
+    fake_stages, silent_wav, monkeypatch, log_path
+):
+    """FR-17: a 500 llm failure with an empty profile logs profile_lines 0."""
+    _make_stage_raise(monkeypatch, fake_stages, "llm", RuntimeError("boom"))
+    assert _post_query(silent_wav).status_code == 500
+    (line,) = _log_lines(log_path)
+    assert line["profile_lines"] == 0
+
+
+def test_fr17_profile_lines_never_logs_profile_text(
+    fake_stages, silent_wav, monkeypatch, tmp_path, log_path
+):
+    """FR-17: the log line holds only the line count, never any profile text."""
+    _three_filled(monkeypatch, tmp_path)
+    assert _post_query(silent_wav).status_code == 200
+    client.post("/query")
+    _make_stage_raise(monkeypatch, fake_stages, "llm", RuntimeError("boom"))
+    _post_query(silent_wav)
+    lines = _log_lines(log_path)
+    assert len(lines) == 3
+    for line in lines:
+        assert line["profile_lines"] == 3
+        assert SECRET not in json.dumps(line)
+    assert SECRET not in log_path.read_text(encoding="utf-8")
+
+
 # --- profile loaded at startup (FR-26, FR-27, FR-28) ---
 
 PROFILE_SCHEMA = [
