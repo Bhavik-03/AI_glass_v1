@@ -1,7 +1,7 @@
 """Tests for server/profile.py: schema, values, render and cap (FR-26, FR-27, FR-28)."""
 
 import json
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -790,3 +790,163 @@ def test_fr30_write_to_hand_written_file_keeps_other_slots_unstamped(
     assert profile.values() == {"a": "x", "b": "y"}
     assert profile.set_on("a") is None
     assert profile.set_on("b") == DAY
+
+
+TODAY = date(2026, 10, 21)
+
+
+def _goal_file(monkeypatch, tmp_path, value, set_on_date=None, slot="goal_now"):
+    """Load a profile with goal_now and other slots; stamp `slot` if a date is given."""
+    _use_schema(monkeypatch, tmp_path, [_slot("goal_now"), _slot("other")])
+    content = {slot: value}
+    if set_on_date is not None:
+        content["_set_on"] = {slot: set_on_date.isoformat()}
+    path = _use_values(monkeypatch, tmp_path, content)
+    profile.load()
+    return path
+
+
+def test_fr30_config_stale_values():
+    """Config holds GOAL_STALE_DAYS = 31 and GOAL_STALE_SLOT = 'goal_now'."""
+    assert config.GOAL_STALE_DAYS == 31
+    assert config.GOAL_STALE_SLOT == "goal_now"
+
+
+def test_fr30_stale_days_32_days_old_gives_32(monkeypatch, tmp_path):
+    """A non-empty goal_now set 32 days ago is stale: stale_days returns 32."""
+    _goal_file(monkeypatch, tmp_path, "ship it", TODAY - timedelta(days=32))
+    assert profile.stale_days(TODAY) == 32
+
+
+def test_fr30_stale_days_reports_actual_age(monkeypatch, tmp_path):
+    """The age returned is today minus the set date, here 200 days."""
+    _goal_file(monkeypatch, tmp_path, "ship it", TODAY - timedelta(days=200))
+    assert profile.stale_days(TODAY) == 200
+
+
+def test_fr30_stale_days_exactly_31_days_is_none(monkeypatch, tmp_path):
+    """Exactly 31 days old is not stale (needs MORE than 31)."""
+    _goal_file(monkeypatch, tmp_path, "ship it", TODAY - timedelta(days=31))
+    assert profile.stale_days(TODAY) is None
+
+
+def test_fr30_stale_days_30_days_is_none(monkeypatch, tmp_path):
+    """30 days old is not stale."""
+    _goal_file(monkeypatch, tmp_path, "ship it", TODAY - timedelta(days=30))
+    assert profile.stale_days(TODAY) is None
+
+
+def test_fr30_stale_days_set_today_is_none(monkeypatch, tmp_path):
+    """A goal set today is not stale."""
+    _goal_file(monkeypatch, tmp_path, "ship it", TODAY)
+    assert profile.stale_days(TODAY) is None
+
+
+def test_fr30_stale_days_via_write_stamp(monkeypatch, tmp_path):
+    """A goal stamped by write() 32 days before today is stale."""
+    _use_schema(monkeypatch, tmp_path, [_slot("goal_now")])
+    _use_values(monkeypatch, tmp_path)
+    profile.load()
+    profile.write("goal_now", "ship it", TODAY - timedelta(days=32))
+    assert profile.stale_days(TODAY) == 32
+
+
+def test_fr30_stale_days_no_date_is_none(monkeypatch, tmp_path):
+    """A non-empty goal_now with no date is never stale."""
+    _goal_file(monkeypatch, tmp_path, "ship it")
+    assert profile.stale_days(TODAY) is None
+
+
+def test_fr30_stale_days_empty_slot_with_old_date_is_none(monkeypatch, tmp_path):
+    """An empty goal_now is not stale even with an old date."""
+    _goal_file(monkeypatch, tmp_path, "", TODAY - timedelta(days=100))
+    assert profile.stale_days(TODAY) is None
+
+
+def test_fr30_stale_days_whitespace_value_counts_as_empty(monkeypatch, tmp_path):
+    """A whitespace-only goal_now counts as empty, so it is not stale."""
+    _goal_file(monkeypatch, tmp_path, "  \n\t", TODAY - timedelta(days=100))
+    assert profile.stale_days(TODAY) is None
+
+
+def test_fr30_stale_days_missing_slot_is_none(monkeypatch, tmp_path):
+    """No value and no date for goal_now gives None."""
+    _use_schema(monkeypatch, tmp_path, [_slot("goal_now")])
+    _use_values(monkeypatch, tmp_path)
+    profile.load()
+    assert profile.stale_days(TODAY) is None
+
+
+def test_fr30_stale_days_slot_not_in_schema_is_none(monkeypatch, tmp_path):
+    """A schema without goal_now gives None and does not raise."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    _use_values(monkeypatch, tmp_path, {"a": "x", "_set_on": {"a": "2020-01-01"}})
+    profile.load()
+    assert profile.stale_days(TODAY) is None
+
+
+def test_fr30_stale_days_ignores_other_slots(monkeypatch, tmp_path):
+    """Only goal_now counts: an old date on another slot does not make it stale."""
+    _use_schema(monkeypatch, tmp_path, [_slot("goal_now"), _slot("other")])
+    _use_values(
+        monkeypatch,
+        tmp_path,
+        {
+            "goal_now": "fresh",
+            "other": "old",
+            "_set_on": {
+                "goal_now": TODAY.isoformat(),
+                "other": (TODAY - timedelta(days=90)).isoformat(),
+            },
+        },
+    )
+    profile.load()
+    assert profile.stale_days(TODAY) is None
+
+
+def test_fr30_stale_days_changes_nothing(monkeypatch, tmp_path):
+    """Calling stale_days changes neither the goal nor its date: file bytes, values and set_on stay the same."""
+    old = TODAY - timedelta(days=40)
+    path = _goal_file(monkeypatch, tmp_path, "ship it", old)
+    before = path.read_bytes()
+    assert profile.stale_days(TODAY) == 40
+    assert profile.stale_days(TODAY) == 40
+    assert path.read_bytes() == before
+    assert profile.values() == {"goal_now": "ship it"}
+    assert profile.set_on("goal_now") == old
+
+
+def test_fr30_stale_days_slot_name_follows_config(monkeypatch, tmp_path):
+    """The slot checked is config.GOAL_STALE_SLOT, not a fixed name."""
+    monkeypatch.setattr("server.config.GOAL_STALE_SLOT", "other")
+    _use_schema(monkeypatch, tmp_path, [_slot("goal_now"), _slot("other")])
+    _use_values(
+        monkeypatch,
+        tmp_path,
+        {
+            "goal_now": "fresh",
+            "other": "old",
+            "_set_on": {
+                "goal_now": TODAY.isoformat(),
+                "other": (TODAY - timedelta(days=50)).isoformat(),
+            },
+        },
+    )
+    profile.load()
+    assert profile.stale_days(TODAY) == 50
+
+
+def test_fr30_stale_days_threshold_follows_config(monkeypatch, tmp_path):
+    """The threshold is config.GOAL_STALE_DAYS: lowered to 10, 11 days is stale and 10 is not."""
+    monkeypatch.setattr("server.config.GOAL_STALE_DAYS", 10)
+    _goal_file(monkeypatch, tmp_path, "ship it", TODAY - timedelta(days=11))
+    assert profile.stale_days(TODAY) == 11
+    _goal_file(monkeypatch, tmp_path, "ship it", TODAY - timedelta(days=10))
+    assert profile.stale_days(TODAY) is None
+
+
+def test_fr30_stale_days_raised_threshold_makes_32_not_stale(monkeypatch, tmp_path):
+    """With GOAL_STALE_DAYS raised to 60, a 32-day-old goal is not stale."""
+    monkeypatch.setattr("server.config.GOAL_STALE_DAYS", 60)
+    _goal_file(monkeypatch, tmp_path, "ship it", TODAY - timedelta(days=32))
+    assert profile.stale_days(TODAY) is None

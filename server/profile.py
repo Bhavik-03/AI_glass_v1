@@ -142,6 +142,17 @@ def set_on(slot: str) -> date | None:
     return _set_on.get(slot)
 
 
+def stale_days(today: date) -> int | None:
+    """Age in days of the goal slot when it is set and more than GOAL_STALE_DAYS old;
+    None otherwise, also when it has no date (FR-30)."""
+    slot = config.GOAL_STALE_SLOT
+    set_on_day = _set_on.get(slot)
+    if set_on_day is None or not _values.get(slot, "").strip():
+        return None
+    age = (today - set_on_day).days
+    return age if age > config.GOAL_STALE_DAYS else None
+
+
 def render() -> str:
     return "\n".join(_render_lines(_slots, _values))
 
