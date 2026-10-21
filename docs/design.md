@@ -127,7 +127,9 @@ Serves FR-26 to FR-29, FR-31.
   ("stop setup") leaves setup keeping what was answered. Setup also runs when any of the six
   setup slots is unanswered, and then asks only the unanswered ones, in schema order, so a
   half-finished setup resumes after a restart instead of staying blank forever. "stop setup"
-  suppresses it for the rest of that server run. While setup runs, `/query` skips the
+  suppresses it for the rest of that server run. Each answer is read back in the same turn as
+  the next question: the profile is in every prompt, so a silent speech-recognition error there
+  degrades every answer, and `remember` already reads back for the same reason. While setup runs, `/query` skips the
   Gemini call entirely — the next question is an answer to a setup slot, not a question.
 - A slot update outside setup (FR-31) needs a yes. The assistant calls `propose_profile_update`
   in its turn and asks the question in its answer; the session holds the pending proposal; the
