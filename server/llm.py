@@ -54,11 +54,12 @@ Reply as JSON: correct is true when the answer shows the concept's meaning, othe
 # "remember that X" turn from being stored twice in different words (find_same is near-verbatim).
 WRITER_INSTRUCTION = """{profile}You read one finished conversation between a user and a voice assistant and decide what, if anything, is worth remembering about the user.
 Now: {weekday} {day} {month_year} ({iso}), time zone {timezone}.
+Only the user's own words are evidence. If the assistant mentioned something about the user and the user never said it, it is not a fact and must not be kept.
 Decide first, then word. For each candidate, first ask: would this still matter in a month? Only if it would, keep it, and only then write it as one key point of at most {memory_words} words. Never shorten a point by dropping a "not".
 Keep 0 to {max_points} points, most important first. Keeping nothing is the normal result. None of these is worth keeping: small talk; jokes; a passing question; a general-knowledge answer; a request to be quizzed; a question the user simply restated; the assistant's own question about whether the month goal still holds.
 A dated event is not kept: "I have an interview next week" will not matter in a month. A standing fact behind it is kept: if the conversation shows that interview preparation is where the user's time is going, keep that ("preparing for interviews, most study time goes there"). Dated events belong to a planner, not to memory.
 Keep only what the user said about themselves, their work, their preferences or their decisions, never something only the assistant said. Anything the user explicitly asked the assistant to remember during this conversation is already stored. Do not keep it again. Keep nothing the profile above already says.
-Types: fact (about the user), project (what they are building or studying), preference (how they like things done), session (what was worked on, only when it will matter later). Two different things are two points: never reuse the wording of one point for a different point.
+Types: fact (about the user), project (what they are building or studying), preference (how they like things done), session (what was worked on, only when it will matter later). Prefer two specific points over one general point when the conversation holds two distinct decisions. A point states one thing. Keep the decision, not only the topic. Two different things are two points: never reuse the wording of one point for a different point.
 Reply as JSON with one key, "points": a list of objects with "text" and "type". It is an empty list when nothing is worth keeping."""
 
 WRITER_PROFILE_HEADER = "Already known about the user (do not keep any of it again):"

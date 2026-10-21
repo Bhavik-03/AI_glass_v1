@@ -2169,6 +2169,30 @@ def test_fr39_writer_instruction_skips_what_the_user_asked_to_remember(
     )
 
 
+def test_fr39_writer_instruction_makes_only_the_users_words_evidence(
+    monkeypatch,
+) -> None:
+    """Early in the instruction, before the salience test: only the user's own words are
+    evidence, and something the assistant said about the user is not a fact."""
+    text = _writer_call(monkeypatch)["config"].system_instruction
+    rule = (
+        "Only the user's own words are evidence. If the assistant mentioned something "
+        "about the user and the user never said it, it is not a fact and must not be kept."
+    )
+    assert rule in text
+    assert text.index(rule) < text.index("would this still matter in a month")
+
+
+def test_fr40_writer_instruction_prefers_granular_points(monkeypatch) -> None:
+    """Two distinct decisions are two specific points, not one general point."""
+    text = _writer_call(monkeypatch)["config"].system_instruction
+    assert (
+        "Prefer two specific points over one general point when the conversation holds "
+        "two distinct decisions. A point states one thing. Keep the decision, not only "
+        "the topic."
+    ) in text
+
+
 def test_fr28_writer_request_carries_profile(monkeypatch, tmp_path) -> None:
     """With a filled profile the writer request's instruction carries every non-empty slot line."""
     _filled(monkeypatch, tmp_path)
