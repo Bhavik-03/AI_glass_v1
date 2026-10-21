@@ -1410,6 +1410,31 @@ def test_fr33_instruction_already_remembered_when_not_new() -> None:
     assert "already remembered" in text
 
 
+def test_fr33_instruction_remember_only_when_explicitly_asked() -> None:
+    """FR-33: the instruction restricts remember to an explicit request to remember."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "call remember only when the user explicitly asks" in text
+
+
+def test_fr33_instruction_bare_statement_stores_and_recalls_nothing() -> None:
+    """FR-33: a plain statement of fact is answered conversationally; remember and
+    search_memories are not called for it and the stored items are not listed."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "plain statement about the user" in text
+    assert "i have an interview next week" in text
+    assert "not a request to remember" in text
+    assert "not a recall question" in text
+    assert "one short conversational sentence" in text
+    assert "never call remember or search_memories" in text
+    assert "listing what is stored" in text
+
+
+def test_fr33_instruction_session_writer_decides_what_is_kept() -> None:
+    """FR-33: the instruction says what is worth keeping is decided after the session."""
+    text = llm.system_instruction(fixed_now()).lower()
+    assert "decided after the session" in text
+
+
 def test_fr37_instruction_search_memories_for_user_questions() -> None:
     """The instruction names search_memories for questions about the user or earlier conversations."""
     text = llm.system_instruction(fixed_now()).lower()
