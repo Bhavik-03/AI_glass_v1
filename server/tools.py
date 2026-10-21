@@ -309,6 +309,26 @@ def quiz_score_text(right: int, total: int) -> str:
     return f"{right} of {total} right"
 
 
+SETUP_INTRO = (
+    "Let's set up your profile. Answer each question; say {stop} to stop at any time."
+)
+SETUP_DONE = "That is everything. Your profile is set up."
+SETUP_STOPPED = "Setup stopped. I kept what you answered."
+
+
+def setup_prompt(question: str, first: bool) -> str:
+    """The spoken setup question; the first one opens with the intro (FR-29)."""
+    if not first:
+        return question
+    intro = SETUP_INTRO.format(stop=config.SETUP_STOP_PHRASE)
+    return f"{intro} {question}"
+
+
+def setup_refusal_text(reason: str, question: str) -> str:
+    """A refused setup answer: say why and ask the same question again (FR-29)."""
+    return f"I could not save that: {reason}. {question}"
+
+
 def _reminder_id(value: object) -> int | None:
     # Gemini may send 3.0 for 3; bool is an int subclass but never an id.
     if isinstance(value, bool):

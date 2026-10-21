@@ -1763,3 +1763,35 @@ def test_fr33_web_search_declaration_forbids_memory_content():
 def test_fr33_memory_tools_declared_with_description(name):
     """The remember, search_memories and forget tools are declared, each with a non-empty description."""
     assert declaration(name)["description"].strip()
+
+
+# --- spoken setup texts (FR-29) ---
+
+SETUP_QUESTION = "Who are you? Tell me your name."
+
+
+def test_fr29_setup_prompt_first_names_stop_phrase_then_asks():
+    """FR-29: the first setup prompt is an intro that mentions the stop phrase, followed by the question."""
+    text = tools.setup_prompt(SETUP_QUESTION, first=True)
+    assert config.SETUP_STOP_PHRASE in text.lower()
+    assert text.endswith(SETUP_QUESTION)
+    assert text != SETUP_QUESTION
+
+
+def test_fr29_setup_prompt_later_is_exactly_the_question():
+    """FR-29: a later setup prompt is exactly the slot's question."""
+    assert tools.setup_prompt(SETUP_QUESTION, first=False) == SETUP_QUESTION
+
+
+def test_fr29_setup_done_and_stopped_texts():
+    """FR-29: SETUP_DONE and SETUP_STOPPED are non-empty; STOPPED says the answers are kept."""
+    assert isinstance(tools.SETUP_DONE, str) and tools.SETUP_DONE.strip()
+    assert isinstance(tools.SETUP_STOPPED, str) and tools.SETUP_STOPPED.strip()
+    assert "kept" in tools.SETUP_STOPPED.lower()
+
+
+def test_fr29_setup_refusal_text_has_reason_and_question():
+    """FR-29: a refused setup answer is spoken with the reason and the same question again."""
+    text = tools.setup_refusal_text("profile is too long", SETUP_QUESTION)
+    assert "profile is too long" in text
+    assert SETUP_QUESTION in text

@@ -182,6 +182,61 @@ def _quiz_answer(record: dict, quiz: dict, asked_at: datetime) -> Response:
     return Response(content=wav, media_type="audio/wav")
 
 
+def _setup_slots() -> list[str]:
+    """The setup slots still unanswered, in setup order; slots the schema lacks are skipped."""
+    known = {slot["name"] for slot in profile.slots()}
+    values = profile.values()
+    return [
+        name
+        for name in config.SETUP_SLOTS
+        if name in known and not values.get(name, "").strip()
+    ]
+
+
+def _setup_question(slot: str) -> str:
+    return next(s["question"] for s in profile.slots() if s["name"] == slot)
+
+
+def _setup_start(record: dict, slots: list[str], asked_at: datetime) -> Response:
+    """Answer the first query of a setup with the first question, not a normal answer
+    (FR-29)."""
+    record["answer"] = tools.setup_prompt(_setup_question(slots[0]), first=True)
+    wav = run_stage("tts", record["timings_ms"], tts.synthesize, record["answer"])
+    # Running only after the question was spoken, so a failure leaves no setup behind.
+    session.start_setup(slots, asked_at)
+    return Response(content=wav, media_type="audio/wav")
+
+
+def _setup_answer(record: dict, setup: dict, asked_at: datetime) -> Response:
+    """The transcript is the answer to the current slot, written and dated today; then the
+    next question or the end. "stop setup" keeps what was answered (FR-29)."""
+    timings = record["timings_ms"]
+    if config.SETUP_STOP_PHRASE in _normalised(record["question"]):
+        record["answer"] = tools.SETUP_STOPPED
+        wav = run_stage("tts", timings, tts.synthesize, record["answer"])
+        session.stop_setup()
+        return Response(content=wav, media_type="audio/wav")
+    slots, index = setup["slots"], setup["index"]
+    try:
+        profile.write(slots[index], record["question"].strip(), asked_at.date())
+    except profile.ProfileError as e:
+        record["answer"] = tools.setup_refusal_text(
+            _reason(e), _setup_question(slots[index])
+        )
+        wav = run_stage("tts", timings, tts.synthesize, record["answer"])
+        return Response(content=wav, media_type="audio/wav")
+    if index + 1 < len(slots):
+        record["answer"] = tools.setup_prompt(
+            _setup_question(slots[index + 1]), first=False
+        )
+    else:
+        record["answer"] = tools.SETUP_DONE
+    wav = run_stage("tts", timings, tts.synthesize, record["answer"])
+    # Moving on only after the answer was spoken, so a failure repeats the question.
+    session.advance_setup(asked_at)
+    return Response(content=wav, media_type="audio/wav")
+
+
 def _stale_line(asked_at: datetime) -> str | None:
     """The line asking whether the month goal still holds, or None: said once per session,
     and not when the model has just asked something else (FR-30)."""
@@ -214,8 +269,12 @@ def _answer(data: bytes | None, image: bytes | None, record: dict) -> Response:
         asked_at = now()
         if quiz := session.quiz(asked_at):
             return _quiz_answer(record, quiz, asked_at)
+        if setup := session.setup(asked_at):
+            return _setup_answer(record, setup, asked_at)
         if session.pending_wipe(asked_at):
             return _wipe_confirm(record)
+        if (slots := _setup_slots()) and not session.setup_stopped():
+            return _setup_start(record, slots, asked_at)
         spoken = f" {_normalised(record['question'])} "
         if f" {config.WIPE_REQUEST_PHRASE} " in spoken:
             return _wipe_request(record, asked_at)

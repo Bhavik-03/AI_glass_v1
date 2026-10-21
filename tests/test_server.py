@@ -3,6 +3,7 @@ import io
 import json
 import wave
 from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -2476,6 +2477,8 @@ def test_fr30_goal_without_set_on_date_no_line(
 def test_fr30_empty_goal_no_line(fake_stages, silent_wav, monkeypatch, tmp_path):
     """FR-30: an empty goal_now (even with an old date) gets no line."""
     _stale_profile(monkeypatch, tmp_path, "2026-09-07", goal="")
+    # goal_now is a setup slot: with it empty, setup would start (FR-29), not the answer.
+    server.main.session.stop_setup()
     _post_query(silent_wav)
     assert fake_stages["tts"] == [FAKE_ANSWER]
 
@@ -2628,3 +2631,398 @@ def test_fr30_failed_llm_query_has_no_line(
     assert fake_stages["tts"] == []
     assert _stale_line(32) not in log_path.read_text(encoding="utf-8")
     assert session.stale_noted(FIXED_NOW) is False
+
+
+# --- spoken profile setup (FR-29) ---
+
+REAL_SCHEMA_PATH = (
+    Path(__file__).resolve().parent.parent / "config" / "profile_schema.json"
+)
+SETUP_ANSWERS = {
+    "identity": "I am Asha, a second-year student",
+    "goal_now": "finish the compilers project",
+    "goal_long": "build robots for a living",
+    "exploring": "reinforcement learning",
+    "style": "short and simple answers",
+    "constraints": "only evenings are free",
+}
+
+
+@pytest.fixture
+def fresh_session():
+    """No setup or stopped mark left over from another test."""
+    from server import session
+
+    session.reset()
+    yield
+    session.reset()
+
+
+def _setup_env(monkeypatch, tmp_path, values=None, schema=None):
+    """Load a profile with the real ten-slot schema (or `schema`) and optional values."""
+    raw = schema if schema is not None else REAL_SCHEMA_PATH.read_text("utf-8")
+    _profile_files(monkeypatch, tmp_path, schema=raw, values=values)
+    profile.load()
+
+
+def _schema_questions() -> dict:
+    slots = json.loads(REAL_SCHEMA_PATH.read_text("utf-8"))
+    return {s["name"]: s["question"] for s in slots}
+
+
+def _file_values() -> dict:
+    path = config.PROFILE_VALUES_PATH
+    return json.loads(path.read_text("utf-8")) if path.exists() else {}
+
+
+def _answers_in_file() -> dict:
+    return {k: v for k, v in _file_values().items() if not k.startswith("_")}
+
+
+def _first(slot: str) -> str:
+    from server import tools
+
+    return tools.setup_prompt(_schema_questions()[slot], first=True)
+
+
+def _next(slot: str) -> str:
+    from server import tools
+
+    return tools.setup_prompt(_schema_questions()[slot], first=False)
+
+
+def _forbid_llm(monkeypatch):
+    def boom(*args, **kwargs):
+        raise AssertionError("Gemini must not be called during setup")
+
+    monkeypatch.setattr("server.llm.ask", boom)
+
+
+def test_fr29_first_query_speaks_first_question_not_a_normal_answer(
+    fake_stages, silent_wav, monkeypatch, tmp_path, log_path, fresh_session
+):
+    """FR-29: with no values file the first query is not answered normally: the spoken and
+    logged answer is the intro plus the first slot's question; Gemini is not called."""
+    _setup_env(monkeypatch, tmp_path)
+    response = _say(fake_stages, silent_wav, "hello there")
+    assert response.status_code == 200
+    assert response.content == FAKE_TTS_WAV
+    assert fake_stages["tts"] == [_first("identity")]
+    assert fake_stages["llm"] == []
+    assert not config.PROFILE_VALUES_PATH.exists() or _answers_in_file() == {}
+    (line,) = _log_lines(log_path)
+    assert line["answer"] == _first("identity")
+    assert line["tool_calls"] == []
+    assert line["error"] is None
+
+
+def test_fr29_start_adds_no_turn_to_the_session(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
+):
+    """FR-29: the starting query adds no turn: after setup the normal answer gets no turns."""
+    _setup_env(monkeypatch, tmp_path)
+    _say(fake_stages, silent_wav, "hello there")
+    for answer in SETUP_ANSWERS.values():
+        _say(fake_stages, silent_wav, answer)
+    _say(fake_stages, silent_wav, "what time is it")
+    assert fake_stages["llm_turns"] == [[]]
+
+
+def test_fr29_full_setup_writes_six_answers_each_dated_today(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
+):
+    """FR-29: 1 start + 6 answers fill identity, goal_now, goal_long, exploring, style and
+    constraints (nothing else), every one stamped with today's date; Gemini is never
+    called; the seventh query gets the normal answer."""
+    _setup_env(monkeypatch, tmp_path)
+    _forbid_llm(monkeypatch)
+    order = list(SETUP_ANSWERS)
+    assert order == list(config.SETUP_SLOTS)
+    from server import tools
+
+    assert _say(fake_stages, silent_wav, "start").status_code == 200
+    for slot in order:
+        padded = f"  {SETUP_ANSWERS[slot]}  "
+        assert _say(fake_stages, silent_wav, padded).status_code == 200
+    expected = [_first("identity")] + [_next(s) for s in order[1:]] + [tools.SETUP_DONE]
+    assert fake_stages["tts"] == expected
+    assert _answers_in_file() == SETUP_ANSWERS
+    stamps = _file_values()["_set_on"]
+    for slot in order:
+        assert stamps[slot] == FIXED_NOW.date().isoformat()
+        assert profile.set_on(slot) == FIXED_NOW.date()
+    assert set(stamps) == set(order)
+
+
+def test_fr29_query_after_setup_is_answered_normally(
+    fake_stages, silent_wav, monkeypatch, tmp_path, log_path, fresh_session
+):
+    """FR-29: after SETUP_DONE the next query goes through the normal llm answer."""
+    _setup_env(monkeypatch, tmp_path)
+    _say(fake_stages, silent_wav, "start")
+    for answer in SETUP_ANSWERS.values():
+        _say(fake_stages, silent_wav, answer)
+    assert fake_stages["llm"] == []
+    response = _say(fake_stages, silent_wav, "what time is it")
+    assert response.status_code == 200
+    assert len(fake_stages["llm"]) == 1
+    assert fake_stages["tts"][-1] == FAKE_ANSWER
+    assert _log_lines(log_path)[-1]["answer"] == FAKE_ANSWER
+
+
+def test_fr29_gemini_never_called_during_whole_setup(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
+):
+    """FR-29: with llm.ask raising, start, answers and stop all return 200."""
+    _setup_env(monkeypatch, tmp_path)
+    _forbid_llm(monkeypatch)
+    for text in ("start", SETUP_ANSWERS["identity"], "stop setup"):
+        assert _say(fake_stages, silent_wav, text).status_code == 200
+
+
+def test_fr29_asks_only_unanswered_slots_in_order(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
+):
+    """FR-29: with identity, goal_now, goal_long answered, setup asks exploring, style,
+    constraints in that order, then ends."""
+    from server import tools
+
+    done = {s: SETUP_ANSWERS[s] for s in ("identity", "goal_now", "goal_long")}
+    _setup_env(monkeypatch, tmp_path, values=done)
+    _say(fake_stages, silent_wav, "start")
+    for slot in ("exploring", "style", "constraints"):
+        _say(fake_stages, silent_wav, SETUP_ANSWERS[slot])
+    assert fake_stages["tts"] == [
+        _first("exploring"),
+        _next("style"),
+        _next("constraints"),
+        tools.SETUP_DONE,
+    ]
+    assert _answers_in_file() == SETUP_ANSWERS
+    assert fake_stages["llm"] == []
+
+
+def test_fr29_blank_answer_counts_as_unanswered(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
+):
+    """FR-29: an empty string for a setup slot in the values file is unanswered."""
+    values = dict(SETUP_ANSWERS, style="")
+    _setup_env(monkeypatch, tmp_path, values=values)
+    _say(fake_stages, silent_wav, "start")
+    assert fake_stages["tts"] == [_first("style")]
+
+
+def test_fr29_all_six_answered_never_starts_setup(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
+):
+    """FR-29: a file with all six setup slots answered gives a normal answer."""
+    _setup_env(monkeypatch, tmp_path, values=SETUP_ANSWERS)
+    response = _say(fake_stages, silent_wav, "what time is it")
+    assert response.status_code == 200
+    assert fake_stages["tts"] == [FAKE_ANSWER]
+    assert len(fake_stages["llm"]) == 1
+
+
+def test_fr29_slot_missing_from_schema_is_skipped(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
+):
+    """FR-29: a setup slot absent from the schema is not asked."""
+    from server import tools
+
+    slots = [s for s in json.loads(REAL_SCHEMA_PATH.read_text("utf-8"))]
+    slots = [s for s in slots if s["name"] != "goal_now"]
+    _setup_env(monkeypatch, tmp_path, schema=json.dumps(slots))
+    _say(fake_stages, silent_wav, "start")
+    for slot in ("identity", "goal_long", "exploring", "style", "constraints"):
+        _say(fake_stages, silent_wav, SETUP_ANSWERS[slot])
+    asked = fake_stages["tts"]
+    assert asked[1] == _next("goal_long")
+    assert asked[-1] == tools.SETUP_DONE
+    assert "goal_now" not in _answers_in_file()
+
+
+def test_fr29_no_setup_slots_in_schema_gives_normal_answer(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
+):
+    """FR-29: setup does not start when the schema has none of the setup slots."""
+    other = [{"name": "interests", "description": "likes", "question": "Interests?"}]
+    _profile_files(monkeypatch, tmp_path, schema=other)
+    profile.load()
+    _say(fake_stages, silent_wav, "what time is it")
+    assert fake_stages["tts"] == [FAKE_ANSWER]
+
+
+def test_fr29_stop_setup_ends_it_and_keeps_answers(
+    fake_stages, silent_wav, monkeypatch, tmp_path, log_path, fresh_session
+):
+    """FR-29: 'Okay, stop setup.' speaks SETUP_STOPPED, writes nothing for the stop
+    utterance, keeps earlier answers; the next query is answered normally."""
+    from server import tools
+
+    _setup_env(monkeypatch, tmp_path)
+    _say(fake_stages, silent_wav, "start")
+    _say(fake_stages, silent_wav, SETUP_ANSWERS["identity"])
+    response = _say(fake_stages, silent_wav, "Okay, Stop Setup.")
+    assert response.status_code == 200
+    assert fake_stages["tts"][-1] == tools.SETUP_STOPPED
+    assert _answers_in_file() == {"identity": SETUP_ANSWERS["identity"]}
+    assert fake_stages["llm"] == []
+    last = _log_lines(log_path)[-1]
+    assert last["answer"] == tools.SETUP_STOPPED
+    assert last["tool_calls"] == [] and last["error"] is None
+    _say(fake_stages, silent_wav, "what time is it")
+    assert fake_stages["tts"][-1] == FAKE_ANSWER
+    assert len(fake_stages["llm"]) == 1
+
+
+def test_fr29_stop_before_any_answer_does_not_restart(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
+):
+    """FR-29: stopping with nothing answered writes nothing and the next query is normal."""
+    from server import tools
+
+    _setup_env(monkeypatch, tmp_path)
+    _say(fake_stages, silent_wav, "start")
+    _say(fake_stages, silent_wav, "stop setup")
+    assert fake_stages["tts"][-1] == tools.SETUP_STOPPED
+    assert _answers_in_file() == {}
+    _say(fake_stages, silent_wav, "what time is it")
+    assert fake_stages["tts"][-1] == FAKE_ANSWER
+
+
+def test_fr29_session_reset_lets_setup_start_again_after_stop(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
+):
+    """FR-29: /session/reset clears the stopped mark; setup starts again."""
+    _setup_env(monkeypatch, tmp_path)
+    _say(fake_stages, silent_wav, "start")
+    _say(fake_stages, silent_wav, "stop setup")
+    client.post("/session/reset")
+    _say(fake_stages, silent_wav, "hello")
+    assert fake_stages["tts"][-1] == _first("identity")
+
+
+def test_fr29_wipe_phrase_in_setup_is_just_the_answer(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
+):
+    """FR-29: 'wipe my memories' during setup is stored as the slot's answer; no wipe starts."""
+    from server import session
+
+    _setup_env(monkeypatch, tmp_path)
+    _say(fake_stages, silent_wav, "start")
+    _say(fake_stages, silent_wav, "wipe my memories")
+    assert _answers_in_file() == {"identity": "wipe my memories"}
+    assert fake_stages["tts"][-1] == _next("goal_now")
+    assert session.pending_wipe(FIXED_NOW) is False
+
+
+def test_fr29_refused_write_speaks_refusal_and_keeps_the_question(
+    fake_stages, silent_wav, monkeypatch, tmp_path, log_path, fresh_session
+):
+    """FR-29: a write that profile.write refuses is spoken as the refusal text with the same
+    question, the file is unchanged, status 200; the next answer goes to the same slot."""
+    from server import tools
+
+    _setup_env(monkeypatch, tmp_path)
+    _say(fake_stages, silent_wav, "start")
+    real_write = profile.write
+    refusing = {"on": True}
+
+    def write(slot, value, set_on):
+        if refusing["on"]:
+            raise profile.ProfileError("profile is full")
+        return real_write(slot, value, set_on)
+
+    monkeypatch.setattr(profile, "write", write)
+    response = _say(fake_stages, silent_wav, "a very long answer")
+    assert response.status_code == 200
+    question = _schema_questions()["identity"]
+    assert fake_stages["tts"][-1] == tools.setup_refusal_text(
+        "profile is full", question
+    )
+    assert _answers_in_file() == {}
+    last = _log_lines(log_path)[-1]
+    assert last["answer"] == fake_stages["tts"][-1]
+    assert last["error"] is None and last["tool_calls"] == []
+    refusing["on"] = False
+    _say(fake_stages, silent_wav, SETUP_ANSWERS["identity"])
+    assert _answers_in_file() == {"identity": SETUP_ANSWERS["identity"]}
+    assert fake_stages["tts"][-1] == _next("goal_now")
+
+
+def test_fr29_line_cap_refusal_keeps_file_and_question(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
+):
+    """FR-29: an answer that would push the profile over PROFILE_MAX_LINES is refused with
+    the same question spoken, status 200, and the file unchanged."""
+    _setup_env(monkeypatch, tmp_path, values={"identity": "student"})
+    monkeypatch.setattr(config, "PROFILE_MAX_LINES", 1)
+    _say(fake_stages, silent_wav, "start")
+    before = _file_values()
+    response = _say(fake_stages, silent_wav, "finish the compilers project")
+    assert response.status_code == 200
+    assert _schema_questions()["goal_now"] in fake_stages["tts"][-1]
+    assert _file_values() == before
+
+
+def test_fr29_tts_failure_returns_500_and_does_not_advance(
+    fake_stages, silent_wav, monkeypatch, tmp_path, fresh_session
+):
+    """FR-29: a tts failure on a setup answer gives 500 {"error": "tts: ..."}; the next
+    query answers the same slot again."""
+    _setup_env(monkeypatch, tmp_path)
+    _say(fake_stages, silent_wav, "start")
+    working = server.tts.synthesize
+
+    def broken(text):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("server.tts.synthesize", broken)
+    response = _say(fake_stages, silent_wav, SETUP_ANSWERS["identity"])
+    assert response.status_code == 500
+    assert response.json() == {"error": "tts: boom"}
+    monkeypatch.setattr("server.tts.synthesize", working)
+    _say(fake_stages, silent_wav, "Asha again")
+    assert _answers_in_file()["identity"] == "Asha again"
+    assert fake_stages["tts"][-1] == _next("goal_now")
+
+
+def test_fr29_waiting_over_the_answer_limit_restarts_from_unanswered(
+    fake_stages, silent_wav, monkeypatch, tmp_path, clock, fresh_session
+):
+    """FR-29: a setup left waiting SETUP_ANSWER_WAIT_S ends quietly; the next query starts
+    setup over from the unanswered slots."""
+    assert config.SETUP_ANSWER_WAIT_S == 300
+    _setup_env(monkeypatch, tmp_path)
+    _say(fake_stages, silent_wav, "start")
+    _say(fake_stages, silent_wav, SETUP_ANSWERS["identity"])
+    clock.at(60 + config.SETUP_ANSWER_WAIT_S + 1)
+    response = _say(fake_stages, silent_wav, "hello again")
+    assert response.status_code == 200
+    assert fake_stages["tts"][-1] == _first("goal_now")
+    assert _answers_in_file() == {"identity": SETUP_ANSWERS["identity"]}
+    assert fake_stages["llm"] == []
+
+
+def test_fr29_every_setup_turn_writes_one_complete_log_line(
+    fake_stages, silent_wav, monkeypatch, tmp_path, log_path, fresh_session
+):
+    """FR-29: start, answer and stop turns each write one JSONL line with question, answer,
+    empty tool_calls and error None."""
+    from server import tools
+
+    _setup_env(monkeypatch, tmp_path)
+    utterances = ["start", SETUP_ANSWERS["identity"], "stop setup"]
+    for text in utterances:
+        assert _say(fake_stages, silent_wav, text).status_code == 200
+    lines = _log_lines(log_path)
+    assert len(lines) == 3
+    assert [line["question"] for line in lines[1:]] == utterances[1:]
+    assert [line["answer"] for line in lines] == [
+        _first("identity"),
+        _next("goal_now"),
+        tools.SETUP_STOPPED,
+    ]
+    for line in lines:
+        assert line["tool_calls"] == []
+        assert line["error"] is None
