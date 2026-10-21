@@ -1,10 +1,14 @@
 """Tests for server/profile.py: schema, values, render and cap (FR-26, FR-27, FR-28)."""
 
 import json
+from datetime import date
 
 import pytest
 
 from server import config, profile
+
+DAY = date(2026, 3, 5)
+LATER = date(2026, 4, 20)
 
 DEFAULT_NAMES = [
     "identity",
@@ -373,7 +377,7 @@ def test_fr28_write_shows_in_values_and_render(monkeypatch, tmp_path):
     _use_schema(monkeypatch, tmp_path, [_slot("a"), _slot("b")])
     _use_values(monkeypatch, tmp_path)
     profile.load()
-    profile.write("b", "beta")
+    profile.write("b", "beta", DAY)
     assert profile.values() == {"b": "beta"}
     assert profile.render() == "b: beta"
     assert profile.line_count() == 1
@@ -384,8 +388,10 @@ def test_fr28_write_saves_json_to_values_file(monkeypatch, tmp_path):
     _use_schema(monkeypatch, tmp_path, [_slot("a"), _slot("b")])
     path = _use_values(monkeypatch, tmp_path, {"a": "alpha"})
     profile.load()
-    profile.write("b", "beta")
-    assert json.loads(path.read_text(encoding="utf-8")) == {"a": "alpha", "b": "beta"}
+    profile.write("b", "beta", DAY)
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    saved.pop("_set_on")
+    assert saved == {"a": "alpha", "b": "beta"}
 
 
 def test_fr28_write_survives_reload(monkeypatch, tmp_path):
@@ -393,7 +399,7 @@ def test_fr28_write_survives_reload(monkeypatch, tmp_path):
     _use_schema(monkeypatch, tmp_path, [_slot("a"), _slot("b")])
     _use_values(monkeypatch, tmp_path)
     profile.load()
-    profile.write("a", "alpha")
+    profile.write("a", "alpha", DAY)
     held = profile.values()
     profile.load()
     assert profile.values() == held == {"a": "alpha"}
@@ -405,9 +411,11 @@ def test_fr28_write_overwrite_keeps_other_slots(monkeypatch, tmp_path):
     _use_schema(monkeypatch, tmp_path, [_slot("a"), _slot("b")])
     path = _use_values(monkeypatch, tmp_path, {"a": "old", "b": "keep"})
     profile.load()
-    profile.write("a", "new")
+    profile.write("a", "new", DAY)
     assert profile.values() == {"a": "new", "b": "keep"}
-    assert json.loads(path.read_text(encoding="utf-8")) == {"a": "new", "b": "keep"}
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    saved.pop("_set_on")
+    assert saved == {"a": "new", "b": "keep"}
     profile.load()
     assert profile.values() == {"a": "new", "b": "keep"}
 
@@ -417,7 +425,7 @@ def test_fr28_write_empty_string_clears_slot(monkeypatch, tmp_path):
     _use_schema(monkeypatch, tmp_path, [_slot("a")])
     _use_values(monkeypatch, tmp_path, {"a": "old"})
     profile.load()
-    profile.write("a", "")
+    profile.write("a", "", DAY)
     assert profile.render() == ""
     assert profile.line_count() == 0
 
@@ -429,7 +437,7 @@ def test_fr28_write_unknown_slot_refused_file_untouched(monkeypatch, tmp_path):
     profile.load()
     before = path.read_bytes()
     with pytest.raises(profile.ProfileError) as exc:
-        profile.write("ghost", "boo")
+        profile.write("ghost", "boo", DAY)
     assert str(exc.value).strip()
     assert path.read_bytes() == before
     assert profile.values() == {"a": "x"}
@@ -441,7 +449,7 @@ def test_fr28_write_unknown_slot_no_file_stays_missing(monkeypatch, tmp_path):
     path = _use_values(monkeypatch, tmp_path)
     profile.load()
     with pytest.raises(profile.ProfileError):
-        profile.write("ghost", "boo")
+        profile.write("ghost", "boo", DAY)
     assert not path.exists()
     assert profile.values() == {}
 
@@ -456,7 +464,7 @@ def test_fr28_write_non_string_refused(monkeypatch, tmp_path, bad):
     profile.load()
     before = path.read_bytes()
     with pytest.raises(profile.ProfileError) as exc:
-        profile.write("a", bad)
+        profile.write("a", bad, DAY)
     assert str(exc.value).strip()
     assert path.read_bytes() == before
     assert profile.values() == {"a": "x"}
@@ -470,7 +478,7 @@ def test_fr28_write_over_cap_refused_existing_file_unchanged(monkeypatch, tmp_pa
     before_bytes = path.read_bytes()
     before_render = profile.render()
     with pytest.raises(profile.ProfileError) as exc:
-        profile.write("b", " ".join(["word"] * 900))
+        profile.write("b", " ".join(["word"] * 900), DAY)
     assert "40" in str(exc.value)
     assert path.read_bytes() == before_bytes
     assert profile.values() == {"a": "short"}
@@ -483,7 +491,7 @@ def test_fr28_write_over_cap_refused_no_file_stays_missing(monkeypatch, tmp_path
     path = _use_values(monkeypatch, tmp_path)
     profile.load()
     with pytest.raises(profile.ProfileError) as exc:
-        profile.write("a", " ".join(["word"] * 900))
+        profile.write("a", " ".join(["word"] * 900), DAY)
     assert "40" in str(exc.value)
     assert not path.exists()
     assert profile.values() == {}
@@ -497,11 +505,11 @@ def test_fr28_write_40_lines_accepted_41_refused(monkeypatch, tmp_path):
     path = _use_values(monkeypatch, tmp_path)
     profile.load()
     for name in names[:40]:
-        profile.write(name, "v")
+        profile.write(name, "v", DAY)
     assert profile.line_count() == 40
     before = path.read_bytes()
     with pytest.raises(profile.ProfileError) as exc:
-        profile.write(names[40], "v")
+        profile.write(names[40], "v", DAY)
     assert "40" in str(exc.value)
     assert profile.line_count() == 40
     assert path.read_bytes() == before
@@ -515,7 +523,7 @@ def test_fr28_write_one_long_slot_wrapping_over_cap_refused(monkeypatch, tmp_pat
     _use_values(monkeypatch, tmp_path)
     profile.load()
     with pytest.raises(profile.ProfileError) as exc:
-        profile.write("a", " ".join(["word"] * 900))
+        profile.write("a", " ".join(["word"] * 900), DAY)
     assert "40" in str(exc.value)
     assert profile.values() == {}
 
@@ -526,6 +534,259 @@ def test_fr28_write_creates_parent_folder(monkeypatch, tmp_path):
     path = tmp_path / "newdir" / "sub" / "profile.json"
     monkeypatch.setattr("server.config.PROFILE_VALUES_PATH", path)
     profile.load()
-    profile.write("a", "hi")
-    assert json.loads(path.read_text(encoding="utf-8")) == {"a": "hi"}
+    profile.write("a", "hi", DAY)
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "a": "hi",
+        "_set_on": {"a": DAY.isoformat()},
+    }
     assert "\n" in path.read_text(encoding="utf-8")
+
+
+def test_fr30_write_stamps_date_and_set_on_returns_it(monkeypatch, tmp_path):
+    """write(slot, value, set_on) stamps the date; set_on(slot) returns that date."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a"), _slot("b")])
+    _use_values(monkeypatch, tmp_path)
+    profile.load()
+    profile.write("a", "alpha", DAY)
+    assert profile.set_on("a") == DAY
+    assert isinstance(profile.set_on("a"), date)
+    assert profile.set_on("b") is None
+
+
+def test_fr30_stamp_survives_reload(monkeypatch, tmp_path):
+    """A write that fits survives a reload with its date."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    _use_values(monkeypatch, tmp_path)
+    profile.load()
+    profile.write("a", "alpha", DAY)
+    profile.load()
+    assert profile.values() == {"a": "alpha"}
+    assert profile.set_on("a") == DAY
+
+
+def test_fr30_file_is_flat_map_plus_reserved_set_on_key(monkeypatch, tmp_path):
+    """The values file is slot to text plus one reserved key _set_on of slot to YYYY-MM-DD."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a"), _slot("b")])
+    path = _use_values(monkeypatch, tmp_path)
+    profile.load()
+    profile.write("a", "alpha", DAY)
+    profile.write("b", "beta", LATER)
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "a": "alpha",
+        "b": "beta",
+        "_set_on": {"a": "2026-03-05", "b": "2026-04-20"},
+    }
+
+
+def test_fr30_set_on_never_in_values_or_render(monkeypatch, tmp_path):
+    """_set_on never renders and never appears in values()."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    _use_values(monkeypatch, tmp_path, {"a": "x", "_set_on": {"a": "2026-03-05"}})
+    profile.load()
+    assert profile.values() == {"a": "x"}
+    assert profile.render() == "a: x"
+    assert "_set_on" not in profile.render()
+    assert "2026" not in profile.render()
+
+
+def test_fr30_set_on_does_not_count_toward_cap(monkeypatch, tmp_path):
+    """_set_on never counts toward the 40-line cap: 40 stamped lines still load and write."""
+    names = _many(41)
+    _use_schema(monkeypatch, tmp_path, [_slot(x) for x in names])
+    stamps = {x: "2026-03-05" for x in names[:40]}
+    _use_values(
+        monkeypatch, tmp_path, {**{x: "v" for x in names[:40]}, "_set_on": stamps}
+    )
+    profile.load()
+    assert profile.line_count() == 40
+    profile.write(names[0], "w", LATER)
+    assert profile.line_count() == 40
+
+
+def test_fr30_file_without_set_on_loads_nothing_stamped(monkeypatch, tmp_path):
+    """A hand-written file with no _set_on loads; no slot has a date."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a"), _slot("b")])
+    _use_values(monkeypatch, tmp_path, {"a": "x", "b": "y"})
+    profile.load()
+    assert profile.values() == {"a": "x", "b": "y"}
+    assert profile.set_on("a") is None
+    assert profile.set_on("b") is None
+
+
+def test_fr30_load_does_not_rewrite_file(monkeypatch, tmp_path):
+    """Nothing is stamped at load: the file bytes are unchanged after load."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    path = _use_values(monkeypatch, tmp_path)
+    path.write_text('{ "a":   "hand written" }\n', encoding="utf-8")
+    before = path.read_bytes()
+    profile.load()
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "stamps",
+    [
+        "text",
+        ["2026-03-05"],
+        5,
+        None,
+        {"a": 20260305},
+        {"a": None},
+        {"a": "not a date"},
+        {"a": "05/03/2026"},
+    ],
+    ids=[
+        "string",
+        "list",
+        "number",
+        "null",
+        "number_date",
+        "null_date",
+        "bad_text",
+        "non_iso",
+    ],
+)
+def test_fr30_malformed_set_on_fails_naming_file(monkeypatch, tmp_path, stamps):
+    """A _set_on that is not an object of ISO date strings fails with ProfileError naming the file."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    _use_values(monkeypatch, tmp_path, {"a": "x", "_set_on": stamps})
+    with pytest.raises(profile.ProfileError) as exc:
+        profile.load()
+    assert "profile.json" in str(exc.value)
+
+
+def test_fr30_malformed_set_on_keeps_previous_profile(monkeypatch, tmp_path):
+    """A failed load because of _set_on leaves the previously loaded profile unchanged."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    path = _use_values(
+        monkeypatch, tmp_path, {"a": "good", "_set_on": {"a": "2026-03-05"}}
+    )
+    profile.load()
+    path.write_text(json.dumps({"a": "bad", "_set_on": "x"}), encoding="utf-8")
+    with pytest.raises(profile.ProfileError):
+        profile.load()
+    assert profile.values() == {"a": "good"}
+    assert profile.set_on("a") == DAY
+
+
+def test_fr30_date_for_unknown_slot_ignored_and_warned(monkeypatch, tmp_path, caplog):
+    """A date for a slot not in the schema is ignored and logged as a warning."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    _use_values(
+        monkeypatch,
+        tmp_path,
+        {"a": "x", "_set_on": {"a": "2026-03-05", "ghost": "2026-01-01"}},
+    )
+    with caplog.at_level("WARNING"):
+        profile.load()
+    assert profile.set_on("a") == DAY
+    assert profile.set_on("ghost") is None
+    assert profile.values() == {"a": "x"}
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("ghost" in r.getMessage() for r in warnings)
+
+
+def test_fr30_unknown_slot_date_not_attached_to_known_slot(monkeypatch, tmp_path):
+    """The ignored date for an unknown slot does not become a known slot's date."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    _use_values(monkeypatch, tmp_path, {"_set_on": {"ghost": "2026-01-01"}})
+    profile.load()
+    assert profile.values() == {}
+    assert profile.set_on("a") is None
+
+
+def test_fr30_schema_slot_named_set_on_refused(monkeypatch, tmp_path):
+    """A schema slot named _set_on is refused with ProfileError at schema read."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a"), _slot("_set_on")])
+    with pytest.raises(profile.ProfileError) as exc:
+        profile.load()
+    assert "_set_on" in str(exc.value)
+
+
+def test_fr30_set_on_key_as_plain_text_fails(monkeypatch, tmp_path):
+    """A values file whose _set_on is plain text (not an object) fails naming the file."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    _use_values(monkeypatch, tmp_path, {"a": "x", "_set_on": "2026-03-05"})
+    with pytest.raises(profile.ProfileError) as exc:
+        profile.load()
+    assert "profile.json" in str(exc.value)
+
+
+def test_fr30_refused_over_cap_write_keeps_file_and_stamps(monkeypatch, tmp_path):
+    """A write refused over the cap leaves file bytes, values and dates unchanged."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a"), _slot("b")])
+    path = _use_values(monkeypatch, tmp_path)
+    profile.load()
+    profile.write("a", "short", DAY)
+    before = path.read_bytes()
+    with pytest.raises(profile.ProfileError):
+        profile.write("b", " ".join(["word"] * 900), LATER)
+    assert path.read_bytes() == before
+    assert profile.values() == {"a": "short"}
+    assert profile.set_on("a") == DAY
+    assert profile.set_on("b") is None
+
+
+def test_fr30_refused_over_cap_overwrite_keeps_old_date(monkeypatch, tmp_path):
+    """A refused overwrite of a stamped slot keeps its old value and old date."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    path = _use_values(monkeypatch, tmp_path)
+    profile.load()
+    profile.write("a", "short", DAY)
+    before = path.read_bytes()
+    with pytest.raises(profile.ProfileError):
+        profile.write("a", " ".join(["word"] * 900), LATER)
+    assert path.read_bytes() == before
+    assert profile.values() == {"a": "short"}
+    assert profile.set_on("a") == DAY
+
+
+def test_fr30_refused_unknown_slot_write_keeps_file_and_stamps(monkeypatch, tmp_path):
+    """A write to an unknown slot is refused; file, values and dates are unchanged."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    path = _use_values(monkeypatch, tmp_path)
+    profile.load()
+    profile.write("a", "x", DAY)
+    before = path.read_bytes()
+    with pytest.raises(profile.ProfileError):
+        profile.write("ghost", "boo", LATER)
+    assert path.read_bytes() == before
+    assert profile.set_on("ghost") is None
+    assert profile.set_on("a") == DAY
+
+
+def test_fr30_same_value_new_date_restamps_only(monkeypatch, tmp_path):
+    """Writing the same value again with a new date re-stamps it and changes nothing else."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a"), _slot("b")])
+    path = _use_values(monkeypatch, tmp_path)
+    profile.load()
+    profile.write("a", "alpha", DAY)
+    profile.write("b", "beta", DAY)
+    render_before = profile.render()
+    profile.write("a", "alpha", LATER)
+    assert profile.values() == {"a": "alpha", "b": "beta"}
+    assert profile.render() == render_before
+    assert profile.set_on("a") == LATER
+    assert profile.set_on("b") == DAY
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "a": "alpha",
+        "b": "beta",
+        "_set_on": {"a": "2026-04-20", "b": "2026-03-05"},
+    }
+    profile.load()
+    assert profile.set_on("a") == LATER
+    assert profile.set_on("b") == DAY
+
+
+def test_fr30_write_to_hand_written_file_keeps_other_slots_unstamped(
+    monkeypatch, tmp_path
+):
+    """Writing one slot into a file with no _set_on stamps only that slot."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a"), _slot("b")])
+    _use_values(monkeypatch, tmp_path, {"a": "x"})
+    profile.load()
+    profile.write("b", "y", DAY)
+    profile.load()
+    assert profile.values() == {"a": "x", "b": "y"}
+    assert profile.set_on("a") is None
+    assert profile.set_on("b") == DAY
