@@ -1,5 +1,6 @@
 import json
 import logging
+import textwrap
 
 from server import config
 
@@ -63,13 +64,35 @@ def _read_values(known: set[str]) -> dict[str, str]:
     return {slot: value for slot, value in raw.items() if slot in known}
 
 
+def _render_lines(schema: list[dict], values: dict[str, str]) -> list[str]:
+    """The lines that enter the system instruction. Wrapping at PROFILE_LINE_CHARS is
+    what makes the cap a size limit: one slot is not one line however long (FR-28)."""
+    lines: list[str] = []
+    for slot in schema:
+        value = values.get(slot["name"], "").strip()
+        if value:
+            lines += textwrap.wrap(
+                f"{slot['name']}: {value}", width=config.PROFILE_LINE_CHARS
+            )
+    return lines
+
+
+def _check_cap(lines: list[str]) -> None:
+    if len(lines) > config.PROFILE_MAX_LINES:
+        raise ProfileError(
+            f"profile renders {len(lines)} lines, over the cap of "
+            f"{config.PROFILE_MAX_LINES}: shorten or remove a value"
+        )
+
+
 def load() -> None:
     """Read the schema and the values into memory; raises ProfileError if either is
-    malformed (FR-26, FR-27)."""
+    malformed or the rendered profile is over the cap (FR-26, FR-27, FR-28)."""
     global _slots, _values
     schema = _read_schema()
-    _values = _read_values({slot["name"] for slot in schema})
-    _slots = schema
+    new_values = _read_values({slot["name"] for slot in schema})
+    _check_cap(_render_lines(schema, new_values))
+    _slots, _values = schema, new_values
 
 
 def slots() -> list[dict]:
@@ -78,3 +101,11 @@ def slots() -> list[dict]:
 
 def values() -> dict[str, str]:
     return dict(_values)
+
+
+def render() -> str:
+    return "\n".join(_render_lines(_slots, _values))
+
+
+def line_count() -> int:
+    return len(_render_lines(_slots, _values))

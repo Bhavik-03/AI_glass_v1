@@ -216,3 +216,146 @@ def test_fr27_malformed_values_raise_error_naming_file(monkeypatch, tmp_path, co
     with pytest.raises(profile.ProfileError) as exc:
         profile.load()
     assert "profile.json" in str(exc.value)
+
+
+def _many(n: int) -> list[str]:
+    return [f"s{i}" for i in range(n)]
+
+
+def _load_many(monkeypatch, tmp_path, n: int, value="v") -> None:
+    names = _many(n)
+    _use_schema(monkeypatch, tmp_path, [_slot(x) for x in names])
+    _use_values(monkeypatch, tmp_path, {x: value for x in names})
+    profile.load()
+
+
+def test_fr28_one_line_per_non_empty_slot_in_schema_order(monkeypatch, tmp_path):
+    """render() gives one line per non-empty slot, as '<name>: <value>', in schema order."""
+    _use_schema(monkeypatch, tmp_path, [_slot("b"), _slot("a"), _slot("c")])
+    _use_values(monkeypatch, tmp_path, {"a": "alpha", "b": "beta", "c": "gamma"})
+    profile.load()
+    assert profile.render() == "b: beta\na: alpha\nc: gamma"
+    assert profile.line_count() == 3
+
+
+def test_fr28_empty_profile_renders_nothing(monkeypatch, tmp_path):
+    """An empty profile renders nothing: empty string, zero lines."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    _use_values(monkeypatch, tmp_path)
+    profile.load()
+    assert profile.render() == ""
+    assert profile.line_count() == 0
+
+
+def test_fr28_empty_and_whitespace_slots_render_nothing(monkeypatch, tmp_path):
+    """A slot whose value is empty or whitespace-only renders nothing."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a"), _slot("b"), _slot("c")])
+    _use_values(monkeypatch, tmp_path, {"a": "", "b": "  \n\t", "c": "kept"})
+    profile.load()
+    assert profile.render() == "c: kept"
+
+
+def test_fr28_half_empty_ten_slots_render_five_lines(monkeypatch, tmp_path):
+    """A file with 10 slots of which half are empty renders only 5 lines."""
+    _use_schema(monkeypatch, tmp_path, [_slot(x) for x in DEFAULT_NAMES])
+    values = {x: ("text" if i % 2 == 0 else "") for i, x in enumerate(DEFAULT_NAMES)}
+    _use_values(monkeypatch, tmp_path, values)
+    profile.load()
+    assert len(profile.render().split("\n")) == 5
+    assert profile.line_count() == 5
+
+
+def test_fr28_slot_removed_from_schema_never_renders(monkeypatch, tmp_path):
+    """A slot removed from the schema never renders, even if the file still has its value."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    _use_values(monkeypatch, tmp_path, {"a": "kept", "ghost": "dropped"})
+    profile.load()
+    out = profile.render()
+    assert "ghost" not in out
+    assert "dropped" not in out
+    assert out == "a: kept"
+
+
+def test_fr28_long_value_wraps_without_losing_text(monkeypatch, tmp_path):
+    """Long values wrap at PROFILE_LINE_CHARS: several lines, each <= 100 chars, no text lost."""
+    words = [f"word{i}" for i in range(80)]
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    _use_values(monkeypatch, tmp_path, {"a": " ".join(words)})
+    profile.load()
+    lines = profile.render().split("\n")
+    assert len(lines) > 1
+    assert all(len(line) <= config.PROFILE_LINE_CHARS for line in lines)
+    assert profile.line_count() == len(lines)
+    assert lines[0].startswith("a: ")
+    joined = " ".join(lines)[len("a: ") :].split()
+    assert joined == words
+
+
+def test_fr28_wrap_width_follows_config(monkeypatch, tmp_path):
+    """The wrap width is config.PROFILE_LINE_CHARS, not a fixed number."""
+    monkeypatch.setattr("server.config.PROFILE_LINE_CHARS", 30)
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    _use_values(monkeypatch, tmp_path, {"a": " ".join(["word"] * 20)})
+    profile.load()
+    lines = profile.render().split("\n")
+    assert len(lines) > 1
+    assert all(len(line) <= 30 for line in lines)
+
+
+def test_fr28_41_rendered_lines_fail_load_naming_cap(monkeypatch, tmp_path):
+    """A profile rendering 41 lines fails at load with a message naming the cap (40)."""
+    with pytest.raises(profile.ProfileError) as exc:
+        _load_many(monkeypatch, tmp_path, 41)
+    assert "40" in str(exc.value)
+
+
+def test_fr28_40_rendered_lines_load(monkeypatch, tmp_path):
+    """A profile rendering exactly 40 lines loads."""
+    _load_many(monkeypatch, tmp_path, 40)
+    assert profile.line_count() == 40
+    assert len(profile.render().split("\n")) == 40
+
+
+def test_fr28_cap_counts_rendered_lines_not_file_lines(monkeypatch, tmp_path):
+    """Fewer file lines than the cap can still go over it: 4,500 chars in one slot wrap to over 40 lines."""
+    value = " ".join(["word"] * 900)
+    assert len(value) >= 4000
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    path = _use_values(monkeypatch, tmp_path, {"a": value})
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 1
+    with pytest.raises(profile.ProfileError) as exc:
+        profile.load()
+    assert "40" in str(exc.value)
+
+
+def test_fr28_empty_slots_do_not_count_toward_cap(monkeypatch, tmp_path):
+    """Empty slots render nothing, so 45 slots with 40 filled still load."""
+    names = _many(45)
+    _use_schema(monkeypatch, tmp_path, [_slot(x) for x in names])
+    _use_values(
+        monkeypatch, tmp_path, {x: ("v" if i < 40 else "") for i, x in enumerate(names)}
+    )
+    profile.load()
+    assert profile.line_count() == 40
+
+
+def test_fr28_cap_follows_config(monkeypatch, tmp_path):
+    """The cap is config.PROFILE_MAX_LINES: lowered to 3, four lines fail and three load."""
+    monkeypatch.setattr("server.config.PROFILE_MAX_LINES", 3)
+    _load_many(monkeypatch, tmp_path, 3)
+    with pytest.raises(profile.ProfileError) as exc:
+        _load_many(monkeypatch, tmp_path, 4)
+    assert "3" in str(exc.value)
+
+
+def test_fr28_failed_load_keeps_previous_profile(monkeypatch, tmp_path):
+    """A failed load leaves the previously loaded profile unchanged."""
+    _use_schema(monkeypatch, tmp_path, [_slot("a")])
+    path = _use_values(monkeypatch, tmp_path, {"a": "good"})
+    profile.load()
+    before = profile.render()
+    path.write_text(json.dumps({"a": " ".join(["word"] * 900)}), encoding="utf-8")
+    with pytest.raises(profile.ProfileError):
+        profile.load()
+    assert profile.render() == before == "a: good"
+    assert profile.values() == {"a": "good"}
