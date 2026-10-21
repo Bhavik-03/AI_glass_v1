@@ -50,6 +50,17 @@ GRADE_INSTRUCTION = """You grade one spoken answer to a quiz question about a co
 The answer was transcribed by speech recognition: judge its meaning and ignore speech recognition errors, such as misheard or misspelled words.
 Reply as JSON: correct is true when the answer shows the concept's meaning, otherwise false. feedback is one short line: right or wrong plus a short correction when wrong. It is spoken aloud, so use plain words."""
 
+WRITER_INSTRUCTION = """{profile}You read one finished conversation between a user and a voice assistant and decide what, if anything, is worth remembering about the user.
+Now: {weekday} {day} {month_year} ({iso}), time zone {timezone}.
+Decide first, then word. For each candidate, first ask: would this still matter in a month? Only if it would, keep it, and only then write it as one key point of at most {memory_words} words. Never shorten a point by dropping a "not".
+Keep 0 to {max_points} points, most important first. Keeping nothing is the normal result: small talk, jokes, a passing question, a general-knowledge answer, a request to be quizzed, a question restated and the assistant asking whether the month goal still holds are not worth keeping.
+A dated event is not kept: "I have an interview next week" will not matter in a month. A standing fact behind it is kept: if the conversation shows that interview preparation is where the user's time is going, keep that ("preparing for interviews, most study time goes there"). Dated events belong to a planner, not to memory.
+Keep only what the user said about themselves, their work, their preferences or their decisions, never something only the assistant said. Keep nothing the profile above already says.
+Types: fact (about the user), project (what they are building or studying), preference (how they like things done), session (what was worked on, only when it will matter later). Two different things are two points: never reuse the wording of one point for a different point.
+Reply as JSON with one key, "points": a list of objects with "text" and "type". It is an empty list when nothing is worth keeping."""
+
+WRITER_PROFILE_HEADER = "Already known about the user (do not keep any of it again):"
+
 SKIPPED_RESULT = {
     "error": "skipped: no time left; tell the user you could not look it up, do not guess"
 }
@@ -265,3 +276,57 @@ def grade(name: str, summary: str, answer: str) -> dict:
     ):
         raise RuntimeError("grading reply lacks correct and feedback")
     return {"correct": graded["correct"], "feedback": graded["feedback"].strip()}
+
+
+def writer_instruction(now: datetime) -> str:
+    """The session writer's instruction: the profile, the clock and the salience rule (FR-28,
+    FR-39). Unlike the main instruction it never carries stored memories."""
+    rendered = profile.render()
+    return WRITER_INSTRUCTION.format(
+        profile=f"{WRITER_PROFILE_HEADER}\n{rendered}\n" if rendered else "",
+        weekday=now.strftime("%A"),
+        day=now.day,
+        month_year=now.strftime("%B %Y"),
+        iso=now.isoformat(timespec="seconds"),
+        timezone=config.TIMEZONE,
+        memory_words=config.MEMORY_MAX_WORDS,
+        max_points=config.WRITER_MAX_POINTS,
+    )
+
+
+def _valid_point(point: object) -> bool:
+    return (
+        isinstance(point, dict)
+        and isinstance(point.get("text"), str)
+        and bool(point["text"].strip())
+        and point.get("type") in tools.MEMORY_TYPES
+    )
+
+
+def write_memories(turns: Sequence[dict], now: datetime) -> list[dict]:
+    """Review a finished session in one Gemini call without tools and return up to
+    WRITER_MAX_POINTS key points as [{text, type}] (FR-39). The reply is only checked for
+    shape: the word limit and over-merge guard are the store's."""
+    request = types.GenerateContentConfig(
+        system_instruction=writer_instruction(now),
+        response_mime_type="application/json",
+        thinking_config=types.ThinkingConfig(thinking_level=config.LLM_THINKING_LEVEL),
+    )
+    prompt = "\n".join(
+        f"User: {turn['question']}\nAssistant: {turn['answer']}" for turn in turns
+    )
+    response = _get_client().models.generate_content(
+        model=config.LLM_MODEL, contents=prompt, config=request
+    )
+    try:
+        reply = json.loads(response.text)
+    except (TypeError, ValueError) as e:
+        raise RuntimeError("writer reply is not JSON") from e
+    if not (isinstance(reply, dict) and isinstance(reply.get("points"), list)):
+        raise RuntimeError("writer reply lacks a points list")  # noqa: TRY004  one error type for any unusable reply
+    points = [
+        {"text": p["text"].strip(), "type": p["type"]}
+        for p in reply["points"]
+        if _valid_point(p)
+    ]
+    return points[: config.WRITER_MAX_POINTS]
