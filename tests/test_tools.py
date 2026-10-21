@@ -1795,3 +1795,175 @@ def test_fr29_setup_refusal_text_has_reason_and_question():
     text = tools.setup_refusal_text("profile is too long", SETUP_QUESTION)
     assert "profile is too long" in text
     assert SETUP_QUESTION in text
+
+
+# --- propose_profile_update tool (FR-31) ---
+
+PROPOSE_SLOTS = [
+    {"name": "identity", "description": "who", "question": "Who are you?"},
+    {"name": "goal_now", "description": "goal", "question": "Your goal?"},
+]
+
+
+def _propose_profile(monkeypatch, tmp_path, values=None, write_file=True):
+    """Two known slots; values file under tmp_path (written only if write_file)."""
+    import json
+
+    from server import profile
+
+    path = tmp_path / "profile.json"
+    monkeypatch.setattr(config, "PROFILE_VALUES_PATH", path)
+    monkeypatch.setattr(profile, "_slots", [dict(s) for s in PROPOSE_SLOTS])
+    monkeypatch.setattr(profile, "_values", dict(values or {}))
+    if write_file:
+        path.write_text(json.dumps(values or {}), encoding="utf-8")
+    return path
+
+
+def test_fr31_declares_propose_profile_update_last_with_required_slot_and_value():
+    """FR-31: propose_profile_update is declared last, requiring string 'slot' and 'value'."""
+    assert tools.DECLARATIONS[-1]["name"] == "propose_profile_update"
+    schema = declaration("propose_profile_update")["parameters_json_schema"]
+    assert set(schema["required"]) == {"slot", "value"}
+    assert schema["properties"]["slot"]["type"].lower() == "string"
+    assert schema["properties"]["value"]["type"].lower() == "string"
+    assert declaration("propose_profile_update")["description"].strip()
+
+
+def test_fr31_propose_records_pending_update_and_returns_pending(
+    monkeypatch, tmp_path, fixed_now
+):
+    """FR-31: a valid call returns {slot, value (stripped), pending: True} and records the update proposal."""
+    _propose_profile(monkeypatch, tmp_path)
+    out = tools.run(
+        "propose_profile_update",
+        {"slot": "goal_now", "value": "  crack interviews  "},
+        fixed_now,
+    )
+    assert out == {"slot": "goal_now", "value": "crack interviews", "pending": True}
+    assert session.proposal(fixed_now) == {
+        "kind": "update",
+        "slot": "goal_now",
+        "value": "crack interviews",
+    }
+
+
+def test_fr31_second_proposal_replaces_the_first(monkeypatch, tmp_path, fixed_now):
+    """FR-31: a second proposal replaces the first pending one."""
+    _propose_profile(monkeypatch, tmp_path)
+    tools.run("propose_profile_update", {"slot": "goal_now", "value": "a"}, fixed_now)
+    tools.run("propose_profile_update", {"slot": "identity", "value": "b"}, fixed_now)
+    assert session.proposal(fixed_now) == {
+        "kind": "update",
+        "slot": "identity",
+        "value": "b",
+    }
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"slot": "nope", "value": "x"},
+        {"slot": "goal_now"},
+        {"slot": "goal_now", "value": ""},
+        {"slot": "goal_now", "value": "   "},
+        {"slot": "goal_now", "value": 5},
+        {"slot": "goal_now", "value": None},
+        {"value": "x"},
+        {"slot": 3, "value": "x"},
+        {"slot": None, "value": "x"},
+    ],
+    ids=[
+        "unknown-slot",
+        "missing-value",
+        "empty-value",
+        "blank-value",
+        "non-text-value",
+        "none-value",
+        "missing-slot",
+        "non-string-slot",
+        "none-slot",
+    ],
+)
+def test_fr31_propose_bad_arguments_return_error_and_no_proposal(
+    monkeypatch, tmp_path, fixed_now, args
+):
+    """FR-31: unknown slot, bad value or bad slot returns {error} and leaves no pending proposal."""
+    _propose_profile(monkeypatch, tmp_path)
+    out = tools.run("propose_profile_update", args, fixed_now)
+    assert list(out) == ["error"]
+    assert isinstance(out["error"], str) and out["error"]
+    assert session.proposal(fixed_now) is None
+
+
+def test_fr31_propose_declined_slot_returns_error_other_slot_works(
+    monkeypatch, tmp_path, fixed_now
+):
+    """FR-31: a slot declined this session returns {error}; a different slot still works."""
+    _propose_profile(monkeypatch, tmp_path)
+    session.decline("goal_now")
+    out = tools.run(
+        "propose_profile_update", {"slot": "goal_now", "value": "x"}, fixed_now
+    )
+    assert list(out) == ["error"]
+    assert session.proposal(fixed_now) is None
+    ok = tools.run(
+        "propose_profile_update", {"slot": "identity", "value": "y"}, fixed_now
+    )
+    assert ok == {"slot": "identity", "value": "y", "pending": True}
+
+
+def test_fr31_propose_error_keeps_existing_pending_proposal(
+    monkeypatch, tmp_path, fixed_now
+):
+    """FR-31: an error result does not clobber an existing pending proposal."""
+    _propose_profile(monkeypatch, tmp_path)
+    tools.run("propose_profile_update", {"slot": "goal_now", "value": "a"}, fixed_now)
+    out = tools.run("propose_profile_update", {"slot": "nope", "value": "b"}, fixed_now)
+    assert "error" in out
+    assert session.proposal(fixed_now) == {
+        "kind": "update",
+        "slot": "goal_now",
+        "value": "a",
+    }
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"slot": "goal_now", "value": "new goal"},
+        {"slot": "nope", "value": "new goal"},
+        {"slot": "goal_now", "value": " "},
+    ],
+    ids=["success", "unknown-slot", "blank-value"],
+)
+def test_fr31_propose_writes_nothing_to_the_profile(
+    monkeypatch, tmp_path, fixed_now, args
+):
+    """FR-31: the tool never writes: file bytes, values() and set_on() are unchanged."""
+    from datetime import date
+
+    from server import profile
+
+    path = _propose_profile(monkeypatch, tmp_path, write_file=False)
+    profile.write("goal_now", "old goal", date(2026, 10, 1))
+    bytes_before = path.read_bytes()
+    values_before = profile.values()
+    set_on_before = profile.set_on("goal_now")
+
+    tools.run("propose_profile_update", args, fixed_now)
+
+    assert path.read_bytes() == bytes_before
+    assert profile.values() == values_before
+    assert profile.set_on("goal_now") == set_on_before
+
+
+def test_fr31_propose_creates_no_values_file(monkeypatch, tmp_path, fixed_now):
+    """FR-31: with no values file, a proposal leaves it missing."""
+    path = _propose_profile(monkeypatch, tmp_path, write_file=False)
+    assert not path.exists()
+    out = tools.run(
+        "propose_profile_update", {"slot": "goal_now", "value": "x"}, fixed_now
+    )
+    assert out["pending"] is True
+    assert not path.exists()

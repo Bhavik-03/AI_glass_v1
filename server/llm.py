@@ -36,6 +36,7 @@ offset, based on the time above.
 - Never reuse an existing memory's wording for a different point: two things that are not the same thing are two memories.
 - You cannot wipe all memories. If the user asks to delete or clear everything in any other wording ("delete all my memories", "clear everything"), tell them to say "{wipe_phrase}" exactly.
 - Never put memory content in a web_search query.
+- To change a profile slot, when the user asks to change one or their own words repeatedly contradict it, call propose_profile_update with the slot and the new value, then ask in one sentence for a yes, repeating the new value. You have no tool that writes a slot: a write happens only if the user says yes next. A single mention is not enough to propose. Never propose a slot the user declined.
 Existing concept names: {concept_names}"""
 
 PROFILE_HEADER = (

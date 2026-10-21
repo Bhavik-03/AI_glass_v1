@@ -1855,3 +1855,110 @@ def test_fr28_instruction_separates_profile_questions_from_memory_recall(
     assert "answered from the profile, not from memories" in memory_rule
     assert "do not know about that" in memory_rule
     assert "never means you know nothing about the user" in memory_rule
+
+
+# --- propose_profile_update rule and loop (FR-31) ---
+
+
+def _propose_rule() -> str:
+    rules = llm.system_instruction(fixed_now()).split("You are a voice assistant.")[1]
+    return next(line for line in rules.splitlines() if "propose_profile_update" in line)
+
+
+def test_fr31_instruction_propose_when_asked_or_repeated_contradiction() -> None:
+    """The rule names propose_profile_update for a requested slot change or words that repeatedly contradict a slot."""
+    rule = _propose_rule().lower()
+    assert "ask" in rule
+    assert "contradict" in rule
+    assert "repeated" in rule
+
+
+def test_fr31_instruction_asks_for_a_yes_repeating_the_new_value() -> None:
+    """After proposing, ask for a yes in one sentence that repeats the new value."""
+    rule = _propose_rule().lower()
+    assert "yes" in rule
+    assert "one sentence" in rule
+    assert "new value" in rule
+
+
+def test_fr31_instruction_no_tool_writes_a_slot_and_yes_next_writes() -> None:
+    """The rule says no tool writes a slot and a write happens only if the user says yes next."""
+    rule = _propose_rule()
+    assert "no tool that writes a slot" in rule
+    assert "next" in rule.lower()
+
+
+def test_fr31_instruction_never_propose_declined_slot() -> None:
+    """The rule forbids proposing a slot the user declined."""
+    assert "declined" in _propose_rule()
+
+
+def test_fr31_instruction_single_mention_is_not_enough() -> None:
+    """The rule says a single mention is not enough to propose."""
+    assert "single mention" in _propose_rule()
+
+
+def test_fr31_instruction_keeps_earlier_rules(monkeypatch, tmp_path) -> None:
+    """Profile header first, the #145 scoping sentence, the 3-sentence/60-word rule and the wipe rule stay."""
+    _filled(monkeypatch, tmp_path)
+    text = llm.system_instruction(fixed_now())
+    assert text.startswith(text.split("You are a voice assistant.")[0])
+    assert IDENTITY_LINE in text.split("You are a voice assistant.")[0]
+    assert (
+        "An empty memory store never means you know nothing about the user when the profile covers it"
+        in text
+    )
+    assert "3 sentences" in text
+    assert "60 words" in text
+    assert "clear everything" in text
+
+
+def test_fr31_request_declarations_include_propose_profile_update(
+    monkeypatch,
+) -> None:
+    """The declarations sent to Gemini include propose_profile_update."""
+    fake = install_fake(monkeypatch, [text_response("answer")])
+    llm.ask("hi", fixed_now())
+    sent = [
+        d.name for d in fake.models.calls[0]["config"].tools[0].function_declarations
+    ]
+    assert "propose_profile_update" in sent
+
+
+def test_fr31_propose_call_logged_ok_and_pending_reaches_model(
+    monkeypatch, tmp_path
+) -> None:
+    """A propose_profile_update call is logged ok without a memories key and the model sees pending True."""
+    from server import profile
+
+    monkeypatch.setattr(profile, "_slots", [dict(s) for s in PROFILE_SCHEMA])
+    monkeypatch.setattr(profile, "_values", {})
+    monkeypatch.setattr(config, "PROFILE_VALUES_PATH", tmp_path / "profile.json")
+    args = {"slot": "goal", "value": "learn robotics"}
+    fake = _one_call_then_text(monkeypatch, "propose_profile_update", args)
+    answer, _, tool_calls = llm.ask("change my goal to robotics", fixed_now())
+    assert answer == "done"
+    assert tool_calls == [
+        {"name": "propose_profile_update", "args": args, "status": "ok"}
+    ]
+    assert "memories" not in tool_calls[0]
+    sent = response_of(fake.models.calls[1]["contents"][2])
+    assert sent["pending"] is True
+    assert sent["slot"] == "goal"
+    assert sent["value"] == "learn robotics"
+
+
+def test_fr31_propose_unknown_slot_logged_failed(monkeypatch, tmp_path) -> None:
+    """An unknown slot gives an error result, logged as status failed with no memories key."""
+    from server import profile
+
+    monkeypatch.setattr(profile, "_slots", [dict(s) for s in PROFILE_SCHEMA])
+    monkeypatch.setattr(profile, "_values", {})
+    monkeypatch.setattr(config, "PROFILE_VALUES_PATH", tmp_path / "profile.json")
+    args = {"slot": "nope", "value": "x"}
+    fake = _one_call_then_text(monkeypatch, "propose_profile_update", args)
+    _, _, tool_calls = llm.ask("change nope", fixed_now())
+    assert tool_calls == [
+        {"name": "propose_profile_update", "args": args, "status": "failed"}
+    ]
+    assert "error" in response_of(fake.models.calls[1]["contents"][2])
