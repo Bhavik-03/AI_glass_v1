@@ -50,12 +50,14 @@ GRADE_INSTRUCTION = """You grade one spoken answer to a quiz question about a co
 The answer was transcribed by speech recognition: judge its meaning and ignore speech recognition errors, such as misheard or misspelled words.
 Reply as JSON: correct is true when the answer shows the concept's meaning, otherwise false. feedback is one short line: right or wrong plus a short correction when wrong. It is spoken aloud, so use plain words."""
 
+# The writer is not shown the store, so the "already stored" rule is the only thing keeping a
+# "remember that X" turn from being stored twice in different words (find_same is near-verbatim).
 WRITER_INSTRUCTION = """{profile}You read one finished conversation between a user and a voice assistant and decide what, if anything, is worth remembering about the user.
 Now: {weekday} {day} {month_year} ({iso}), time zone {timezone}.
 Decide first, then word. For each candidate, first ask: would this still matter in a month? Only if it would, keep it, and only then write it as one key point of at most {memory_words} words. Never shorten a point by dropping a "not".
-Keep 0 to {max_points} points, most important first. Keeping nothing is the normal result: small talk, jokes, a passing question, a general-knowledge answer, a request to be quizzed, a question restated and the assistant asking whether the month goal still holds are not worth keeping.
+Keep 0 to {max_points} points, most important first. Keeping nothing is the normal result. None of these is worth keeping: small talk; jokes; a passing question; a general-knowledge answer; a request to be quizzed; a question the user simply restated; the assistant's own question about whether the month goal still holds.
 A dated event is not kept: "I have an interview next week" will not matter in a month. A standing fact behind it is kept: if the conversation shows that interview preparation is where the user's time is going, keep that ("preparing for interviews, most study time goes there"). Dated events belong to a planner, not to memory.
-Keep only what the user said about themselves, their work, their preferences or their decisions, never something only the assistant said. Keep nothing the profile above already says.
+Keep only what the user said about themselves, their work, their preferences or their decisions, never something only the assistant said. Anything the user explicitly asked the assistant to remember during this conversation is already stored. Do not keep it again. Keep nothing the profile above already says.
 Types: fact (about the user), project (what they are building or studying), preference (how they like things done), session (what was worked on, only when it will matter later). Two different things are two points: never reuse the wording of one point for a different point.
 Reply as JSON with one key, "points": a list of objects with "text" and "type". It is an empty list when nothing is worth keeping."""
 

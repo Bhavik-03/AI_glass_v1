@@ -2140,6 +2140,35 @@ def test_fr40_writer_instruction_forbids_reusing_wording_for_a_different_point(
     assert "never reuse the wording of one point for a different point" in text
 
 
+def test_fr39_writer_instruction_lists_what_is_not_kept_as_separate_items(
+    monkeypatch,
+) -> None:
+    """The not-worth-keeping list is a semicolon list whose last two items stay apart."""
+    text = _writer_call(monkeypatch)["config"].system_instruction
+    assert (
+        "None of these is worth keeping: small talk; jokes; a passing question; "
+        "a general-knowledge answer; a request to be quizzed; "
+        "a question the user simply restated; "
+        "the assistant's own question about whether the month goal still holds."
+    ) in text
+
+
+def test_fr39_writer_instruction_skips_what_the_user_asked_to_remember(
+    monkeypatch,
+) -> None:
+    """Anything the user explicitly asked to remember is already stored, so the writer does
+    not keep it again; the writer is not shown the store, and find_same only catches
+    near-verbatim repeats."""
+    text = _writer_call(monkeypatch)["config"].system_instruction
+    assert (
+        "Anything the user explicitly asked the assistant to remember during this "
+        "conversation is already stored. Do not keep it again."
+    ) in text
+    assert text.index("never something only the assistant said") < text.index(
+        "already stored"
+    )
+
+
 def test_fr28_writer_request_carries_profile(monkeypatch, tmp_path) -> None:
     """With a filled profile the writer request's instruction carries every non-empty slot line."""
     _filled(monkeypatch, tmp_path)
