@@ -1837,3 +1837,21 @@ def test_fr28_grade_instruction_unchanged_with_filled_profile(
     assert sent == llm.GRADE_INSTRUCTION
     assert IDENTITY_LINE not in sent
     assert GOAL_LINE not in sent
+
+
+def test_fr28_instruction_separates_profile_questions_from_memory_recall(
+    monkeypatch, tmp_path
+) -> None:
+    """The profile is always true and answers questions about the user; the "say you do
+    not know" rule covers memories only, and an empty store never denies the profile."""
+    _filled(monkeypatch, tmp_path)
+    text = llm.system_instruction(fixed_now())
+    header, rules = text.split("You are a voice assistant.")
+    assert "always true" in header
+    assert "who the user is" in header
+    memory_rule = next(
+        line for line in rules.splitlines() if line.startswith("- Call search_memories")
+    )
+    assert "answered from the profile, not from memories" in memory_rule
+    assert "do not know about that" in memory_rule
+    assert "never means you know nothing about the user" in memory_rule

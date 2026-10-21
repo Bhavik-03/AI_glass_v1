@@ -340,7 +340,11 @@ FR-26 onwards are new in v3.
   answers the user: the main `/query` call and the session writer. Not the quiz grader, which
   judges one concept answer and gains nothing from the profile. It is capped at `PROFILE_MAX_LINES` (40) **rendered** lines —
   the lines that enter the instruction, not lines in the file. The cap is checked at load
-  and at every write. Going over it is an error, not a silent truncation
+  and at every write. Going over it is an error, not a silent truncation.
+  The profile is always available and always true. A question about who the user is, their
+  goals, their background or their preferences is answered from the profile, not from the memory
+  store. The FR-37 rule about answering only from retrieved items applies to past conversations
+  and stored facts, not to the profile
 - Input → Output: Profile → part of every system instruction
 - Acceptance: A query made with a filled profile has every non-empty slot in the request
   (fake client); a profile rendering 41 lines fails at load with a clear message naming the
@@ -447,7 +451,7 @@ FR-26 onwards are new in v3.
   the request still carries at most 5; no code path puts the full store in a request or in a
   `web_search` query; replacing the search implementation behind the interface needs no
   change in its callers; in the eval, the right memory is in the top 5 for at least 90% of
-  20 recall questions and the spoken answer is correct for at least 17 of 20
+  20 recall questions and the spoken answer is correct for at least 17 of 20; a question answerable from the profile is answered from it even when the memory store returns nothing
 
 ### FR-38 Time filter
 
