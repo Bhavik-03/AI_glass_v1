@@ -2022,3 +2022,16 @@ def test_fr39_cancel_reminder_refuses_a_notice_and_keeps_it_pending(db, fixed_no
     out = tools.run("cancel_reminder", {"id": nid}, fixed_now)
     assert "error" in out
     assert [r["id"] for r in store.list_due(FIXED_ISO)] == [nid]
+
+
+def test_fr39_remember_tool_is_not_guarded_by_the_session(db, fixed_now):
+    """FR-39: the grounding guard is the writer path only: tools.run remember
+    stores words found in no session turn (the session is empty)."""
+    out = tools.run(
+        "remember",
+        {"text": "fingerprint sensor project", "type": "project"},
+        fixed_now,
+    )
+    assert "error" not in out
+    assert memory_count(db) == 1
+    assert memory_rows_in_db(db)[0][0] == "fingerprint sensor project"

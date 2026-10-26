@@ -1,4 +1,6 @@
+import json
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -1892,3 +1894,160 @@ def test_fr39_ack_of_notice_marks_delivered_and_leaves_list_due(db):
     assert result["id"] == notice["id"]
     assert status_of(db, notice["id"]) == store.DELIVERED
     assert store.list_due(NOW) == []
+
+
+# --- writer guard: judge_point (FR-39, FR-40) ---
+
+T6_FIXTURE = json.loads(
+    (Path(__file__).parent / "fixtures" / "t6_pairs.json").read_text(encoding="utf-8")
+)
+T6_PROFILE_TEXT = " ".join(T6_FIXTURE["profile"].values())
+T6_PAIRS = {p["id"]: p for p in T6_FIXTURE["pairs"]}
+HELD_OUT_PROFILE = (
+    "Final-year electronics engineering student in Pune "
+    "Work on embedded machine learning"
+)
+LEAK_USER = (
+    "My PCB submission for the sensor board is due on the 28th, so I need to "
+    "check the footprint library. The connector ones. I've been building this "
+    "sensor board for a climate logger all semester, it's my main project."
+)
+
+
+def t6_params():
+    return [
+        pytest.param(
+            p,
+            id=f"pair-{p['id']}-{p['group']}"
+            + ("-known-limit" if p["known_limit"] else ""),
+        )
+        for p in T6_FIXTURE["pairs"]
+    ]
+
+
+def judge_pair(pair_id: int) -> dict:
+    pair = T6_PAIRS[pair_id]
+    return store.judge_point(
+        pair["point"], " ".join(pair["user_turns"]), T6_PROFILE_TEXT
+    )
+
+
+def test_fr39_t6_fixture_has_34_pairs():
+    """The frozen T6 fixture holds 34 pairs."""
+    assert len(T6_FIXTURE["pairs"]) == 34
+
+
+@pytest.mark.parametrize("pair", t6_params())
+def test_fr39_judge_point_matches_t6_expected_verdict(pair):
+    """Each T6 pair gets its expected verdict. Known-limit pairs (D, E, F19, J:
+    fabrications that share a word) are expected to PASS the guard (verdict
+    None) although wrong by meaning."""
+    got = store.judge_point(
+        pair["point"], " ".join(pair["user_turns"]), T6_PROFILE_TEXT
+    )
+    assert got["verdict"] == pair["expected"]
+
+
+def test_fr39_judge_point_held_out_f_is_ungrounded():
+    """A fabricated point sharing no stem with the user's words is ungrounded (held-out f)."""
+    got = store.judge_point(
+        "Working on a fingerprint-sensor project",
+        "How do I read a CSV file in Python? Okay, how do I skip the header row?",
+        HELD_OUT_PROFILE,
+    )
+    assert got["verdict"] == "ungrounded"
+
+
+def test_fr39_judge_point_held_out_f2_is_ungrounded():
+    """A fabricated point sharing no stem with the user's words is ungrounded (held-out f2)."""
+    got = store.judge_point(
+        "Maintaining a Rust compiler fork",
+        "How do I undo my last git commit? Okay, and how do I rename a branch?",
+        HELD_OUT_PROFILE,
+    )
+    assert got["verdict"] == "ungrounded"
+
+
+def test_fr39_judge_point_held_out_leak_is_known_with_leaked_stems():
+    """A point that copies two profile words the user never said is known, leak == final, year."""
+    got = store.judge_point(
+        "Building a climate logger sensor board as final-year project",
+        LEAK_USER,
+        HELD_OUT_PROFILE,
+    )
+    assert got["verdict"] == "known"
+    assert got["leak"] == ["final", "year"]
+
+
+def test_fr39_judge_point_held_out_legitimate_point_passes():
+    """The same point without the leaked profile words passes (verdict None)."""
+    got = store.judge_point(
+        "Building a climate logger sensor board as main project",
+        LEAK_USER,
+        HELD_OUT_PROFILE,
+    )
+    assert got["verdict"] is None
+
+
+def test_fr39_judge_point_returns_scores_and_leak_for_pair_22():
+    """Pair 22 scores grounded 0.6, known 0.6 and leak == build, vehicl."""
+    got = judge_pair(22)
+    assert set(got) == {"verdict", "grounded", "known", "leak"}
+    assert got["grounded"] == pytest.approx(0.6)
+    assert got["known"] == pytest.approx(0.6)
+    assert got["leak"] == ["build", "vehicl"]
+
+
+def test_fr39_judge_point_empty_profile_never_gives_known():
+    """With an empty profile_text the verdict is never known."""
+    pair = T6_PAIRS[22]
+    got = store.judge_point(pair["point"], " ".join(pair["user_turns"]), "")
+    assert got["verdict"] is None
+    assert got["known"] == 0
+    assert got["leak"] == []
+
+
+def test_fr39_judge_point_without_content_stems_is_ungrounded():
+    """A point with no content stems at all shares zero stems with the user and is ungrounded."""
+    got = store.judge_point("the of a", "I study the thermodynamics exam", "")
+    assert got["verdict"] == "ungrounded"
+
+
+def test_fr39_judge_point_assistant_words_never_ground_a_point():
+    """Only user turns are passed: a point whose words are not in user_text is ungrounded."""
+    got = store.judge_point(
+        "Maintaining a Rust compiler fork", "How do I rename a branch?", ""
+    )
+    assert got["verdict"] == "ungrounded"
+
+
+def test_fr39_judge_point_known_share_comes_from_config(monkeypatch):
+    """Lowering config.WRITER_KNOWN_SHARE to 0.3 makes pair 34 (share 0.33, leak 0) known."""
+    assert config.WRITER_KNOWN_SHARE == 0.5
+    assert judge_pair(34)["verdict"] is None
+    monkeypatch.setattr(config, "WRITER_KNOWN_SHARE", 0.3)
+    assert judge_pair(34)["verdict"] == "known"
+
+
+def test_fr39_judge_point_leak_stems_come_from_config(monkeypatch):
+    """Raising config.WRITER_LEAK_STEMS to 3 turns pair 30 (leak 2, share 0.25) from known to None."""
+    assert config.WRITER_LEAK_STEMS == 2
+    assert judge_pair(30)["verdict"] == "known"
+    monkeypatch.setattr(config, "WRITER_LEAK_STEMS", 3)
+    assert judge_pair(30)["verdict"] is None
+
+
+def test_fr39_remember_never_calls_judge_point(db, monkeypatch):
+    """store.remember is not guarded: it stores a new row even if judge_point would raise."""
+
+    def boom(*args, **kwargs):
+        raise AssertionError("judge_point must not be called by remember")
+
+    monkeypatch.setattr(store, "judge_point", boom)
+
+    item = store.remember(
+        "fingerprint sensor project", "project", "2026-10-26T10:00:00+05:30"
+    )
+
+    assert item["new"] is True
+    assert len(memory_rows(db)) == 1

@@ -146,6 +146,31 @@ def find_same(text: str) -> dict | None:
     return best
 
 
+def judge_point(text: str, user_text: str, profile_text: str) -> dict:
+    """Judge a point the session writer returned against what the user said and the profile.
+
+    Compares content stems as `find_same` does. `user_text` is the user's turns only, never the
+    assistant's; `profile_text` is the profile values, never the slot labels. The verdict is
+    "ungrounded" when the point shares no stem with `user_text`, "known" when the profile covers
+    `config.WRITER_KNOWN_SHARE` of it or `config.WRITER_LEAK_STEMS` of its stems are in the
+    profile but not in `user_text`, else None. Also returns the two shares and the leaked
+    stems (FR-39, FR-40). It checks words, not truth: see the known limits in design.md.
+    """
+    stems = _content_stems(text)
+    said = _content_stems(user_text)
+    known = _content_stems(profile_text)
+    size = len(stems) or 1
+    leak = sorted((stems & known) - said)
+    grounded, share = len(stems & said) / size, len(stems & known) / size
+    if not stems & said:
+        verdict = "ungrounded"
+    elif share >= config.WRITER_KNOWN_SHARE or len(leak) >= config.WRITER_LEAK_STEMS:
+        verdict = "known"
+    else:
+        verdict = None
+    return {"verdict": verdict, "grounded": grounded, "known": share, "leak": leak}
+
+
 def forget_memory(query: str) -> dict:
     """Delete the one memory that contains every content word of `query`.
 

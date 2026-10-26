@@ -1,0 +1,432 @@
+{
+ "frozen": "Frozen: written for M17-T6 and scored once; never edit (CLAUDE.md, Never). Invented pairs, not the user's data. 'expected' is the verdict under the T6 rules; 'known_limit' marks a pair the rules pass although it is wrong by meaning.",
+ "profile": {
+  "identity": "Second-year mechanical engineering student in Nagpur",
+  "goal_now": "Pass the thermodynamics exam in December",
+  "goal_long": "Build electric vehicles",
+  "style": "Short answers, one step at a time, plain words"
+ },
+ "pairs": [
+  {
+   "id": 1,
+   "group": "A",
+   "user_turns": [
+    "I've decided to build my wind-turbine blade prototype from 3D printed PLA first, then move to carbon fibre."
+   ],
+   "point": "Prototyping wind-turbine blades in 3D printed PLA before moving to carbon fibre",
+   "meaning": "KEEP",
+   "note": "",
+   "expected": null,
+   "known_limit": false
+  },
+  {
+   "id": 2,
+   "group": "A",
+   "user_turns": [
+    "My project guide, Dr Rao, wants a progress report every Friday."
+   ],
+   "point": "Project guide Dr Rao wants a progress report every Friday",
+   "meaning": "KEEP",
+   "note": "",
+   "expected": null,
+   "known_limit": false
+  },
+  {
+   "id": 3,
+   "group": "A",
+   "user_turns": [
+    "I always sketch the free-body diagram before I write any equation."
+   ],
+   "point": "Always sketches the free-body diagram before writing any equation",
+   "meaning": "KEEP",
+   "note": "",
+   "expected": null,
+   "known_limit": false
+  },
+  {
+   "id": 4,
+   "group": "B",
+   "user_turns": [
+    "Honestly the only place I can focus is the library basement, the hostel is a circus."
+   ],
+   "point": "Studies in the library basement because the hostel is too noisy",
+   "meaning": "KEEP",
+   "note": "",
+   "expected": null,
+   "known_limit": false
+  },
+  {
+   "id": 5,
+   "group": "B",
+   "user_turns": [
+    "Dad drives an autorickshaw, so whatever I build has to be cheap enough that he would actually buy it."
+   ],
+   "point": "Wants what he builds cheap enough for his father, an autorickshaw driver, to buy",
+   "meaning": "KEEP",
+   "note": "",
+   "expected": null,
+   "known_limit": false
+  },
+  {
+   "id": 6,
+   "group": "B",
+   "user_turns": [
+    "My laptop gave up in September and I have been borrowing my cousin's since."
+   ],
+   "point": "Has no laptop of their own at present",
+   "meaning": "KEEP",
+   "note": "",
+   "expected": null,
+   "known_limit": false
+  },
+  {
+   "id": 7,
+   "group": "B",
+   "user_turns": [
+    "Don't walk me through the whole derivation, just tell me which formula applies."
+   ],
+   "point": "Prefers being told which formula applies instead of a full derivation",
+   "meaning": "KEEP",
+   "note": "",
+   "expected": null,
+   "known_limit": false
+  },
+  {
+   "id": 8,
+   "group": "C",
+   "user_turns": [
+    "How do I convert kilowatts to horsepower?",
+    "And what is the formula for torque from power?"
+   ],
+   "point": "Runs a drone photography side business",
+   "meaning": "REJECT_UNGROUNDED",
+   "note": "",
+   "expected": "ungrounded",
+   "known_limit": false
+  },
+  {
+   "id": 9,
+   "group": "C",
+   "user_turns": [
+    "Can you explain what a heat exchanger does?"
+   ],
+   "point": "Is a member of the college debate team",
+   "meaning": "REJECT_UNGROUNDED",
+   "note": "",
+   "expected": "ungrounded",
+   "known_limit": false
+  },
+  {
+   "id": 10,
+   "group": "C",
+   "user_turns": [
+    "What is the density of aluminium again?"
+   ],
+   "point": "Looks after two younger siblings at home",
+   "meaning": "REJECT_UNGROUNDED",
+   "note": "",
+   "expected": "ungrounded",
+   "known_limit": false
+  },
+  {
+   "id": 11,
+   "group": "D",
+   "user_turns": [
+    "What is the yield strength of mild steel?"
+   ],
+   "point": "Interns at a steel fabrication shop on Saturdays",
+   "meaning": "REJECT_UNGROUNDED",
+   "note": "",
+   "expected": null,
+   "known_limit": true
+  },
+  {
+   "id": 12,
+   "group": "D",
+   "user_turns": [
+    "Is a gearbox or a belt drive better for a small go-kart?"
+   ],
+   "point": "Owns a go-kart track business with a cousin",
+   "meaning": "REJECT_UNGROUNDED",
+   "note": "",
+   "expected": null,
+   "known_limit": true
+  },
+  {
+   "id": 13,
+   "group": "D",
+   "user_turns": [
+    "How long does anodising take for aluminium parts?"
+   ],
+   "point": "Is writing a research paper on anodising aluminium alloys",
+   "meaning": "REJECT_UNGROUNDED",
+   "note": "",
+   "expected": null,
+   "known_limit": true
+  },
+  {
+   "id": 14,
+   "group": "E",
+   "user_turns": [
+    "I am leading the chassis team for the college solar car this year."
+   ],
+   "point": "Leading the chassis team for the college solar car, a team of twelve",
+   "meaning": "REJECT_UNGROUNDED",
+   "note": "invented: twelve",
+   "expected": null,
+   "known_limit": true
+  },
+  {
+   "id": 15,
+   "group": "E",
+   "user_turns": [
+    "I switched from FEA to hand calculations for the beam because the mesh kept failing."
+   ],
+   "point": "Switched from FEA to hand calculations for the beam after the licence expired",
+   "meaning": "REJECT_UNGROUNDED",
+   "note": "CONTRADICTS the stated reason (the mesh kept failing); record separately from 14, 16 and 17, which add a detail",
+   "expected": null,
+   "known_limit": true
+  },
+  {
+   "id": 16,
+   "group": "E",
+   "user_turns": [
+    "My brother lent me his drawing board for the semester."
+   ],
+   "point": "Borrowed an A1 drawing board from his brother for the semester",
+   "meaning": "REJECT_UNGROUNDED",
+   "note": "invented: A1",
+   "expected": null,
+   "known_limit": true
+  },
+  {
+   "id": 17,
+   "group": "E",
+   "user_turns": [
+    "I am reading Shigley for machine design."
+   ],
+   "point": "Reading Shigley for machine design, currently on the gears chapter",
+   "meaning": "REJECT_UNGROUNDED",
+   "note": "invented chapter",
+   "expected": null,
+   "known_limit": true
+  },
+  {
+   "id": 18,
+   "group": "F",
+   "user_turns": [
+    "I take the 6:10 bus from Sitabuldi to campus and it takes over an hour."
+   ],
+   "point": "Has a long commute to campus",
+   "meaning": "KEEP",
+   "note": "gray",
+   "expected": null,
+   "known_limit": false
+  },
+  {
+   "id": 19,
+   "group": "F",
+   "user_turns": [
+    "I failed engineering mathematics last semester and I am retaking it."
+   ],
+   "point": "Is behind on the standard mathematics sequence",
+   "meaning": "REJECT_UNGROUNDED",
+   "note": "gray; if the guard rejects it, check its reason: it would be words absent from the user's text (behind, standard, sequence), mine is that the inference goes beyond what was said; record agreement as the right answer for a different reason, not as a pass",
+   "expected": null,
+   "known_limit": true
+  },
+  {
+   "id": 20,
+   "group": "F",
+   "user_turns": [
+    "I only get the lab on Tuesday afternoons, so everything has to fit in that slot."
+   ],
+   "point": "Plans experiments around a single weekly lab slot",
+   "meaning": "KEEP",
+   "note": "gray",
+   "expected": null,
+   "known_limit": false
+  },
+  {
+   "id": 21,
+   "group": "G",
+   "user_turns": [
+    "I am in the second year of mech engineering in Nagpur, so thermo is hitting me hard."
+   ],
+   "point": "Studies mechanical engineering in the second year in Nagpur",
+   "meaning": "REJECT_KNOWN",
+   "note": "",
+   "expected": "known",
+   "known_limit": false
+  },
+  {
+   "id": 22,
+   "group": "G",
+   "user_turns": [
+    "Eventually I want to make electric cars."
+   ],
+   "point": "Wants to build electric vehicles eventually",
+   "meaning": "REJECT_KNOWN",
+   "note": "",
+   "expected": "known",
+   "known_limit": false
+  },
+  {
+   "id": 23,
+   "group": "G",
+   "user_turns": [
+    "I have the thermodynamics exam in December, so that is the priority."
+   ],
+   "point": "Priority is passing the thermodynamics exam in December",
+   "meaning": "REJECT_KNOWN",
+   "note": "",
+   "expected": "known",
+   "known_limit": false
+  },
+  {
+   "id": 24,
+   "group": "H",
+   "user_turns": [
+    "I can only work on the project on weekends because of classes."
+   ],
+   "point": "Can only work on the project in free time on weekends",
+   "meaning": "KEEP",
+   "note": "profile stem: time",
+   "expected": null,
+   "known_limit": false
+  },
+  {
+   "id": 25,
+   "group": "H",
+   "user_turns": [
+    "First I clamp the specimen, then I zero the gauge, then I load it."
+   ],
+   "point": "Follows a fixed three-step routine: clamp the specimen, zero the gauge, load it",
+   "meaning": "KEEP",
+   "note": "profile stem: step",
+   "expected": null,
+   "known_limit": false
+  },
+  {
+   "id": 26,
+   "group": "H",
+   "user_turns": [
+    "I like diagrams with no shading, just black lines."
+   ],
+   "point": "Prefers plain black-line diagrams without shading",
+   "meaning": "KEEP",
+   "note": "profile stem: plain",
+   "expected": null,
+   "known_limit": false
+  },
+  {
+   "id": 27,
+   "group": "H",
+   "user_turns": [
+    "The summary page for the report can only be two pages."
+   ],
+   "point": "Report summary must be a short two pages",
+   "meaning": "KEEP",
+   "note": "profile stem: short",
+   "expected": null,
+   "known_limit": false
+  },
+  {
+   "id": 28,
+   "group": "I",
+   "user_turns": [
+    "I am fabricating a hydraulic press for the college tech fest."
+   ],
+   "point": "Mechanical engineering student fabricating a hydraulic press for the college fest",
+   "meaning": "REJECT_KNOWN",
+   "note": "leak",
+   "expected": "known",
+   "known_limit": false
+  },
+  {
+   "id": 29,
+   "group": "I",
+   "user_turns": [
+    "I run a small WhatsApp group where we trade past papers."
+   ],
+   "point": "Second-year student running a WhatsApp group to trade past papers",
+   "meaning": "REJECT_KNOWN",
+   "note": "leak",
+   "expected": "known",
+   "known_limit": false
+  },
+  {
+   "id": 30,
+   "group": "I",
+   "user_turns": [
+    "I have started fixing bicycles for neighbours to earn pocket money."
+   ],
+   "point": "Nagpur student earning pocket money by fixing neighbours' bicycles",
+   "meaning": "REJECT_KNOWN",
+   "note": "leak",
+   "expected": "known",
+   "known_limit": false
+  },
+  {
+   "id": 31,
+   "group": "J",
+   "user_turns": [
+    "The hostel terrace is about eighty square metres and nothing collects the rain from it.",
+    "I want to size a tank for the monsoon months and run a pipe down the east wall.",
+    "The warden said he would approve it only if it costs less than the annual repair budget.",
+    "I am comparing a ferrocement tank with a plastic one because the cement is cheaper.",
+    "Whichever I pick has to survive being filled by June."
+   ],
+   "point": "Volunteers on weekends at a charity that repairs plastic water tanks for villages",
+   "meaning": "REJECT_UNGROUNDED",
+   "note": "incidental: repair, plastic, tank",
+   "expected": null,
+   "known_limit": true
+  },
+  {
+   "id": 32,
+   "group": "J",
+   "user_turns": [
+    "My seminar is on how lithium-ion cells degrade with fast charging.",
+    "I have found two papers, one from a Japanese group and one on electrolyte decomposition.",
+    "The slides have to be ready for the department review in the first week of the term.",
+    "I keep confusing capacity fade with power fade, so I want the difference clear.",
+    "I will use a single cell photo and a degradation curve as the main visuals."
+   ],
+   "point": "Plans to join a Japanese exchange programme in the department next term",
+   "meaning": "REJECT_UNGROUNDED",
+   "note": "incidental: japanese, department, term",
+   "expected": null,
+   "known_limit": true
+  },
+  {
+   "id": 33,
+   "group": "J",
+   "user_turns": [
+    "My uncle's motorcycle has a gearbox that slips out of third gear.",
+    "He said the shifter fork might be worn, so I will check that first.",
+    "I do not have a workshop, so I am borrowing a garage from his neighbour on Sundays.",
+    "The manual is in Marathi and my cousin translates the torque values for me.",
+    "If the fork is fine, I will look at the selector drum next."
+   ],
+   "point": "Sells translated engine manuals to other students in the hostel on Sundays",
+   "meaning": "REJECT_UNGROUNDED",
+   "note": "incidental: translat, manual, sunday",
+   "expected": null,
+   "known_limit": true
+  },
+  {
+   "id": 34,
+   "group": "K",
+   "user_turns": [
+    "I am preparing for my thermodynamics exam by solving one past paper every night."
+   ],
+   "point": "Solves one thermodynamics past paper every night to prepare for the exam",
+   "meaning": "KEEP",
+   "note": "control: thermodynamics and exam are in the profile and in the user's words",
+   "expected": null,
+   "known_limit": false
+  }
+ ]
+}
