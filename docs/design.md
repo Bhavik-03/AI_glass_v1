@@ -353,6 +353,18 @@ deliberate change to CLAUDE.md's "one line per query" rule, made because the v2 
 (issue #116) was only diagnosable because every call left a line. A writer that stored the
 wrong thing silently would leave nothing to look at.
 
+The writer's guard (FR-39, FR-40) drops candidate points, and the writer's line records each
+drop by direction. A point dropped as **known** (restating the profile, or carrying words
+only the profile holds) is logged with its direction and scores, never its text: its content
+is in `data/profile.json` and the log adds nothing. A point dropped as **ungrounded** (its
+words are not in what the user said) is logged with its **text**, its score and its
+direction. This is a deliberate narrowing of "the log carries no memory text". The log never
+carries *stored* memory text, and an ungrounded candidate is the model's own invention: not
+stored memory and nothing the user said. The reason is that a guard whose rejections cannot
+be inspected cannot be trusted. A line reading "1 dropped, ungrounded, 0.0" cannot tell a
+correct rejection from a broken guard, and false positives are exactly what this direction
+can produce.
+
 No memory item retrieved from the store is written to the log; the log records counts only.
 The user's own spoken words are logged exactly as they are for every other query, which
 includes the text of a "remember that ..." command and the wording of a forget or recall
