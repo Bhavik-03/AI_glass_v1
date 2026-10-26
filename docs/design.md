@@ -54,7 +54,8 @@ flowchart LR
 | Tools (`tools.py`) | The declarations, the dispatcher (always returns a result dict) and the |
 | | spoken texts (reminders, quiz questions, score, setup questions). |
 | Search (`search.py`) | Query → top web results from the Tavily Search API; raises on failure. |
-| Store (`store.py`) | SQLite: notes, reminders, concepts and memories, plus the FTS5 index. |
+| Store (`store.py`) | SQLite: notes, reminders, concepts and memories, plus the FTS5 index and |
+| | the word-overlap checks on a text (`find_same`, forget, the writer guard). |
 | TTS (`tts.py`) | Answer text → speech with Piper, resampled to 16 kHz mono 16-bit. |
 | Logger (`logger.py`) | One JSONL line per query, failed ones included. |
 | Gemini API, Tavily Search API | The only parts that need the internet. |
@@ -215,6 +216,25 @@ only acts when asked. v3 reuses the poll the client already makes.
   gets the session's turns and the profile, never the stored memories or an image, and
   returns 0 to 3 key points. Not showing it the stored memories is deliberate: showing the
   model existing wording is what caused issue #116.
+- **The guard.** The writer's reply is not trusted, so each returned point is judged by
+  `store.judge_point` before it reaches `store.remember`, comparing content stems with
+  `find_same`'s own tokenizer and stemmer. It has two directions, in one function:
+  - *Grounded:* the share of the point's content stems found in the **user's turns only** must
+    reach a minimum. The assistant's turns never count, because the failure it exists for is
+    the model attributing an assistant's remark to the user (the T5 spike's "fingerprint-sensor
+    project" and "Rust compiler fork" scored 0.0 and an instruction alone did not stop them).
+  - *Not already known:* a point is rejected when the rendered profile covers most of its
+    stems (a restatement), or when it carries a stem found in the profile but not in the
+    user's turns (a leak: the spike's "final-year" scored 0.75 grounded and only 0.25 covered
+    by the profile, so neither of the other two tests catches it).
+
+  It runs on the writer path only. `remember` is the user's own words by definition and is
+  never filtered. A dropped point is not counted, so the spoken total stays the number of
+  rows actually added. The thresholds, and whether the leak rule is flat or a count, come from
+  the T6 measurement on fresh pairs and are not chosen here. It checks words, not truth: a
+  point that is mostly the user's words plus one invented detail passes it. The instruction
+  rules and the guard are separate defences, and a point that echoes a "remember that" item is
+  caught by `find_same`, not by the guard.
 - Each returned point goes through the same word-limit and `find_same` checks as `remember`.
   A point over `MEMORY_MAX_WORDS` is **rejected, never truncated**: cutting words can drop a
   "not" and invert the point. More than `WRITER_MAX_POINTS` keeps the first 3. The spoken
