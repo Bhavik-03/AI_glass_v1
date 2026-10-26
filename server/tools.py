@@ -378,7 +378,7 @@ def store_points(
         text = point["text"]
         # Checked here, before the guard, because store.remember checks it only in the same call
         # that adds the row.
-        if len(text.split()) > config.MEMORY_MAX_WORDS:
+        if store.too_long(text):
             too_long += 1
             continue
         judged = store.judge_point(text, user_text, profile_text)

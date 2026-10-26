@@ -91,8 +91,14 @@ def init() -> None:
             )
 
 
+def too_long(text: str) -> bool:
+    """Whether a memory text is over `config.MEMORY_MAX_WORDS` words: the one definition of the
+    limit, used by the store's own check and by the session writer's."""
+    return len(text.split()) > config.MEMORY_MAX_WORDS
+
+
 def _check_length(text: str) -> None:
-    if len(text.split()) > config.MEMORY_MAX_WORDS:
+    if too_long(text):
         raise ValueError(f"memory is over {config.MEMORY_MAX_WORDS} words")
 
 
