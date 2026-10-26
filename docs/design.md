@@ -230,11 +230,33 @@ only acts when asked. v3 reuses the poll the client already makes.
 
   It runs on the writer path only. `remember` is the user's own words by definition and is
   never filtered. A dropped point is not counted, so the spoken total stays the number of
-  rows actually added. The thresholds, and whether the leak rule is flat or a count, come from
-  the T6 measurement on fresh pairs and are not chosen here. It checks words, not truth: a
-  point that is mostly the user's words plus one invented detail passes it. The instruction
-  rules and the guard are separate defences, and a point that echoes a "remember that" item is
-  caught by `find_same`, not by the guard.
+  rows actually added. The rules were settled by the T6 measurement and are not tuned here:
+  a point is *ungrounded* when it shares **no** content stem with the user's turns; it is
+  *known* when two or more of its stems are in the profile values and not in the user's turns,
+  or when the profile values cover half or more of its stems. The profile side compares slot
+  values only, never slot labels (a label such as `goal_long` leaked "long" into a legitimate
+  point). They were fitted on 34 invented pairs (`tests/fixtures/t6_pairs.json`) and checked
+  once, unchanged, on the held-out T5 points (`docs/t6_results.md`): 0 of 14 legitimate pairs
+  rejected, and the three held-out failures (two invented projects and one profile leak)
+  caught.
+  A word-share threshold above zero was rejected: legitimate paraphrases score 0.25 to 0.43
+  and fabrications that share a word 0.20 to 0.38, so no cutoff separates them and 0.40 would
+  have rejected 4 of the 14 legitimate points (29%).
+  **Known limits, stated rather than hidden** (tracked in issue #170). The guard checks words, not truth.
+  - A fabrication that shares even one stem with the user's turns passes (pairs D, J), and so
+    does a point that is mostly the user's words plus one invented detail (E), including one
+    that contradicts the stated reason (pair 15, recorded separately because a stored
+    contradiction is worse than an unverified detail). F19, an inference the user did not say,
+    also passes. Telling paraphrase from coincidence needs semantic similarity, the brief's
+    named fallback, and a new dependency.
+  - The leak rule has a margin of exactly one stem: the held-out profile leak had two stems
+    against a threshold of two, and a leak of a single profile word passes.
+  - The held-out inputs were rebuilt from the logged spike output, because the spike's files
+    were lost when `/tmp` was cleared by a reboot. The points and transcripts are the same;
+    the files are not the originals.
+
+  The instruction rules and the guard are separate defences, and a point that echoes a
+  "remember that" item is caught by `find_same`, not by the guard.
 - Each returned point goes through the same word-limit and `find_same` checks as `remember`.
   A point over `MEMORY_MAX_WORDS` is **rejected, never truncated**: cutting words can drop a
   "not" and invert the point. More than `WRITER_MAX_POINTS` keeps the first 3. The spoken
