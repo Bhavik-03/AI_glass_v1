@@ -15,6 +15,8 @@ from PIL import Image
 
 from server import config, llm, logger, profile, session, store, stt, tools, tts
 
+log = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -355,8 +357,30 @@ def session_reset() -> dict:
     return {"status": "ok"}
 
 
+def _write_session(at: datetime) -> None:
+    """Write at most one expired session's points to memory and leave a spoken notice for the
+    poll to deliver (FR-39). Nothing here may fail the poll, which also delivers reminders."""
+    turns = session.take_expired(at)
+    if turns is None:
+        return
+    try:
+        points = llm.write_memories(turns, at)
+        # The user's words only: the guard grounds a point in what the user said (FR-40).
+        user_text = " ".join(turn["question"] for turn in turns)
+        profile_text = " ".join(profile.values().values())
+        stored = tools.store_points(points, user_text, profile_text, at)
+        if stored["added"]:
+            store.add_notice(
+                tools.writer_notice(stored["added"]), at.isoformat(timespec="seconds")
+            )
+    except Exception as e:  # noqa: BLE001  a failed writer loses its points, nothing more
+        log.warning("session writer failed: %s", _reason(e))
+
+
 @app.get("/reminders/due")
 def reminders_due() -> Response:
+    _write_session(now())
+    # Read the clock again: the writer may have taken seconds and its notice is due at its start.
     due = store.list_due(now().isoformat(timespec="seconds"))
     if not due:
         return Response(status_code=204)
