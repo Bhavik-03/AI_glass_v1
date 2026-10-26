@@ -3997,3 +3997,34 @@ def test_fr17_query_line_has_no_event_key_but_writer_line_does(
     assert lines[0]["event"] == "session_writer"
     assert "event" not in lines[1]
     assert lines[1]["question"] == FAKE_TRANSCRIPT
+
+
+def test_fr40_guard_compares_profile_values_not_slot_labels(monkeypatch, tmp_path):
+    """FR-40: with the real profile loader and the real schema, a legitimate point that happens
+    to use two slot-label words (goal, now) the user never said is stored: the guard compares
+    the slot VALUES only. Including the labels would make it two leaked stems and drop the point."""
+    from server import profile
+
+    values = tmp_path / "profile.json"
+    values.write_text(
+        json.dumps(
+            {
+                "identity": "Third-year civil engineering student in Pune",
+                "goal_now": "Finish the semester project",
+                "goal_long": "Design bridges",
+            }
+        )
+    )
+    monkeypatch.setattr(config, "PROFILE_VALUES_PATH", values)
+    profile.load()
+    assert (
+        "goal_now" in profile.render()
+    )  # the labels are in the rendered profile, so a
+    # guard fed profile.render() would see them
+    _expire(monkeypatch, user="The demo matters most to me.")
+    point = "The main goal now is the demo"
+    _fake_writer(monkeypatch, [[_pt(point, "project")]])
+    response = client.get("/reminders/due")
+    assert response.status_code == 200
+    assert [r["text"] for r in response.json()] == ["Noted one thing."]
+    assert _memory_texts() == [point]
