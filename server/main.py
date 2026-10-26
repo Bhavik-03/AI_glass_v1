@@ -15,8 +15,6 @@ from PIL import Image
 
 from server import config, llm, logger, profile, session, store, stt, tools, tts
 
-log = logging.getLogger(__name__)
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -363,18 +361,38 @@ def _write_session(at: datetime) -> None:
     turns = session.take_expired(at)
     if turns is None:
         return
+    # Counts and the guard's drops only. An ungrounded drop carries its text, which is the model's
+    # own invention; no stored memory and none of the user's turns ever reach the log (FR-17).
+    record = {
+        "event": "session_writer",
+        "turns": len(turns),
+        "points_returned": 0,
+        "rows_added": 0,
+        "points_too_long": 0,
+        "points_rejected": 0,
+        "dropped": [],
+        "timings_ms": {},
+        "error": None,
+    }
     try:
-        points = llm.write_memories(turns, at)
+        points = run_stage("llm", record["timings_ms"], llm.write_memories, turns, at)
+        record["points_returned"] = len(points)
         # The user's words only: the guard grounds a point in what the user said (FR-40).
         user_text = " ".join(turn["question"] for turn in turns)
         profile_text = " ".join(profile.values().values())
         stored = tools.store_points(points, user_text, profile_text, at)
+        record["rows_added"] = stored["added"]
+        record["points_too_long"] = stored["too_long"]
+        record["dropped"] = stored["dropped"]
+        record["points_rejected"] = stored["too_long"] + len(stored["dropped"])
         if stored["added"]:
             store.add_notice(
                 tools.writer_notice(stored["added"]), at.isoformat(timespec="seconds")
             )
     except Exception as e:  # noqa: BLE001  a failed writer loses its points, nothing more
-        log.warning("session writer failed: %s", _reason(e))
+        record["error"] = _reason(e)
+    finally:
+        logger.log_query(record)
 
 
 @app.get("/reminders/due")

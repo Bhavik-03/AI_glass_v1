@@ -3819,3 +3819,181 @@ def test_fr39_mixed_session_keeps_only_the_legitimate_point(monkeypatch):
     # A notice stays due until acked (FR-14); once acked, nothing else is waiting.
     client.post(f"/reminders/{response.json()[0]['id']}/ack")
     assert client.get("/reminders/due").status_code == 204
+
+
+# --- session writer log line (FR-17, FR-39) ---
+
+WRITER_KEYS = {
+    "event",
+    "time",
+    "turns",
+    "points_returned",
+    "rows_added",
+    "points_too_long",
+    "points_rejected",
+    "dropped",
+    "timings_ms",
+    "error",
+}
+
+
+def _writer_lines(path) -> list[dict]:
+    return [ln for ln in _log_lines(path) if ln.get("event") == "session_writer"]
+
+
+def test_fr17_writer_success_leaves_one_complete_line(monkeypatch, log_path):
+    """FR-17/FR-39: a successful writer run appends exactly one session_writer line with turns, points_returned, rows_added, points_too_long, points_rejected, dropped, timings_ms (llm) and error null."""
+    _expire(monkeypatch)
+    _fake_writer(monkeypatch, [[_pt(W_A, "project"), _pt(W_B, "preference")]])
+    assert client.get("/reminders/due").status_code == 200
+    lines = _log_lines(log_path)
+    assert len(lines) == 1
+    line = lines[0]
+    assert set(line) >= WRITER_KEYS
+    assert line["event"] == "session_writer"
+    assert line["turns"] == 1
+    assert line["points_returned"] == 2
+    assert line["rows_added"] == 2
+    assert line["points_too_long"] == 0
+    assert line["points_rejected"] == 0
+    assert line["dropped"] == []
+    assert isinstance(line["timings_ms"]["llm"], int)
+    assert line["error"] is None
+
+
+def test_fr17_writer_mixed_session_logs_dropped_without_memory_or_turn_text(
+    monkeypatch, log_path
+):
+    """FR-17/FR-39: a mixed session logs two dropped entries; the ungrounded one carries its text, the known one has no text; the file holds no stored, known or turn text."""
+    _expire(monkeypatch, user=W_USER + " in Nagpur")
+    _set_profile(monkeypatch, {"identity": W_PROFILE_TEXT})
+    _fake_writer(monkeypatch, [[_pt(W_A, "project"), _pt(W_INVENTED), _pt(W_KNOWN)]])
+    client.get("/reminders/due")
+    (line,) = _writer_lines(log_path)
+    assert line["points_returned"] == 3
+    assert line["rows_added"] == 1
+    assert line["points_rejected"] == 2
+    assert len(line["dropped"]) == 2
+    by_dir = {d["direction"]: d for d in line["dropped"]}
+    assert set(by_dir) == {"ungrounded", "known"}
+    ungrounded, known = by_dir["ungrounded"], by_dir["known"]
+    assert ungrounded["text"] == W_INVENTED
+    assert set(ungrounded) == {"direction", "grounded", "known", "leak", "text"}
+    assert set(known) == {"direction", "grounded", "known", "leak"}
+    for d in (ungrounded, known):
+        assert isinstance(d["grounded"], float)
+        assert isinstance(d["known"], float)
+        assert isinstance(d["leak"], int)
+    raw = log_path.read_text(encoding="utf-8")
+    assert W_INVENTED in raw
+    for secret in (W_KNOWN, W_A, W_USER, W_ANSWER, W_PROFILE_TEXT):
+        assert secret not in raw
+
+
+def test_fr17_writer_over_length_point_counts_as_too_long_and_rejected(
+    monkeypatch, log_path
+):
+    """FR-17/FR-39: an over-12-word point is counted in points_too_long and in points_rejected."""
+    _expire(monkeypatch)
+    long_text = " ".join(["hydraulic"] * 20)
+    _fake_writer(monkeypatch, [[_pt(long_text), _pt(W_A, "project")]])
+    client.get("/reminders/due")
+    (line,) = _writer_lines(log_path)
+    assert line["points_returned"] == 2
+    assert line["points_too_long"] == 1
+    assert line["points_rejected"] == 1
+    assert line["rows_added"] == 1
+    assert line["dropped"] == []
+
+
+def test_fr17_writer_failure_leaves_a_line_with_the_error(monkeypatch, log_path):
+    """FR-17/FR-39: a writer that raises leaves one line with error 'llm: ...', 0 points, 0 rows, no notice, and the poll still answers 204."""
+    _expire(monkeypatch)
+    _fake_writer(monkeypatch, [RuntimeError("gemini down")])
+    assert client.get("/reminders/due").status_code == 204
+    (line,) = _writer_lines(log_path)
+    assert line["error"].startswith("llm:")
+    assert "gemini down" in line["error"]
+    assert line["points_returned"] == 0
+    assert line["rows_added"] == 0
+    assert line["turns"] == 1
+    assert "llm" in line["timings_ms"]
+
+
+def test_fr17_writer_failure_never_logs_the_api_key(monkeypatch, log_path):
+    """FR-17/FR-39: a key inside the writer's exception message is redacted: the log never contains it."""
+    monkeypatch.setattr(config, "GEMINI_API_KEY", "sk-secret-123")
+    _expire(monkeypatch)
+    _fake_writer(monkeypatch, [RuntimeError("bad key sk-secret-123 rejected")])
+    assert client.get("/reminders/due").status_code == 204
+    (line,) = _writer_lines(log_path)
+    assert "[redacted]" in line["error"]
+    assert "sk-secret-123" not in log_path.read_text(encoding="utf-8")
+
+
+def test_fr17_writer_zero_points_leaves_a_line(monkeypatch, log_path):
+    """FR-17/FR-39: a session for which the writer returns 0 points still leaves a line with points_returned 0, rows_added 0, error null."""
+    _expire(monkeypatch)
+    _fake_writer(monkeypatch, [[]])
+    assert client.get("/reminders/due").status_code == 204
+    (line,) = _writer_lines(log_path)
+    assert line["points_returned"] == 0
+    assert line["rows_added"] == 0
+    assert line["error"] is None
+
+
+def test_fr17_writer_all_repeats_leaves_a_line_with_no_rows(monkeypatch, log_path):
+    """FR-17/FR-39: a session whose points all repeat stored memories leaves a line with rows_added 0 and error null."""
+    from server import tools
+
+    tools.run("remember", {"text": W_A, "type": "project"}, FIXED_NOW)
+    _expire(monkeypatch)
+    _fake_writer(monkeypatch, [[_pt("I am building a hydraulic press", "project")]])
+    client.get("/reminders/due")
+    (line,) = _writer_lines(log_path)
+    assert line["points_returned"] == 1
+    assert line["rows_added"] == 0
+    assert line["error"] is None
+
+
+def test_fr17_poll_without_buffered_session_writes_no_writer_line(
+    monkeypatch, log_path
+):
+    """FR-17/FR-39: a poll with no buffered session writes no session_writer line."""
+    monkeypatch.setattr("server.main.now", lambda: FIXED_NOW)
+    _no_writer(monkeypatch)
+    client.get("/reminders/due")
+    assert _writer_lines(log_path) == []
+
+
+def test_fr17_two_sessions_two_polls_leave_two_lines_in_order(monkeypatch, log_path):
+    """FR-17/FR-39: two buffered sessions written by two polls leave two session_writer lines, in order."""
+    from server import session
+
+    session.add_turn("first session question about the press", "ok", FIXED_NOW)
+    later = FIXED_NOW + timedelta(seconds=200)
+    session.add_turn("second session question about Rust", "ok", later)
+    now = FIXED_NOW + timedelta(seconds=400)
+    monkeypatch.setattr("server.main.now", lambda: now)
+    _fake_writer(monkeypatch, [[_pt(W_A, "project")], []])
+    client.get("/reminders/due")
+    client.get("/reminders/due")
+    lines = _writer_lines(log_path)
+    assert len(lines) == 2
+    assert [ln["points_returned"] for ln in lines] == [1, 0]
+    assert [ln["rows_added"] for ln in lines] == [1, 0]
+
+
+def test_fr17_query_line_has_no_event_key_but_writer_line_does(
+    fake_stages, silent_wav, monkeypatch, log_path
+):
+    """FR-17/FR-39: a /query line has no 'event' key and still carries its question; the writer line has event 'session_writer'."""
+    _expire(monkeypatch)
+    _fake_writer(monkeypatch, [[]])
+    client.get("/reminders/due")
+    assert _post_query(silent_wav).status_code == 200
+    lines = _log_lines(log_path)
+    assert len(lines) == 2
+    assert lines[0]["event"] == "session_writer"
+    assert "event" not in lines[1]
+    assert lines[1]["question"] == FAKE_TRANSCRIPT

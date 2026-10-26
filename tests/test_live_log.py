@@ -163,6 +163,44 @@ def test_fr15_main_no_queries_message(log_path, capsys):
     assert capsys.readouterr().out.strip() == "No queries logged yet."
 
 
+def _writer_entry(i: int) -> dict:
+    return {
+        "event": "session_writer",
+        "time": f"2026-10-09T14:0{i % 10}:00+05:30",
+        "turns": 1,
+        "points_returned": 1,
+        "rows_added": 1,
+        "points_too_long": 0,
+        "points_rejected": 0,
+        "dropped": [],
+        "timings_ms": {"llm": 900},
+        "error": None,
+    }
+
+
+def test_fr17_read_last_ignores_session_writer_lines(log_path):
+    """FR-17/FR-39: session_writer lines are skipped: read_last returns the last 10 query lines in order and format_table over them works."""
+    entries = []
+    for i in range(1, 13):
+        entries.append(_entry(i))
+        if i % 3 == 0:
+            entries.append(_writer_entry(i))
+    entries.append(_writer_entry(0))
+    _write_log(log_path, entries)
+    got = live_log.read_last()
+    assert [e["question"] for e in got] == [f"question {i}" for i in range(3, 13)]
+    assert all("event" not in e for e in got)
+    assert live_log.format_table(got)
+
+
+def test_fr17_only_writer_lines_gives_no_queries(log_path, capsys):
+    """FR-17/FR-39: a log of only session_writer lines gives [] and main prints 'No queries logged yet.'."""
+    _write_log(log_path, [_writer_entry(1), _writer_entry(2)])
+    assert live_log.read_last() == []
+    live_log.main()
+    assert capsys.readouterr().out.strip() == "No queries logged yet."
+
+
 def test_fr15_table_handles_failed_query_with_null_fields():
     """A 400 or 500 entry (question and answer null, no timings) still gives one row."""
     entry = {"question": None, "answer": None, "timings_ms": {}, "error": "stt: boom"}
