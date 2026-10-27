@@ -78,7 +78,7 @@ Manual checks (real Gemini and voice; every test fakes Gemini, so these are the 
 
 Notes: decisions settled at planning (approved): (1) `propose_profile_update` records a pending proposal and writes nothing; `main.py` commits on a spoken yes without Gemini, so Gemini has no slot-writing tool; (2) the stale line is appended by the server and exempted from the FR-5 limits in spec.md; (3) the values file is flat plus the reserved `_set_on`, and a spoken confirmation re-stamps the date without changing the value, which is not editing the goal; (4) a slot with no date is never stale and nothing is stamped at load; (5) "stop setup" suppresses setup until the server restarts; (6) setup also runs when any setup slot is unanswered and then asks only those, so a half-finished setup resumes; (7) yes and no match whole phrases; a non-match drops the pending proposal and the turn is a normal query. Doc edits for these were committed first (docs: proposal tool, set_on stamping and setup resume). spec.md FR-28 was reworded in 2dc577e: it now names `propose_profile_update` and the yes-gated write in `main.py`.
 
-## M17 (v3): Session writer | in progress
+## M17 (v3): Session writer | done
 Goal: pending-write buffer on expiry, writer call, notice rows and the `kind` column, the writer's own log line · GitHub milestone: #17
 
 | Task | FR | Files | Done when | Test | Issue | Done |
