@@ -54,7 +54,8 @@ flowchart LR
 | Tools (`tools.py`) | The declarations, the dispatcher (always returns a result dict) and the |
 | | spoken texts (reminders, quiz questions, score, setup questions). |
 | Search (`search.py`) | Query → top web results from the Tavily Search API; raises on failure. |
-| Store (`store.py`) | SQLite: notes, reminders, concepts and memories, plus the FTS5 index. |
+| Store (`store.py`) | SQLite: notes, reminders, concepts and memories, plus the FTS5 index and |
+| | the word-overlap checks on a text (`find_same`, forget, the writer guard). |
 | TTS (`tts.py`) | Answer text → speech with Piper, resampled to 16 kHz mono 16-bit. |
 | Logger (`logger.py`) | One JSONL line per query, failed ones included. |
 | Gemini API, Tavily Search API | The only parts that need the internet. |
@@ -83,18 +84,20 @@ state and one consequence.
 - NEW: it also holds the **setup state** (which slot is being asked, and the answers so far)
   and any **pending slot proposal** (the slot, the proposed value, and whether it was already
   declined this session). Both sit behind the same lock as the quiz state.
-- NEW: a session is marked **unwritten** when it expires, so the writer runs exactly once per
-  session and never twice.
 - NEW, and the reason the writer does not lose sessions: an expired session is **handed to a
   pending-write buffer before it is cleared**, by whichever read clears it. Without this, a
   `/query` arriving between expiry and the next poll would clear the turns first and the
   writer would have nothing to write. `/query` never runs the writer itself — that would add
   a Gemini call to the user's latency path — it only moves the turns aside.
-- The buffer holds at most `WRITER_PENDING_MAX` (3) expired sessions. The poll drains it. If
-  the client is closed the buffer fills, and the oldest is dropped with a log line rather
-  than growing without limit.
-- `POST /session/reset` clears the turns, the image, a running quiz, the setup state and any
-  pending proposal. It also marks the session written, so a reset session is never written
+- The buffer is the single source of truth for "not yet written": a session in it is
+  unwritten, and taking it out for the writer is what makes the writer run exactly once per
+  session. There is no separate flag, because a second mechanism for the same fact can
+  drift from the first. A session with no turns is never buffered.
+- The buffer holds at most `WRITER_PENDING_MAX` (3) expired sessions. The poll takes one per
+  call. If the client is closed the buffer fills, and the oldest is dropped with a log line
+  rather than growing without limit.
+- `POST /session/reset` clears the turns, the image, a running quiz, the setup state, any
+  pending proposal **and the pending-write buffer**, so a reset session is never written
   afterwards. This is what keeps eval rows from leaking memories into each other.
 - Restarting the server clears the session. Setup answers already written to disk survive;
   an unfinished setup restarts from the first unanswered slot.
@@ -203,12 +206,69 @@ The session ends 120 s after the last answer, but nothing runs at that moment: t
 only acts when asked. v3 reuses the poll the client already makes.
 
 - Every 10 s the idle client calls `GET /reminders/due`. If the pending-write buffer holds an
-  expired, unwritten session, the server runs the writer on it before answering the poll.
-  The session may have been moved there by the poll itself or by an earlier `/query`.
-- The writer is one Gemini call with no tools, a 10 s timeout and JSON output, in the same
-  shape as the v2 quiz grader: it gets the session's turns and the profile, and returns 0 to
-  3 key points.
+  expired session, the server runs the writer on it before answering the poll. The session
+  may have been moved there by the poll itself or by an earlier `/query`.
+- **One buffered session per poll.** The buffer holds up to 3, but three 10 s Gemini calls
+  would exceed the client's 20 s poll timeout (`POLL_TIMEOUT_S`); one call plus local work
+  fits. The next session waits for the next poll, 10 s later.
+- The writer is one Gemini call with no tools, the client's 10 s timeout (`LLM_TIMEOUT_S`; it
+  has no constant of its own) and JSON output, in the same shape as the v2 quiz grader: it
+  gets the session's turns and the profile, never the stored memories or an image, and
+  returns 0 to 3 key points. Not showing it the stored memories is deliberate: showing the
+  model existing wording is what caused issue #116.
+- **The guard.** The writer's reply is not trusted, so each returned point is judged by
+  `store.judge_point` before it reaches `store.remember`, comparing content stems with
+  `find_same`'s own tokenizer and stemmer. It has two directions, in one function:
+  - *Grounded:* the share of the point's content stems found in the **user's turns only** must
+    reach a minimum. The assistant's turns never count, because the failure it exists for is
+    the model attributing an assistant's remark to the user (the T5 spike's "fingerprint-sensor
+    project" and "Rust compiler fork" scored 0.0 and an instruction alone did not stop them).
+  - *Not already known:* a point is rejected when the rendered profile covers most of its
+    stems (a restatement), or when it carries a stem found in the profile but not in the
+    user's turns (a leak: the spike's "final-year" scored 0.75 grounded and only 0.25 covered
+    by the profile, so neither of the other two tests catches it).
+
+  It runs on the writer path only. `remember` is the user's own words by definition and is
+  never filtered. A dropped point is not counted, so the spoken total stays the number of
+  rows actually added. The rules were settled by the T6 measurement and are not tuned here:
+  a point is *ungrounded* when it shares **no** content stem with the user's turns; it is
+  *known* when two or more of its stems are in the profile values and not in the user's turns,
+  or when the profile values cover half or more of its stems. The profile side compares slot
+  values only, never slot labels (a label such as `goal_long` leaked "long" into a legitimate
+  point). They were fitted on 34 invented pairs (`tests/fixtures/t6_pairs.json`) and checked
+  once, unchanged, on the held-out T5 points (`docs/t6_results.md`): 0 of 14 legitimate pairs
+  rejected, and the three held-out failures (two invented projects and one profile leak)
+  caught.
+  A word-share threshold above zero was rejected: legitimate paraphrases score 0.25 to 0.43
+  and fabrications that share a word 0.20 to 0.38, so no cutoff separates them and 0.40 would
+  have rejected 4 of the 14 legitimate points (29%).
+  **Known limits, stated rather than hidden** (tracked in issue #170). The guard checks words, not truth.
+  - A fabrication that shares even one stem with the user's turns passes (pairs D, J), and so
+    does a point that is mostly the user's words plus one invented detail (E), including one
+    that contradicts the stated reason (pair 15, recorded separately because a stored
+    contradiction is worse than an unverified detail). F19, an inference the user did not say,
+    also passes. Telling paraphrase from coincidence needs semantic similarity, the brief's
+    named fallback, and a new dependency.
+  - The leak rule has a margin of exactly one stem: the held-out profile leak had two stems
+    against a threshold of two, and a leak of a single profile word passes.
+  - The held-out inputs were rebuilt from the logged spike output, because the spike's files
+    were lost when `/tmp` was cleared by a reboot. The points and transcripts are the same;
+    the files are not the originals.
+
+  The instruction rules and the guard are separate defences, and a point that echoes a
+  "remember that" item is caught by `find_same`, not by the guard.
 - Each returned point goes through the same word-limit and `find_same` checks as `remember`.
+  A point over `MEMORY_MAX_WORDS` is **rejected, never truncated**: cutting words can drop a
+  "not" and invert the point. More than `WRITER_MAX_POINTS` keeps the first 3. The spoken
+  count is the number of rows actually added, so a session whose points were all repeats says
+  nothing.
+- **Salience, with a worked case.** The rule is "would this still matter in a month", and
+  it separates a dated event from the standing fact behind it. "I have an interview next
+  week" is a dated event: it will not matter in a month, so it is **not kept**. If the
+  session shows that interview preparation is where the user's time is going, that is a
+  standing fact and **is kept** ("preparing for interviews, most study time goes there").
+  Dated events belong to the v4 planner, not to v3 memory. The writer prompt is written
+  around this distinction, and it is the clearest calibration of the salience judgement.
 - The spoken line ("Noted two things.") is delivered as a **notice row** in the reminders
   table, which the poll already knows how to fetch, speak and acknowledge. This is why v3
   needs no new endpoint and no new field: a notice is reminder-shaped. The table gets a
@@ -335,6 +395,18 @@ deliberate change to CLAUDE.md's "one line per query" rule, made because the v2 
 (issue #116) was only diagnosable because every call left a line. A writer that stored the
 wrong thing silently would leave nothing to look at.
 
+The writer's guard (FR-39, FR-40) drops candidate points, and the writer's line records each
+drop by direction. A point dropped as **known** (restating the profile, or carrying words
+only the profile holds) is logged with its direction and scores, never its text: its content
+is in `data/profile.json` and the log adds nothing. A point dropped as **ungrounded** (its
+words are not in what the user said) is logged with its **text**, its score and its
+direction. This is a deliberate narrowing of "the log carries no memory text". The log never
+carries *stored* memory text, and an ungrounded candidate is the model's own invention: not
+stored memory and nothing the user said. The reason is that a guard whose rejections cannot
+be inspected cannot be trusted. A line reading "1 dropped, ungrounded, 0.0" cannot tell a
+correct rejection from a broken guard, and false positives are exactly what this direction
+can produce.
+
 No memory item retrieved from the store is written to the log; the log records counts only.
 The user's own spoken words are logged exactly as they are for every other query, which
 includes the text of a "remember that ..." command and the wording of a forget or recall
@@ -392,7 +464,7 @@ New values; every other v1 and v2 value stays.
 | server/config.py | `MEMORY_SAME_THRESHOLD` | FR-40; set by the M13 spike |
 | server/config.py | `WIPE_CONFIRM_PHRASE = "yes wipe everything"` | FR-35 |
 | server/config.py | `WIPE_REQUEST_PHRASE = "wipe my memories"` | FR-35; matched in `main.py` |
-| server/config.py | `WRITER_MAX_POINTS = 3`, `WRITER_TIMEOUT_S = 10` | FR-39 |
+| server/config.py | `WRITER_MAX_POINTS = 3` | FR-39; the writer call uses `LLM_TIMEOUT_S` |
 | server/config.py | `WRITER_PENDING_MAX = 3` | expired sessions awaiting the writer |
 | eval/config.py | `V3_QUESTIONS_PATH`, `V3_DATA_DIR`, `V3_SEED_PATH` | paths |
 | eval/config.py | `V3_MEDIAN_MAX_S = 5.3` | v3 target in spec.md |

@@ -42,7 +42,7 @@ ai-glasses/
 ├── CLAUDE.md  README.md  requirements.txt  .env.example  .gitignore  .gitattributes
 ├── config/                # committed structure, never personal data
 │   └── profile_schema.json  # the profile's slots: name, description, setup question
-├── docs/                  # roadmap, brief, spec, design, plan, hardware_plan, archive/
+├── docs/                  # roadmap, brief, spec, design, plan, hardware_plan, t6_results, archive/
 ├── server/
 │   ├── main.py            # FastAPI app: /query, /session/reset,
 │   │                      # /reminders/*, /health; knows the stage order
@@ -63,7 +63,9 @@ ai-glasses/
 │   ├── conftest.py        # shared fixtures, fakes, temporary database
 │   ├── test_server.py     # endpoint tests
 │   ├── test_session.py    # session.py logic
-│   └── test_<module>.py   # one module's own logic
+│   ├── test_<module>.py   # one module's own logic
+│   └── fixtures/
+│       └── t6_pairs.json  # the 34 frozen writer-guard pairs (M17-T6); data only
 ├── eval/
 │   ├── questions.json     # frozen 30-question eval set
 │   ├── questions_v2.json  # v2 eval set, frozen after its first run
@@ -181,5 +183,6 @@ and nothing is stored.
 - Edit `eval/questions.json` after the first eval run: the set is frozen (only an obvious error, logged in plan.md)
 - Edit `eval/questions_v2.json` after its first run: frozen the same way
 - Edit `eval/questions_v3.json` or `eval/seed_v3.json` after their first run: frozen the same way
+- Edit `tests/fixtures/t6_pairs.json`: the 34 pairs the writer guard's thresholds were fitted on; frozen
 - Add a dependency without adding it to `requirements.txt`
 - `git push --force` or rewrite pushed history

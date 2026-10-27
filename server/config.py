@@ -65,6 +65,12 @@ WIPE_REQUEST_PHRASE = "wipe my memories"
 WIPE_CONFIRM_PHRASE = "yes wipe everything"
 SESSION_TTL_S = 120
 SESSION_MAX_TURNS = 5
+WRITER_PENDING_MAX = 3
+WRITER_MAX_POINTS = 3
+# Writer guard (FR-39, FR-40): fitted on the 34 T6 pairs (tests/fixtures/t6_pairs.json) and checked
+# once, unchanged, on the held-out T5 points. Both reject a point as already known.
+WRITER_KNOWN_SHARE = 0.5
+WRITER_LEAK_STEMS = 2
 IMAGE_MAX_BYTES = 2_000_000
 TIMEZONE = "Asia/Kolkata"
 HOME_CITY = "Pune"

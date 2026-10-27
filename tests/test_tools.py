@@ -1974,3 +1974,197 @@ def test_fr31_propose_creates_no_values_file(monkeypatch, tmp_path, fixed_now):
     )
     assert out["pending"] is True
     assert not path.exists()
+
+
+# --- notices are not reminders (FR-39, FR-13) ---
+
+NOTICE_TEXT = "Noted two things."
+
+
+def _notice(now_iso=FIXED_ISO, text=NOTICE_TEXT):
+    return store.add_notice(text, now_iso)["id"]
+
+
+@pytest.mark.parametrize("age_s", [-3600, 0, 59, 60, 3600, 86400 * 3])
+def test_fr39_reminder_text_of_a_notice_is_the_stored_text(age_s):
+    """FR-39: reminder_text of a notice returns exactly its text, for any age."""
+    due = datetime(2026, 10, 9, 14, 0, tzinfo=IST)
+    notice = {
+        "id": 1,
+        "text": NOTICE_TEXT,
+        "due_at": due.isoformat(),
+        "kind": "notice",
+    }
+    out = tools.reminder_text(notice, due + timedelta(seconds=age_s))
+    assert out == NOTICE_TEXT
+
+
+def test_fr39_list_reminders_never_lists_a_notice(db, fixed_now):
+    """FR-39: list_reminders omits notices, whether due in the past or the future."""
+    _notice("2026-10-09T13:00:00+05:30")
+    _notice("2026-10-09T18:00:00+05:30")
+    real = add_pending("call the lab", DUE_A)["id"]
+    out = tools.run("list_reminders", {}, fixed_now)
+    assert [r["id"] for r in out["reminders"]] == [real]
+
+
+def test_fr39_list_reminders_with_only_a_notice_is_empty(db, fixed_now):
+    """FR-39: with only a notice stored, list_reminders returns an empty list."""
+    _notice()
+    out = tools.run("list_reminders", {}, fixed_now)
+    assert out["reminders"] == []
+
+
+def test_fr39_cancel_reminder_refuses_a_notice_and_keeps_it_pending(db, fixed_now):
+    """FR-39: cancel_reminder with a notice's id returns an error dict and the
+    notice is still due."""
+    nid = _notice()
+    out = tools.run("cancel_reminder", {"id": nid}, fixed_now)
+    assert "error" in out
+    assert [r["id"] for r in store.list_due(FIXED_ISO)] == [nid]
+
+
+def test_fr39_remember_tool_is_not_guarded_by_the_session(db, fixed_now):
+    """FR-39: the grounding guard is the writer path only: tools.run remember
+    stores words found in no session turn (the session is empty)."""
+    out = tools.run(
+        "remember",
+        {"text": "fingerprint sensor project", "type": "project"},
+        fixed_now,
+    )
+    assert "error" not in out
+    assert memory_count(db) == 1
+    assert memory_rows_in_db(db)[0][0] == "fingerprint sensor project"
+
+
+# --- writer_notice and store_points (FR-39, FR-40) ---
+
+W_USER = "I am building a hydraulic press and I prefer Rust for my firmware work"
+W_PROFILE = "Second-year mechanical engineering student in Nagpur"
+W_POINT_A = "Building a hydraulic press"
+W_POINT_B = "Prefers Rust for firmware work"
+W_INVENTED = "Trains falcons on the Antarctic glacier"
+W_KNOWN = "Mechanical engineering student building a hydraulic press"
+W_KNOWN_USER = "I am building a hydraulic press for the fest"
+
+
+def _pt(text, kind="fact"):
+    return {"text": text, "type": kind}
+
+
+@pytest.mark.parametrize(
+    ("count", "text"),
+    [(1, "Noted one thing."), (2, "Noted two things."), (3, "Noted three things.")],
+)
+def test_fr39_writer_notice_text_for_one_two_three(count, text):
+    """FR-39: the notice for 1, 2 or 3 stored points is exactly 'Noted one thing.', 'Noted two things.', 'Noted three things.'."""
+    assert tools.writer_notice(count) == text
+
+
+def test_fr39_store_points_stores_legitimate_points(db):
+    """FR-39: two points whose words the user said are both stored: added 2, too_long 0, dropped empty."""
+    out = tools.store_points(
+        [_pt(W_POINT_A, "project"), _pt(W_POINT_B, "preference")],
+        W_USER,
+        "",
+        NOW,
+    )
+    assert out["added"] == 2
+    assert out["too_long"] == 0
+    assert out["dropped"] == []
+    assert {r[0] for r in memory_rows_in_db(db)} == {W_POINT_A, W_POINT_B}
+
+
+def test_fr39_store_points_over_length_is_not_judged_nor_stored(db, monkeypatch):
+    """FR-39: a point over MEMORY_MAX_WORDS words is counted in too_long, never judged, never stored; others in the list still are."""
+    judged = []
+    real = store.judge_point
+
+    def spy(text, user_text, profile_text):
+        judged.append(text)
+        return real(text, user_text, profile_text)
+
+    monkeypatch.setattr(store, "judge_point", spy)
+    long_text = " ".join(["hydraulic"] * (config.MEMORY_MAX_WORDS + 1))
+    out = tools.store_points([_pt(long_text), _pt(W_POINT_A)], W_USER, "", NOW)
+    assert out["too_long"] == 1
+    assert out["added"] == 1
+    assert long_text not in judged
+    assert [r[0] for r in memory_rows_in_db(db)] == [W_POINT_A]
+
+
+def test_fr39_store_points_drops_ungrounded_with_scores_and_text(db):
+    """FR-39: a point of words the user never said is not stored; dropped has direction 'ungrounded', grounded/known/leak and its text."""
+    out = tools.store_points([_pt(W_INVENTED)], W_USER, "", NOW)
+    assert out["added"] == 0
+    assert memory_count(db) == 0
+    assert len(out["dropped"]) == 1
+    entry = out["dropped"][0]
+    assert entry["direction"] == "ungrounded"
+    assert entry["text"] == W_INVENTED
+    assert {"grounded", "known", "leak"} <= set(entry)
+
+
+def test_fr39_store_points_drops_known_without_text(db):
+    """FR-39: a profile restatement is not stored; dropped has direction 'known', grounded/known/leak and NO text key."""
+    out = tools.store_points([_pt(W_KNOWN)], W_KNOWN_USER, W_PROFILE, NOW)
+    assert out["added"] == 0
+    assert memory_count(db) == 0
+    assert len(out["dropped"]) == 1
+    entry = out["dropped"][0]
+    assert entry["direction"] == "known"
+    assert {"grounded", "known", "leak"} <= set(entry)
+    assert "text" not in entry
+
+
+def test_fr39_store_points_dropped_points_do_not_count_as_added(db):
+    """FR-39: added counts only stored rows: one legitimate and two dropped gives added 1."""
+    user = W_USER + " " + W_KNOWN_USER
+    out = tools.store_points(
+        [_pt(W_POINT_B), _pt(W_INVENTED), _pt(W_KNOWN)], user, W_PROFILE, NOW
+    )
+    assert out["added"] == 1
+    assert len(out["dropped"]) == 2
+    assert memory_count(db) == 1
+
+
+def test_fr39_store_points_repeat_of_stored_memory_adds_nothing(db):
+    """FR-39: a near-verbatim repeat of a stored memory adds nothing and leaves one row."""
+    first = tools.store_points([_pt(W_POINT_A)], W_USER, "", NOW)
+    assert first["added"] == 1
+    again = tools.store_points(
+        [_pt("I am building a hydraulic press")], W_USER, "", NOW
+    )
+    assert again["added"] == 0
+    assert memory_count(db) == 1
+
+
+def test_fr40_store_points_near_miss_topic_is_added_not_collapsed(db):
+    """FR-40: with 'LoRA fine-tuning' stored, 'attention in transformers' is added as a new row and the first row is unchanged."""
+    user = "I am studying LoRA fine-tuning and also attention in transformers"
+    tools.store_points([_pt("LoRA fine-tuning")], user, "", NOW)
+    out = tools.store_points([_pt("attention in transformers")], user, "", NOW)
+    assert out["added"] == 1
+    assert sorted(r[0] for r in memory_rows_in_db(db)) == [
+        "LoRA fine-tuning",
+        "attention in transformers",
+    ]
+
+
+def test_fr39_store_points_empty_profile_text_does_not_crash(db):
+    """FR-39: an empty profile_text does not crash and a normal point is stored."""
+    out = tools.store_points([_pt(W_POINT_A)], W_USER, "", NOW)
+    assert out["added"] == 1
+    assert memory_count(db) == 1
+
+
+def test_fr39_remember_tool_never_calls_the_judge(db, fixed_now, monkeypatch):
+    """FR-39: tools.run remember never calls store.judge_point and stores the row."""
+
+    def boom(*args, **kwargs):
+        raise AssertionError("judge_point called by remember")
+
+    monkeypatch.setattr(store, "judge_point", boom)
+    out = tools.run("remember", {"text": W_POINT_A, "type": "project"}, fixed_now)
+    assert "error" not in out
+    assert memory_count(db) == 1

@@ -3492,3 +3492,539 @@ def test_fr31_no_declared_tool_writes_the_profile_directly():
         text = f"{d['name']} {d.get('description', '')}".lower()
         if d["name"].startswith(("update_", "write_", "set_")):
             assert "profile" not in text, d["name"]
+
+
+# --- notices on the reminder endpoints (FR-39, FR-13, FR-14) ---
+
+NOTICE = "Noted two things."
+
+
+def _notice(due_at: str = EQUAL) -> int:
+    from server import store
+
+    return store.add_notice(NOTICE, due_at)["id"]
+
+
+@pytest.mark.parametrize("due_at", [PAST, EQUAL])
+def test_fr39_notice_audio_is_the_stored_text_with_no_prefix(fake_stages, due_at):
+    """FR-39: a notice's audio speaks its stored text exactly, with no Reminder or
+    Missed reminder prefix, even when due an hour ago; returned as audio/wav."""
+    nid = _notice(due_at)
+    response = client.get(f"/reminders/{nid}/audio")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.content == FAKE_TTS_WAV
+    assert fake_stages["tts"] == [NOTICE]
+
+
+def test_fr39_reminder_audio_keeps_its_prefix_beside_a_notice(fake_stages):
+    """FR-13: a reminder's audio is unchanged ("Reminder, ..." and "Missed
+    reminder, ...") while a notice exists."""
+    _notice()
+    fresh = _add("call the lab", EQUAL)
+    missed = _add("call the lab", PAST)
+    assert client.get(f"/reminders/{fresh}/audio").status_code == 200
+    assert client.get(f"/reminders/{missed}/audio").status_code == 200
+    assert fake_stages["tts"] == [
+        "Reminder, 2 pm: call the lab",
+        "Missed reminder, 1 pm: call the lab",
+    ]
+
+
+def test_fr39_due_returns_a_notice_with_exactly_id_text_due_at(fixed_now):
+    """FR-39: /reminders/due lists a pending notice due at or before now, with
+    JSON keys exactly id, text, due_at, alongside reminders."""
+    reminder = _add("call the lab", PAST)
+    old = _notice(PAST)
+    equal = _notice(EQUAL)
+    _notice(FUTURE)
+    response = client.get("/reminders/due")
+    assert response.status_code == 200
+    body = response.json()
+    assert {r["id"] for r in body} == {reminder, old, equal}
+    assert all(set(r) == {"id", "text", "due_at"} for r in body)
+    by_id = {r["id"]: r for r in body}
+    assert by_id[old] == {"id": old, "text": NOTICE, "due_at": PAST}
+    assert by_id[equal]["text"] == NOTICE
+    assert by_id[equal]["due_at"] == EQUAL
+
+
+def test_fr39_ack_notice_marks_it_delivered_and_is_idempotent(fixed_now):
+    """FR-39/FR-14: acking a notice gives 200 {"status": "ok"}, it never shows in
+    /reminders/due again, and a second ack is also 200."""
+    nid = _notice()
+    assert [r["id"] for r in client.get("/reminders/due").json()] == [nid]
+    first = client.post(f"/reminders/{nid}/ack")
+    assert first.status_code == 200
+    assert first.json() == {"status": "ok"}
+    assert client.get("/reminders/due").status_code == 204
+    second = client.post(f"/reminders/{nid}/ack")
+    assert second.status_code == 200
+    assert second.json() == {"status": "ok"}
+
+
+# --- session writer on the reminder poll (FR-39, FR-40) ---
+
+W_USER = "I am building a hydraulic press and I prefer Rust for my firmware work"
+W_ANSWER = "Noted, good luck with the build."
+W_A = "Building a hydraulic press"
+W_B = "Prefers Rust for firmware work"
+W_INVENTED = "Trains falcons on the Antarctic glacier"
+W_PROFILE_TEXT = "Second-year mechanical engineering student in Nagpur"
+W_KNOWN = "Mechanical engineering student in Nagpur"
+
+
+def _pt(text, kind="fact"):
+    return {"text": text, "type": kind}
+
+
+def _expire(monkeypatch, user=W_USER, answer=W_ANSWER, at=FIXED_NOW):
+    """Buffer one session ended 121 s before the poll; main.now is set to that moment."""
+    from server import session
+
+    session.add_turn(user, answer, at)
+    now = at + timedelta(seconds=121)
+    monkeypatch.setattr("server.main.now", lambda: now)
+    return now
+
+
+def _fake_writer(monkeypatch, replies):
+    """Fake llm.write_memories: each call pops the next reply (a list of points or an Exception)."""
+    calls = []
+    queue = list(replies)
+
+    def write_memories(turns, at):
+        calls.append(list(turns))
+        reply = queue.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    monkeypatch.setattr("server.llm.write_memories", write_memories)
+    return calls
+
+
+def _no_writer(monkeypatch):
+    def boom(turns, at):
+        raise AssertionError("the writer must not be called")
+
+    monkeypatch.setattr("server.llm.write_memories", boom)
+
+
+def _memory_texts() -> list[str]:
+    import sqlite3
+
+    con = sqlite3.connect(config.DB_PATH)
+    try:
+        return [r[0] for r in con.execute("SELECT text FROM memories ORDER BY id")]
+    finally:
+        con.close()
+
+
+def _set_profile(monkeypatch, values: dict):
+    monkeypatch.setattr("server.profile.values", lambda: dict(values))
+
+
+def test_fr39_poll_without_buffered_session_makes_no_writer_call(monkeypatch):
+    """FR-39: with no buffered session the poll never calls the writer and answers as before: 204 when nothing is due, the due reminders otherwise."""
+    monkeypatch.setattr("server.main.now", lambda: FIXED_NOW)
+    _no_writer(monkeypatch)
+    assert client.get("/reminders/due").status_code == 204
+    rid = _add("call the lab", PAST)
+    response = client.get("/reminders/due")
+    assert response.status_code == 200
+    assert [r["id"] for r in response.json()] == [rid]
+    assert _memory_texts() == []
+
+
+def test_fr39_expired_session_is_written_and_notice_returned_in_same_poll(
+    monkeypatch,
+):
+    """FR-39: an expired session's two legitimate points are stored and the same poll returns exactly one notice {id, text, due_at} 'Noted two things.' with no memory text; ack removes it."""
+    _expire(monkeypatch)
+    calls = _fake_writer(monkeypatch, [[_pt(W_A, "project"), _pt(W_B, "preference")]])
+    response = client.get("/reminders/due")
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert set(body[0]) == {"id", "text", "due_at"}
+    assert body[0]["text"] == "Noted two things."
+    assert W_A not in body[0]["text"] and "hydraulic" not in body[0]["text"]
+    assert len(calls) == 1
+    assert calls[0] == [{"question": W_USER, "answer": W_ANSWER}]
+    assert set(_memory_texts()) == {W_A, W_B}
+    assert client.post(f"/reminders/{body[0]['id']}/ack").status_code == 200
+    assert client.get("/reminders/due").status_code == 204
+
+
+def test_fr39_one_buffered_session_is_written_per_poll(monkeypatch):
+    """FR-39: with two expired sessions buffered each poll writes exactly one, oldest first; a third poll makes no writer call."""
+    from server import session
+
+    session.add_turn("first session question about the press", "ok", FIXED_NOW)
+    later = FIXED_NOW + timedelta(seconds=200)
+    session.add_turn("second session question about Rust", "ok", later)
+    now = FIXED_NOW + timedelta(seconds=400)
+    monkeypatch.setattr("server.main.now", lambda: now)
+    calls = _fake_writer(monkeypatch, [[], []])
+    client.get("/reminders/due")
+    assert [c[0]["question"] for c in calls] == [
+        "first session question about the press"
+    ]
+    client.get("/reminders/due")
+    assert [c[0]["question"] for c in calls] == [
+        "first session question about the press",
+        "second session question about Rust",
+    ]
+    client.get("/reminders/due")
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("with_reminder", [False, True])
+def test_fr39_writer_failure_stores_nothing_and_poll_still_answers(
+    monkeypatch, with_reminder
+):
+    """FR-39: a writer that raises stores nothing, adds no notice, does not break the poll (204 or the due reminder) and the session is not put back."""
+    _expire(monkeypatch)
+    rid = _add("call the lab", PAST) if with_reminder else None
+    calls = _fake_writer(monkeypatch, [RuntimeError("gemini down")])
+    response = client.get("/reminders/due")
+    if with_reminder:
+        assert response.status_code == 200
+        assert [r["id"] for r in response.json()] == [rid]
+    else:
+        assert response.status_code == 204
+    assert _memory_texts() == []
+    client.get("/reminders/due")
+    assert len(calls) == 1
+
+
+def test_fr39_all_points_dropped_means_no_notice_and_no_retry(monkeypatch):
+    """FR-39: when every point is dropped (one ungrounded, one known) nothing is stored, no notice, 204, and the dropped points are not retried."""
+    _expire(monkeypatch, user="I live in Nagpur and study mechanical engineering")
+    _set_profile(monkeypatch, {"identity": W_PROFILE_TEXT})
+    calls = _fake_writer(monkeypatch, [[_pt(W_INVENTED), _pt(W_KNOWN)]])
+    assert client.get("/reminders/due").status_code == 204
+    assert _memory_texts() == []
+    assert client.get("/reminders/due").status_code == 204
+    assert len(calls) == 1
+
+
+def test_fr39_repeats_of_stored_memories_say_nothing(monkeypatch):
+    """FR-39: a session whose points all repeat stored memories adds no row and no notice."""
+    from server import tools
+
+    tools.run("remember", {"text": W_A, "type": "project"}, FIXED_NOW)
+    _expire(monkeypatch)
+    _fake_writer(monkeypatch, [[_pt("I am building a hydraulic press", "project")]])
+    assert client.get("/reminders/due").status_code == 204
+    assert _memory_texts() == [W_A]
+
+
+def test_fr39_over_length_point_is_rejected_not_shortened(monkeypatch):
+    """FR-39: a 20-word point is not stored (nor shortened); a short legitimate point in the same reply is, and the notice says 'Noted one thing.'."""
+    _expire(monkeypatch)
+    long_text = " ".join(["hydraulic"] * 20)
+    _fake_writer(monkeypatch, [[_pt(long_text), _pt(W_A, "project")]])
+    response = client.get("/reminders/due")
+    assert response.status_code == 200
+    assert [r["text"] for r in response.json()] == ["Noted one thing."]
+    assert _memory_texts() == [W_A]
+
+
+def test_fr39_query_never_calls_the_writer(fake_stages, silent_wav, monkeypatch):
+    """FR-39: /query never runs the writer, even with an expired session buffered."""
+    from server import session
+
+    session.add_turn(W_USER, W_ANSWER, FIXED_NOW - timedelta(seconds=1000))
+    _no_writer(monkeypatch)
+    assert _post_query(silent_wav).status_code == 200
+
+
+def test_fr39_empty_profile_does_not_crash_the_guard(monkeypatch):
+    """FR-39: with an empty profile the poll's guard does not crash and a grounded point is stored."""
+    _expire(monkeypatch)
+    _set_profile(monkeypatch, {})
+    _fake_writer(monkeypatch, [[_pt(W_A, "project")]])
+    response = client.get("/reminders/due")
+    assert response.status_code == 200
+    assert [r["text"] for r in response.json()] == ["Noted one thing."]
+    assert _memory_texts() == [W_A]
+
+
+SOLDER = "soldering lab closes at five on Fridays"
+
+
+def test_fr39_writer_skips_a_point_already_remembered_by_the_user(monkeypatch):
+    """FR-39/FR-40: with the fact stored through the remember tool, the writer's restatement adds no row and no notice."""
+    from server import tools
+
+    tools.run("remember", {"text": SOLDER, "type": "fact"}, FIXED_NOW)
+    _expire(
+        monkeypatch,
+        user="Remember that the soldering lab closes at five on Fridays.",
+        answer="Stored: soldering lab closes at five on Fridays.",
+    )
+    _fake_writer(monkeypatch, [[_pt("Soldering lab closes at five on Fridays")]])
+    assert client.get("/reminders/due").status_code == 204
+    assert _memory_texts() == [SOLDER]
+
+
+def test_fr40_reworded_point_is_added_as_the_find_same_limit(monkeypatch):
+    """FR-40: a heavily reworded point ('Lab for soldering shuts at 5 pm on Fridays') does ADD a row: this is the stated limit of find_same, not hidden."""
+    from server import tools
+
+    tools.run("remember", {"text": SOLDER, "type": "fact"}, FIXED_NOW)
+    _expire(
+        monkeypatch,
+        user="Remember that the lab for soldering shuts at 5 pm on Fridays.",
+        answer="Stored.",
+    )
+    reworded = "Lab for soldering shuts at 5 pm on Fridays"
+    _fake_writer(monkeypatch, [[_pt(reworded)]])
+    response = client.get("/reminders/due")
+    assert response.status_code == 200
+    assert [r["text"] for r in response.json()] == ["Noted one thing."]
+    assert _memory_texts() == [SOLDER, reworded]
+
+
+def test_fr39_same_point_in_a_second_session_adds_nothing(monkeypatch):
+    """FR-39/FR-40: with nothing stored the point is added once ('Noted one thing.'); an identical second session adds no row and no notice."""
+    from server import session
+
+    user = "Remember that the soldering lab closes at five on Fridays."
+    point = _pt("Soldering lab closes at five on Fridays")
+    _expire(monkeypatch, user=user)
+    _fake_writer(monkeypatch, [[point], [point]])
+    first = client.get("/reminders/due")
+    assert [r["text"] for r in first.json()] == ["Noted one thing."]
+    client.post(f"/reminders/{first.json()[0]['id']}/ack")
+    later = FIXED_NOW + timedelta(seconds=1000)
+    session.add_turn(user, "Stored.", later)
+    now = later + timedelta(seconds=121)
+    monkeypatch.setattr("server.main.now", lambda: now)
+    assert client.get("/reminders/due").status_code == 204
+    assert _memory_texts() == ["Soldering lab closes at five on Fridays"]
+
+
+def test_fr39_mixed_session_keeps_only_the_legitimate_point(monkeypatch):
+    """FR-39: of one grounded, one ungrounded and one profile-known point only the grounded one is stored and the notice says 'Noted one thing.'."""
+    _expire(monkeypatch, user=W_USER + " in Nagpur")
+    _set_profile(monkeypatch, {"identity": W_PROFILE_TEXT})
+    _fake_writer(monkeypatch, [[_pt(W_A, "project"), _pt(W_INVENTED), _pt(W_KNOWN)]])
+    response = client.get("/reminders/due")
+    assert response.status_code == 200
+    assert [r["text"] for r in response.json()] == ["Noted one thing."]
+    assert _memory_texts() == [W_A]
+    # A notice stays due until acked (FR-14); once acked, nothing else is waiting.
+    client.post(f"/reminders/{response.json()[0]['id']}/ack")
+    assert client.get("/reminders/due").status_code == 204
+
+
+# --- session writer log line (FR-17, FR-39) ---
+
+WRITER_KEYS = {
+    "event",
+    "time",
+    "turns",
+    "points_returned",
+    "rows_added",
+    "points_too_long",
+    "points_rejected",
+    "dropped",
+    "timings_ms",
+    "error",
+}
+
+
+def _writer_lines(path) -> list[dict]:
+    return [ln for ln in _log_lines(path) if ln.get("event") == "session_writer"]
+
+
+def test_fr17_writer_success_leaves_one_complete_line(monkeypatch, log_path):
+    """FR-17/FR-39: a successful writer run appends exactly one session_writer line with turns, points_returned, rows_added, points_too_long, points_rejected, dropped, timings_ms (llm) and error null."""
+    _expire(monkeypatch)
+    _fake_writer(monkeypatch, [[_pt(W_A, "project"), _pt(W_B, "preference")]])
+    assert client.get("/reminders/due").status_code == 200
+    lines = _log_lines(log_path)
+    assert len(lines) == 1
+    line = lines[0]
+    assert set(line) >= WRITER_KEYS
+    assert line["event"] == "session_writer"
+    assert line["turns"] == 1
+    assert line["points_returned"] == 2
+    assert line["rows_added"] == 2
+    assert line["points_too_long"] == 0
+    assert line["points_rejected"] == 0
+    assert line["dropped"] == []
+    assert isinstance(line["timings_ms"]["llm"], int)
+    assert line["error"] is None
+
+
+def test_fr17_writer_mixed_session_logs_dropped_without_memory_or_turn_text(
+    monkeypatch, log_path
+):
+    """FR-17/FR-39: a mixed session logs two dropped entries; the ungrounded one carries its text, the known one has no text; the file holds no stored, known or turn text."""
+    _expire(monkeypatch, user=W_USER + " in Nagpur")
+    _set_profile(monkeypatch, {"identity": W_PROFILE_TEXT})
+    _fake_writer(monkeypatch, [[_pt(W_A, "project"), _pt(W_INVENTED), _pt(W_KNOWN)]])
+    client.get("/reminders/due")
+    (line,) = _writer_lines(log_path)
+    assert line["points_returned"] == 3
+    assert line["rows_added"] == 1
+    assert line["points_rejected"] == 2
+    assert len(line["dropped"]) == 2
+    by_dir = {d["direction"]: d for d in line["dropped"]}
+    assert set(by_dir) == {"ungrounded", "known"}
+    ungrounded, known = by_dir["ungrounded"], by_dir["known"]
+    assert ungrounded["text"] == W_INVENTED
+    assert set(ungrounded) == {"direction", "grounded", "known", "leak", "text"}
+    assert set(known) == {"direction", "grounded", "known", "leak"}
+    for d in (ungrounded, known):
+        assert isinstance(d["grounded"], float)
+        assert isinstance(d["known"], float)
+        assert isinstance(d["leak"], int)
+    raw = log_path.read_text(encoding="utf-8")
+    assert W_INVENTED in raw
+    for secret in (W_KNOWN, W_A, W_USER, W_ANSWER, W_PROFILE_TEXT):
+        assert secret not in raw
+
+
+def test_fr17_writer_over_length_point_counts_as_too_long_and_rejected(
+    monkeypatch, log_path
+):
+    """FR-17/FR-39: an over-12-word point is counted in points_too_long and in points_rejected."""
+    _expire(monkeypatch)
+    long_text = " ".join(["hydraulic"] * 20)
+    _fake_writer(monkeypatch, [[_pt(long_text), _pt(W_A, "project")]])
+    client.get("/reminders/due")
+    (line,) = _writer_lines(log_path)
+    assert line["points_returned"] == 2
+    assert line["points_too_long"] == 1
+    assert line["points_rejected"] == 1
+    assert line["rows_added"] == 1
+    assert line["dropped"] == []
+
+
+def test_fr17_writer_failure_leaves_a_line_with_the_error(monkeypatch, log_path):
+    """FR-17/FR-39: a writer that raises leaves one line with error 'llm: ...', 0 points, 0 rows, no notice, and the poll still answers 204."""
+    _expire(monkeypatch)
+    _fake_writer(monkeypatch, [RuntimeError("gemini down")])
+    assert client.get("/reminders/due").status_code == 204
+    (line,) = _writer_lines(log_path)
+    assert line["error"].startswith("llm:")
+    assert "gemini down" in line["error"]
+    assert line["points_returned"] == 0
+    assert line["rows_added"] == 0
+    assert line["turns"] == 1
+    assert "llm" in line["timings_ms"]
+
+
+def test_fr17_writer_failure_never_logs_the_api_key(monkeypatch, log_path):
+    """FR-17/FR-39: a key inside the writer's exception message is redacted: the log never contains it."""
+    monkeypatch.setattr(config, "GEMINI_API_KEY", "sk-secret-123")
+    _expire(monkeypatch)
+    _fake_writer(monkeypatch, [RuntimeError("bad key sk-secret-123 rejected")])
+    assert client.get("/reminders/due").status_code == 204
+    (line,) = _writer_lines(log_path)
+    assert "[redacted]" in line["error"]
+    assert "sk-secret-123" not in log_path.read_text(encoding="utf-8")
+
+
+def test_fr17_writer_zero_points_leaves_a_line(monkeypatch, log_path):
+    """FR-17/FR-39: a session for which the writer returns 0 points still leaves a line with points_returned 0, rows_added 0, error null."""
+    _expire(monkeypatch)
+    _fake_writer(monkeypatch, [[]])
+    assert client.get("/reminders/due").status_code == 204
+    (line,) = _writer_lines(log_path)
+    assert line["points_returned"] == 0
+    assert line["rows_added"] == 0
+    assert line["error"] is None
+
+
+def test_fr17_writer_all_repeats_leaves_a_line_with_no_rows(monkeypatch, log_path):
+    """FR-17/FR-39: a session whose points all repeat stored memories leaves a line with rows_added 0 and error null."""
+    from server import tools
+
+    tools.run("remember", {"text": W_A, "type": "project"}, FIXED_NOW)
+    _expire(monkeypatch)
+    _fake_writer(monkeypatch, [[_pt("I am building a hydraulic press", "project")]])
+    client.get("/reminders/due")
+    (line,) = _writer_lines(log_path)
+    assert line["points_returned"] == 1
+    assert line["rows_added"] == 0
+    assert line["error"] is None
+
+
+def test_fr17_poll_without_buffered_session_writes_no_writer_line(
+    monkeypatch, log_path
+):
+    """FR-17/FR-39: a poll with no buffered session writes no session_writer line."""
+    monkeypatch.setattr("server.main.now", lambda: FIXED_NOW)
+    _no_writer(monkeypatch)
+    client.get("/reminders/due")
+    assert _writer_lines(log_path) == []
+
+
+def test_fr17_two_sessions_two_polls_leave_two_lines_in_order(monkeypatch, log_path):
+    """FR-17/FR-39: two buffered sessions written by two polls leave two session_writer lines, in order."""
+    from server import session
+
+    session.add_turn("first session question about the press", "ok", FIXED_NOW)
+    later = FIXED_NOW + timedelta(seconds=200)
+    session.add_turn("second session question about Rust", "ok", later)
+    now = FIXED_NOW + timedelta(seconds=400)
+    monkeypatch.setattr("server.main.now", lambda: now)
+    _fake_writer(monkeypatch, [[_pt(W_A, "project")], []])
+    client.get("/reminders/due")
+    client.get("/reminders/due")
+    lines = _writer_lines(log_path)
+    assert len(lines) == 2
+    assert [ln["points_returned"] for ln in lines] == [1, 0]
+    assert [ln["rows_added"] for ln in lines] == [1, 0]
+
+
+def test_fr17_query_line_has_no_event_key_but_writer_line_does(
+    fake_stages, silent_wav, monkeypatch, log_path
+):
+    """FR-17/FR-39: a /query line has no 'event' key and still carries its question; the writer line has event 'session_writer'."""
+    _expire(monkeypatch)
+    _fake_writer(monkeypatch, [[]])
+    client.get("/reminders/due")
+    assert _post_query(silent_wav).status_code == 200
+    lines = _log_lines(log_path)
+    assert len(lines) == 2
+    assert lines[0]["event"] == "session_writer"
+    assert "event" not in lines[1]
+    assert lines[1]["question"] == FAKE_TRANSCRIPT
+
+
+def test_fr40_guard_compares_profile_values_not_slot_labels(monkeypatch, tmp_path):
+    """FR-40: with the real profile loader and the real schema, a legitimate point that happens
+    to use two slot-label words (goal, now) the user never said is stored: the guard compares
+    the slot VALUES only. Including the labels would make it two leaked stems and drop the point."""
+    from server import profile
+
+    values = tmp_path / "profile.json"
+    values.write_text(
+        json.dumps(
+            {
+                "identity": "Third-year civil engineering student in Pune",
+                "goal_now": "Finish the semester project",
+                "goal_long": "Design bridges",
+            }
+        )
+    )
+    monkeypatch.setattr(config, "PROFILE_VALUES_PATH", values)
+    profile.load()
+    assert (
+        "goal_now" in profile.render()
+    )  # the labels are in the rendered profile, so a
+    # guard fed profile.render() would see them
+    _expire(monkeypatch, user="The demo matters most to me.")
+    point = "The main goal now is the demo"
+    _fake_writer(monkeypatch, [[_pt(point, "project")]])
+    response = client.get("/reminders/due")
+    assert response.status_code == 200
+    assert [r["text"] for r in response.json()] == ["Noted one thing."]
+    assert _memory_texts() == [point]

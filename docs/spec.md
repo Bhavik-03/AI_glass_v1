@@ -489,9 +489,12 @@ FR-26 onwards are new in v3.
 
 - Requirement: When a session ends, one Gemini call reviews it and keeps 0 to 3 key points.
   It applies a salience rule: keep only what would still matter in a month. It decides
-  whether a point is worth keeping before deciding how to word it. The assistant speaks only
-  how many it kept ("Noted two things."), never the contents. A failed writer call is logged
-  and loses the points; it never fails the user's query
+  whether a point is worth keeping before deciding how to word it. A dated event ("I have an
+  interview next week") is not kept; the standing fact behind it, if the session shows one,
+  is. A point over `MEMORY_MAX_WORDS` is rejected, never truncated. The assistant speaks only
+  how many rows it actually added ("Noted two things."), never the contents, and says nothing
+  when it added none. A failed writer call is logged and loses the points; it never fails the
+  user's query
 - Input → Output: Ended session → 0 to 3 rows, a spoken count
 - Acceptance: A session of small talk keeps 0 points and says nothing; a session with three
   durable facts keeps up to 3; the spoken line gives the count and no content; a writer call

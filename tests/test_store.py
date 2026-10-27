@@ -1,4 +1,6 @@
+import json
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -279,10 +281,10 @@ def test_fr12_list_due_does_not_change_status(db):
 
 
 def test_fr12_get_returns_reminder(db):
-    """get returns {id, text, due_at} for an existing reminder."""
+    """get returns {id, text, due_at} and its kind for an existing reminder."""
     added = store.add_reminder("call mom", DUE_A, CREATED)
 
-    assert store.get(added["id"]) == added
+    assert store.get(added["id"]) == {**added, "kind": "reminder"}
 
 
 def test_fr12_get_unknown_id_returns_none(db):
@@ -1691,3 +1693,361 @@ def test_fr35_second_wipe_returns_zero(db):
     assert store.wipe_memories() == 3
     assert store.wipe_memories() == 0
     assert memory_rows(db) == []
+
+
+def reminder_columns(path) -> list[str]:
+    con = REAL_CONNECT(path)
+    try:
+        return [r[1] for r in con.execute("PRAGMA table_info(reminders)")]
+    finally:
+        con.close()
+
+
+def kind_of(path, row_id: int) -> str:
+    con = REAL_CONNECT(path)
+    try:
+        row = con.execute("SELECT kind FROM reminders WHERE id = ?", (row_id,))
+        return row.fetchone()[0]
+    finally:
+        con.close()
+
+
+def old_db(monkeypatch, tmp_path):
+    """A database made before v3: reminders without a kind column, two rows."""
+    path = tmp_path / "old.db"
+    con = REAL_CONNECT(path)
+    try:
+        with con:
+            con.execute(
+                "CREATE TABLE reminders (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                " text TEXT NOT NULL, due_at TEXT NOT NULL,"
+                " created_at TEXT NOT NULL, status TEXT NOT NULL)"
+            )
+            con.execute(
+                "INSERT INTO reminders (text, due_at, created_at, status)"
+                " VALUES ('old pending', ?, ?, 'pending')",
+                (DUE_A, CREATED),
+            )
+            con.execute(
+                "INSERT INTO reminders (text, due_at, created_at, status)"
+                " VALUES ('old delivered', ?, ?, 'delivered')",
+                (DUE_B, CREATED),
+            )
+    finally:
+        con.close()
+    monkeypatch.setattr("server.config.DB_PATH", path)
+    return path
+
+
+def test_fr39_fresh_database_has_kind_column_default_reminder(db):
+    """A fresh database's reminders table has a kind column, and add_reminder rows get kind 'reminder'."""
+    assert "kind" in reminder_columns(db)
+
+    added = store.add_reminder("call mom", DUE_A, CREATED)
+
+    assert kind_of(db, added["id"]) == "reminder"
+
+
+def test_fr39_init_adds_kind_to_old_database_and_keeps_rows_as_reminders(
+    monkeypatch, tmp_path
+):
+    """init() on a pre-v3 database adds the kind column and keeps every row, each as a reminder."""
+    path = old_db(monkeypatch, tmp_path)
+    assert "kind" not in reminder_columns(path)
+
+    store.init()
+
+    assert "kind" in reminder_columns(path)
+    assert reminder_rows(path) == [
+        (1, "old pending", DUE_A, "pending"),
+        (2, "old delivered", DUE_B, "delivered"),
+    ]
+    assert kind_of(path, 1) == "reminder"
+    assert kind_of(path, 2) == "reminder"
+
+
+def test_fr39_init_twice_on_old_database_does_not_fail(monkeypatch, tmp_path):
+    """A second init() after the migration does not fail and changes no row."""
+    path = old_db(monkeypatch, tmp_path)
+    store.init()
+    before = reminder_rows(path)
+
+    store.init()
+
+    assert reminder_rows(path) == before
+    assert reminder_columns(path).count("kind") == 1
+
+
+def test_fr39_old_reminder_still_works_after_migration(monkeypatch, tmp_path):
+    """A reminder created before the migration is listed, due, ackable and cancellable afterwards."""
+    path = old_db(monkeypatch, tmp_path)
+    store.init()
+    old = {"id": 1, "text": "old pending", "due_at": DUE_A}
+
+    assert store.list_pending() == [old]
+    assert store.list_due(NOW) == [old]
+    assert store.get(1)["kind"] == "reminder"
+    assert store.ack(1) == old
+    assert status_of(path, 1) == store.DELIVERED
+    assert store.list_due(NOW) == []
+
+    other = store.add_reminder("new one", DUE_A, CREATED)
+    assert store.cancel(other["id"]) == other
+
+
+def test_fr39_old_pending_reminder_is_cancellable_after_migration(
+    monkeypatch, tmp_path
+):
+    """cancel of a pre-v3 pending reminder returns it and sets it cancelled."""
+    path = old_db(monkeypatch, tmp_path)
+    store.init()
+
+    assert store.cancel(1) == {"id": 1, "text": "old pending", "due_at": DUE_A}
+    assert status_of(path, 1) == store.CANCELLED
+
+
+def test_fr39_add_notice_stores_pending_notice_due_now_and_returns_dict(db):
+    """add_notice stores one pending row of kind notice due at now and returns a dict."""
+    notice = store.add_notice("I saved 2 points from our session", NOW)
+
+    assert isinstance(notice, dict)
+    assert notice["text"] == "I saved 2 points from our session"
+    assert notice["due_at"] == NOW
+    rows = reminder_rows(db)
+    assert rows == [
+        (notice["id"], "I saved 2 points from our session", NOW, store.PENDING)
+    ]
+    assert kind_of(db, notice["id"]) == "notice"
+
+
+def test_fr39_list_pending_never_sees_a_notice(db):
+    """list_pending (behind list_reminders) leaves out notices."""
+    reminder = store.add_reminder("call mom", DUE_A, CREATED)
+    store.add_notice("saved 1 point", NOW)
+
+    assert store.list_pending() == [reminder]
+
+
+def test_fr39_cancel_of_notice_returns_none_and_leaves_it_pending(db):
+    """cancel of a notice id returns None and the notice stays pending."""
+    notice = store.add_notice("saved 1 point", NOW)
+
+    assert store.cancel(notice["id"]) is None
+    assert status_of(db, notice["id"]) == store.PENDING
+    assert [r["id"] for r in store.list_due(NOW)] == [notice["id"]]
+
+
+def test_fr39_list_due_returns_reminders_and_notices_with_three_keys(db):
+    """list_due returns due reminders and notices, each with exactly id, text, due_at."""
+    reminder = store.add_reminder("call mom", DUE_A, CREATED)
+    notice = store.add_notice("saved 1 point", NOW)
+
+    due = store.list_due(NOW)
+
+    assert all(set(r) == {"id", "text", "due_at"} for r in due)
+    assert {r["id"] for r in due} == {reminder["id"], notice["id"]}
+    assert {r["text"] for r in due} == {"call mom", "saved 1 point"}
+
+
+def test_fr39_list_due_orders_notices_and_reminders_by_due_at_then_id(db):
+    """list_due orders reminders and notices together, oldest due_at first, ties by id."""
+    first_tie = store.add_notice("tie notice", DUE_B)
+    early = store.add_reminder("early reminder", DUE_A, CREATED)
+    second_tie = store.add_reminder("tie reminder", DUE_B, CREATED)
+    third_tie = store.add_notice("another tie notice", DUE_B)
+
+    due = store.list_due("2026-10-09T18:00:00+05:30")
+
+    assert [r["id"] for r in due] == [
+        early["id"],
+        first_tie["id"],
+        second_tie["id"],
+        third_tie["id"],
+    ]
+
+
+def test_fr39_list_due_excludes_future_notice(db):
+    """list_due does not return a notice whose due_at is after now."""
+    store.add_notice("future notice", DUE_C)
+
+    assert store.list_due(NOW) == []
+
+
+def test_fr39_get_tells_the_kind(db):
+    """get returns the kind: 'reminder' for a reminder, 'notice' for a notice."""
+    reminder = store.add_reminder("call mom", DUE_A, CREATED)
+    notice = store.add_notice("saved 1 point", NOW)
+
+    assert store.get(reminder["id"])["kind"] == "reminder"
+    assert store.get(notice["id"])["kind"] == "notice"
+    assert store.get(notice["id"])["text"] == "saved 1 point"
+
+
+def test_fr39_ack_of_notice_marks_delivered_and_leaves_list_due(db):
+    """ack of a notice makes it delivered and it leaves list_due."""
+    notice = store.add_notice("saved 1 point", NOW)
+    assert [r["id"] for r in store.list_due(NOW)] == [notice["id"]]
+
+    result = store.ack(notice["id"])
+
+    assert result is not None
+    assert result["id"] == notice["id"]
+    assert status_of(db, notice["id"]) == store.DELIVERED
+    assert store.list_due(NOW) == []
+
+
+# --- writer guard: judge_point (FR-39, FR-40) ---
+
+T6_FIXTURE = json.loads(
+    (Path(__file__).parent / "fixtures" / "t6_pairs.json").read_text(encoding="utf-8")
+)
+T6_PROFILE_TEXT = " ".join(T6_FIXTURE["profile"].values())
+T6_PAIRS = {p["id"]: p for p in T6_FIXTURE["pairs"]}
+HELD_OUT_PROFILE = (
+    "Final-year electronics engineering student in Pune "
+    "Work on embedded machine learning"
+)
+LEAK_USER = (
+    "My PCB submission for the sensor board is due on the 28th, so I need to "
+    "check the footprint library. The connector ones. I've been building this "
+    "sensor board for a climate logger all semester, it's my main project."
+)
+
+
+def t6_params():
+    return [
+        pytest.param(
+            p,
+            id=f"pair-{p['id']}-{p['group']}"
+            + ("-known-limit" if p["known_limit"] else ""),
+        )
+        for p in T6_FIXTURE["pairs"]
+    ]
+
+
+def judge_pair(pair_id: int) -> dict:
+    pair = T6_PAIRS[pair_id]
+    return store.judge_point(
+        pair["point"], " ".join(pair["user_turns"]), T6_PROFILE_TEXT
+    )
+
+
+def test_fr39_t6_fixture_has_34_pairs():
+    """The frozen T6 fixture holds 34 pairs."""
+    assert len(T6_FIXTURE["pairs"]) == 34
+
+
+@pytest.mark.parametrize("pair", t6_params())
+def test_fr39_judge_point_matches_t6_expected_verdict(pair):
+    """Each T6 pair gets its expected verdict. Known-limit pairs (D, E, F19, J:
+    fabrications that share a word) are expected to PASS the guard (verdict
+    None) although wrong by meaning."""
+    got = store.judge_point(
+        pair["point"], " ".join(pair["user_turns"]), T6_PROFILE_TEXT
+    )
+    assert got["verdict"] == pair["expected"]
+
+
+def test_fr39_judge_point_held_out_f_is_ungrounded():
+    """A fabricated point sharing no stem with the user's words is ungrounded (held-out f)."""
+    got = store.judge_point(
+        "Working on a fingerprint-sensor project",
+        "How do I read a CSV file in Python? Okay, how do I skip the header row?",
+        HELD_OUT_PROFILE,
+    )
+    assert got["verdict"] == "ungrounded"
+
+
+def test_fr39_judge_point_held_out_f2_is_ungrounded():
+    """A fabricated point sharing no stem with the user's words is ungrounded (held-out f2)."""
+    got = store.judge_point(
+        "Maintaining a Rust compiler fork",
+        "How do I undo my last git commit? Okay, and how do I rename a branch?",
+        HELD_OUT_PROFILE,
+    )
+    assert got["verdict"] == "ungrounded"
+
+
+def test_fr39_judge_point_held_out_leak_is_known_with_leaked_stems():
+    """A point that copies two profile words the user never said is known, leak == final, year."""
+    got = store.judge_point(
+        "Building a climate logger sensor board as final-year project",
+        LEAK_USER,
+        HELD_OUT_PROFILE,
+    )
+    assert got["verdict"] == "known"
+    assert got["leak"] == ["final", "year"]
+
+
+def test_fr39_judge_point_held_out_legitimate_point_passes():
+    """The same point without the leaked profile words passes (verdict None)."""
+    got = store.judge_point(
+        "Building a climate logger sensor board as main project",
+        LEAK_USER,
+        HELD_OUT_PROFILE,
+    )
+    assert got["verdict"] is None
+
+
+def test_fr39_judge_point_returns_scores_and_leak_for_pair_22():
+    """Pair 22 scores grounded 0.6, known 0.6 and leak == build, vehicl."""
+    got = judge_pair(22)
+    assert set(got) == {"verdict", "grounded", "known", "leak"}
+    assert got["grounded"] == pytest.approx(0.6)
+    assert got["known"] == pytest.approx(0.6)
+    assert got["leak"] == ["build", "vehicl"]
+
+
+def test_fr39_judge_point_empty_profile_never_gives_known():
+    """With an empty profile_text the verdict is never known."""
+    pair = T6_PAIRS[22]
+    got = store.judge_point(pair["point"], " ".join(pair["user_turns"]), "")
+    assert got["verdict"] is None
+    assert got["known"] == 0
+    assert got["leak"] == []
+
+
+def test_fr39_judge_point_without_content_stems_is_ungrounded():
+    """A point with no content stems at all shares zero stems with the user and is ungrounded."""
+    got = store.judge_point("the of a", "I study the thermodynamics exam", "")
+    assert got["verdict"] == "ungrounded"
+
+
+def test_fr39_judge_point_assistant_words_never_ground_a_point():
+    """Only user turns are passed: a point whose words are not in user_text is ungrounded."""
+    got = store.judge_point(
+        "Maintaining a Rust compiler fork", "How do I rename a branch?", ""
+    )
+    assert got["verdict"] == "ungrounded"
+
+
+def test_fr39_judge_point_known_share_comes_from_config(monkeypatch):
+    """Lowering config.WRITER_KNOWN_SHARE to 0.3 makes pair 34 (share 0.33, leak 0) known."""
+    assert config.WRITER_KNOWN_SHARE == 0.5
+    assert judge_pair(34)["verdict"] is None
+    monkeypatch.setattr(config, "WRITER_KNOWN_SHARE", 0.3)
+    assert judge_pair(34)["verdict"] == "known"
+
+
+def test_fr39_judge_point_leak_stems_come_from_config(monkeypatch):
+    """Raising config.WRITER_LEAK_STEMS to 3 turns pair 30 (leak 2, share 0.25) from known to None."""
+    assert config.WRITER_LEAK_STEMS == 2
+    assert judge_pair(30)["verdict"] == "known"
+    monkeypatch.setattr(config, "WRITER_LEAK_STEMS", 3)
+    assert judge_pair(30)["verdict"] is None
+
+
+def test_fr39_remember_never_calls_judge_point(db, monkeypatch):
+    """store.remember is not guarded: it stores a new row even if judge_point would raise."""
+
+    def boom(*args, **kwargs):
+        raise AssertionError("judge_point must not be called by remember")
+
+    monkeypatch.setattr(store, "judge_point", boom)
+
+    item = store.remember(
+        "fingerprint sensor project", "project", "2026-10-26T10:00:00+05:30"
+    )
+
+    assert item["new"] is True
+    assert len(memory_rows(db)) == 1

@@ -352,6 +352,52 @@ def setup_prompt(question: str) -> str:
     return f"{intro} {question}"
 
 
+NUMBER_WORDS = {1: "one", 2: "two", 3: "three"}
+
+
+def writer_notice(count: int) -> str:
+    """The spoken line after the session writer stored `count` points: the number only,
+    never the contents (FR-39)."""
+    return (
+        f"Noted {NUMBER_WORDS.get(count, count)} {'thing' if count == 1 else 'things'}."
+    )
+
+
+def store_points(
+    points: list[dict], user_text: str, profile_text: str, now: datetime
+) -> dict:
+    """Store the session writer's points that pass the length check and the guard (FR-39,
+    FR-40). Writer path only: `remember` is the user's own words and is never judged.
+
+    A point over the word limit is counted and skipped, never shortened. A point the guard
+    drops is never stored or retried; an ungrounded one keeps its text so the drop can be
+    inspected, a known one does not (it restates the profile). `added` counts stored rows only.
+    """
+    added, too_long, dropped = 0, 0, []
+    for point in points:
+        text = point["text"]
+        # Checked here, before the guard, because store.remember checks it only in the same call
+        # that adds the row.
+        if store.too_long(text):
+            too_long += 1
+            continue
+        judged = store.judge_point(text, user_text, profile_text)
+        if judged["verdict"]:
+            drop = {
+                "direction": judged["verdict"],
+                "grounded": judged["grounded"],
+                "known": judged["known"],
+                "leak": len(judged["leak"]),
+            }
+            if judged["verdict"] == "ungrounded":
+                drop["text"] = text
+            dropped.append(drop)
+            continue
+        stored = store.remember(text, point["type"], now.isoformat(timespec="seconds"))
+        added += stored["new"]
+    return {"added": added, "too_long": too_long, "dropped": dropped}
+
+
 def setup_noted(value: str, question: str | None) -> str:
     """The stored answer read back, then the next question or the closing line, so a
     speech-recognition error is audible at once (FR-29)."""
@@ -420,7 +466,10 @@ def spoken_when(due: datetime, now: datetime) -> str:
 
 
 def reminder_text(reminder: dict, now: datetime) -> str:
-    """Spoken form of a due reminder: 'Reminder, 5 pm: …' or 'Missed reminder, …' (FR-13)."""
+    """Spoken form of a due reminder: 'Reminder, 5 pm: …' or 'Missed reminder, …' (FR-13).
+    A notice is spoken as stored (FR-39)."""
+    if reminder.get("kind") == store.NOTICE:
+        return reminder["text"]
     due = datetime.fromisoformat(reminder["due_at"])
     missed = (now - due).total_seconds() >= config.MISSED_AFTER_S
     prefix = "Missed reminder" if missed else "Reminder"

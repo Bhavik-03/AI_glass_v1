@@ -1987,3 +1987,393 @@ def test_fr31_propose_unknown_slot_logged_failed(monkeypatch, tmp_path) -> None:
         {"name": "propose_profile_update", "args": args, "status": "failed"}
     ]
     assert "error" in response_of(fake.models.calls[1]["contents"][2])
+
+
+# --- write_memories(): the session writer's one Gemini call (FR-39, FR-40, FR-28) ---
+
+WRITER_TURNS = [
+    {"question": "what is zebrafish-q1?", "answer": "answer-one about quokkas."},
+    {"question": "and zebrafish-q2?", "answer": "answer-two about walruses."},
+    {"question": "thanks, bye", "answer": "answer-three, you are welcome."},
+]
+
+
+def points_json(points: list) -> str:
+    return json.dumps({"points": points})
+
+
+def point(text: str = "Prefers short answers", type_: str = "preference") -> dict:
+    return {"text": text, "type": type_}
+
+
+def _write(monkeypatch, reply: str, turns=None) -> list[dict]:
+    install_fake(monkeypatch, [text_response(reply)])
+    return llm.write_memories(WRITER_TURNS if turns is None else turns, fixed_now())
+
+
+def _writer_call(monkeypatch, turns=None) -> dict:
+    fake = install_fake(monkeypatch, [text_response(points_json([]))])
+    llm.write_memories(WRITER_TURNS if turns is None else turns, fixed_now())
+    return fake.models.calls[0]
+
+
+def test_fr39_writer_makes_exactly_one_call(monkeypatch) -> None:
+    """write_memories makes exactly one Gemini call, with no tool round."""
+    fake = install_fake(monkeypatch, [text_response(points_json([]))])
+    llm.write_memories(WRITER_TURNS, fixed_now())
+    assert len(fake.models.calls) == 1
+
+
+def test_fr39_writer_request_settings(monkeypatch) -> None:
+    """The request has no tools or tool_config, asks for JSON, thinking MINIMAL, and uses config.LLM_MODEL."""
+    monkeypatch.setattr(config, "LLM_MODEL", "writer-test-model")
+    call = _writer_call(monkeypatch)
+    cfg = call["config"]
+    assert call["model"] == "writer-test-model"
+    assert not cfg.tools
+    assert cfg.tool_config is None
+    assert cfg.response_mime_type == "application/json"
+    assert enum_value(cfg.thinking_config.thinking_level) == "MINIMAL"
+
+
+def test_fr39_writer_contents_hold_every_turn_oldest_first(monkeypatch) -> None:
+    """Contents are plain text holding every turn's question and answer, oldest first."""
+    call = _writer_call(monkeypatch)
+    text = sent_text(call)
+    positions = []
+    for turn in WRITER_TURNS:
+        assert turn["question"] in text
+        assert turn["answer"] in text
+        positions.append(text.index(turn["question"]))
+    assert positions == sorted(positions)
+    assert text.index(WRITER_TURNS[0]["answer"]) < text.index(
+        WRITER_TURNS[1]["question"]
+    )
+
+
+def test_fr39_writer_never_sends_an_image(monkeypatch) -> None:
+    """No part of the writer request is an image."""
+    call = _writer_call(monkeypatch)
+    contents = call["contents"]
+    if not isinstance(contents, list):
+        contents = [contents]
+    for item in contents:
+        if isinstance(item, str):
+            continue
+        assert not has_inline_data(item)
+
+
+def test_fr39_writer_instruction_is_not_the_grader_one(monkeypatch) -> None:
+    """The writer has its own system instruction, not GRADE_INSTRUCTION."""
+    cfg = _writer_call(monkeypatch)["config"]
+    assert cfg.system_instruction
+    assert cfg.system_instruction != llm.GRADE_INSTRUCTION
+
+
+def test_fr39_writer_instruction_month_test_before_word_limit(monkeypatch) -> None:
+    """The instruction asks "would this still matter in a month" before it says "at most 12 words"."""
+    text = _writer_call(monkeypatch)["config"].system_instruction.lower()
+    assert "would this still matter in a month" in text
+    assert "at most 12 words" in text
+    assert text.index("would this still matter in a month") < text.index(
+        "at most 12 words"
+    )
+
+
+def test_fr39_writer_instruction_word_limit_follows_config(monkeypatch) -> None:
+    """The word limit in the instruction follows config.MEMORY_MAX_WORDS."""
+    monkeypatch.setattr(config, "MEMORY_MAX_WORDS", 8)
+    text = _writer_call(monkeypatch)["config"].system_instruction.lower()
+    assert "at most 8 words" in text
+    assert "at most 12 words" not in text
+
+
+def test_fr39_writer_instruction_point_count_is_0_to_3(monkeypatch) -> None:
+    """The instruction says "0 to 3 points"."""
+    assert config.WRITER_MAX_POINTS == 3
+    text = _writer_call(monkeypatch)["config"].system_instruction.lower()
+    assert "0 to 3 points" in text
+
+
+def test_fr39_writer_instruction_point_count_follows_config(monkeypatch) -> None:
+    """The point count in the instruction follows config.WRITER_MAX_POINTS."""
+    monkeypatch.setattr(config, "WRITER_MAX_POINTS", 2)
+    text = _writer_call(monkeypatch)["config"].system_instruction.lower()
+    assert "0 to 2 points" in text
+    assert "0 to 3 points" not in text
+
+
+def test_fr39_writer_instruction_salience_rules(monkeypatch) -> None:
+    """The instruction names a dated event with the "I have an interview next week" example, and a standing fact."""
+    raw = _writer_call(monkeypatch)["config"].system_instruction
+    text = raw.lower()
+    assert "dated event" in text
+    assert "I have an interview next week" in raw
+    assert "standing fact" in text
+
+
+def test_fr39_writer_instruction_mentions_profile(monkeypatch) -> None:
+    """The instruction mentions the profile (what it already holds is not kept as a point)."""
+    text = _writer_call(monkeypatch)["config"].system_instruction.lower()
+    assert "profile" in text
+
+
+def test_fr39_writer_instruction_names_the_four_types(monkeypatch) -> None:
+    """The instruction names the types fact, project, preference and session."""
+    text = _writer_call(monkeypatch)["config"].system_instruction.lower()
+    for name in ("fact", "project", "preference", "session"):
+        assert name in text
+
+
+def test_fr39_writer_instruction_skips_small_talk_and_quiz(monkeypatch) -> None:
+    """The instruction says small talk and a quiz request are not worth keeping."""
+    text = _writer_call(monkeypatch)["config"].system_instruction.lower()
+    assert "small talk" in text
+    assert "quiz" in text
+
+
+def test_fr40_writer_instruction_forbids_reusing_wording_for_a_different_point(
+    monkeypatch,
+) -> None:
+    """The instruction says never to reuse the wording of one point for a different point."""
+    text = _writer_call(monkeypatch)["config"].system_instruction.lower()
+    assert "never reuse the wording of one point for a different point" in text
+
+
+def test_fr39_writer_instruction_lists_what_is_not_kept_as_separate_items(
+    monkeypatch,
+) -> None:
+    """The not-worth-keeping list is a semicolon list whose last two items stay apart."""
+    text = _writer_call(monkeypatch)["config"].system_instruction
+    assert (
+        "None of these is worth keeping: small talk; jokes; a passing question; "
+        "a general-knowledge answer; a request to be quizzed; "
+        "a question the user simply restated; "
+        "the assistant's own question about whether the month goal still holds."
+    ) in text
+
+
+def test_fr39_writer_instruction_skips_what_the_user_asked_to_remember(
+    monkeypatch,
+) -> None:
+    """Anything the user explicitly asked to remember is already stored, so the writer does
+    not keep it again; the writer is not shown the store, and find_same only catches
+    near-verbatim repeats."""
+    text = _writer_call(monkeypatch)["config"].system_instruction
+    assert (
+        "Anything the user explicitly asked the assistant to remember during this "
+        "conversation is already stored. Do not keep it again."
+    ) in text
+    assert text.index("never something only the assistant said") < text.index(
+        "already stored"
+    )
+
+
+def test_fr39_writer_instruction_makes_only_the_users_words_evidence(
+    monkeypatch,
+) -> None:
+    """Early in the instruction, before the salience test: only the user's own words are
+    evidence, and something the assistant said about the user is not a fact."""
+    text = _writer_call(monkeypatch)["config"].system_instruction
+    rule = (
+        "Only the user's own words are evidence. If the assistant mentioned something "
+        "about the user and the user never said it, it is not a fact and must not be kept."
+    )
+    assert rule in text
+    assert text.index(rule) < text.index("would this still matter in a month")
+
+
+def test_fr40_writer_instruction_prefers_granular_points(monkeypatch) -> None:
+    """Two distinct decisions are two specific points, not one general point."""
+    text = _writer_call(monkeypatch)["config"].system_instruction
+    assert (
+        "Prefer two specific points over one general point when the conversation holds "
+        "two distinct decisions. A point states one thing. Keep the decision, not only "
+        "the topic."
+    ) in text
+
+
+def test_fr28_writer_request_carries_profile(monkeypatch, tmp_path) -> None:
+    """With a filled profile the writer request's instruction carries every non-empty slot line."""
+    _filled(monkeypatch, tmp_path)
+    sent = _writer_call(monkeypatch)["config"].system_instruction
+    assert IDENTITY_LINE in sent
+    assert GOAL_LINE in sent
+    assert "style:" not in sent
+
+
+def test_fr28_writer_empty_profile_adds_no_block(monkeypatch, tmp_path) -> None:
+    """With an empty profile the writer instruction has no profile block text."""
+    from server import profile
+
+    monkeypatch.setattr(profile, "_slots", [])
+    monkeypatch.setattr(profile, "_values", {})
+    never_loaded = _writer_call(monkeypatch)["config"].system_instruction
+    _load_profile(monkeypatch, tmp_path, {})
+    sent = _writer_call(monkeypatch)["config"].system_instruction
+    assert sent == never_loaded
+    assert IDENTITY_LINE not in sent
+    assert GOAL_LINE not in sent
+
+
+def test_fr39_writer_is_not_shown_stored_memories(monkeypatch, db) -> None:
+    """A stored memory's text appears nowhere in the writer's contents or instruction."""
+    from server import store
+
+    store.remember(
+        "Zyxwvut marmalade is my secret", store.FACT, "2026-10-09T10:00:00+05:30"
+    )
+    call = _writer_call(monkeypatch)
+    assert "zyxwvut" not in sent_text(call).lower()
+    assert "zyxwvut" not in call["config"].system_instruction.lower()
+
+
+def test_fr39_writer_valid_reply_returns_points_stripped(monkeypatch) -> None:
+    """A valid reply returns the points as {"text", "type"} with text stripped."""
+    reply = points_json(
+        [
+            point("  Prefers short answers \n", "preference"),
+            point("Studies LoRA", "project"),
+        ]
+    )
+    assert _write(monkeypatch, reply) == [
+        {"text": "Prefers short answers", "type": "preference"},
+        {"text": "Studies LoRA", "type": "project"},
+    ]
+
+
+def test_fr39_writer_empty_points_returns_empty_list(monkeypatch) -> None:
+    """An empty points list returns []."""
+    assert _write(monkeypatch, points_json([])) == []
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "not json at all",
+        "",
+        '["points"]',
+        '"just a string"',
+        "null",
+        json.dumps({"other": []}),
+        json.dumps({"points": None}),
+        json.dumps({"points": "Prefers short answers"}),
+        json.dumps({"points": {"text": "x", "type": "fact"}}),
+    ],
+    ids=[
+        "bad-json",
+        "empty-reply",
+        "list",
+        "string",
+        "null",
+        "missing-points",
+        "points-null",
+        "points-string",
+        "points-object",
+    ],
+)
+def test_fr39_writer_unreadable_reply_raises(monkeypatch, bad: str) -> None:
+    """A reply that is not JSON, not an object, lacks "points" or has a non-list points raises RuntimeError."""
+    with pytest.raises(RuntimeError):
+        _write(monkeypatch, bad)
+
+
+@pytest.mark.parametrize(
+    "bad_point",
+    [
+        {"text": "", "type": "fact"},
+        {"text": "   ", "type": "fact"},
+        {"text": 42, "type": "fact"},
+        {"text": None, "type": "fact"},
+        {"type": "fact"},
+    ],
+    ids=["empty", "blank", "number", "null", "missing"],
+)
+def test_fr39_writer_drops_point_without_text(monkeypatch, bad_point) -> None:
+    """A point whose text is empty, whitespace or not text is dropped."""
+    good = point("Studies LoRA", "project")
+    assert _write(monkeypatch, points_json([bad_point, good])) == [good]
+
+
+@pytest.mark.parametrize("bad_type", ["event", "Fact", "", None, 3, "note"], ids=str)
+def test_fr39_writer_drops_point_with_unknown_type(monkeypatch, bad_type) -> None:
+    """A point whose type is outside fact/project/preference/session is dropped."""
+    good = point("Studies LoRA", "project")
+    bad = {"text": "Something else", "type": bad_type}
+    assert _write(monkeypatch, points_json([bad, good])) == [good]
+
+
+def test_fr39_writer_drops_point_with_missing_type(monkeypatch) -> None:
+    """A point with no type is dropped."""
+    good = point("Studies LoRA", "project")
+    assert _write(monkeypatch, points_json([{"text": "No type"}, good])) == [good]
+
+
+@pytest.mark.parametrize("junk", ["a string", 7, None, ["x"]], ids=str)
+def test_fr39_writer_drops_non_object_entry(monkeypatch, junk) -> None:
+    """A points entry that is not an object is dropped."""
+    good = point("Studies LoRA", "project")
+    assert _write(monkeypatch, points_json([junk, good])) == [good]
+
+
+@pytest.mark.parametrize("kind", ["fact", "project", "preference", "session"])
+def test_fr39_writer_accepts_each_of_the_four_types(monkeypatch, kind) -> None:
+    """Each of fact, project, preference and session is a valid type."""
+    p = point("Some point", kind)
+    assert _write(monkeypatch, points_json([p])) == [p]
+
+
+def test_fr39_writer_cap_applies_after_dropping_invalid(monkeypatch) -> None:
+    """Given 5 entries where the first is invalid, the result is the next 3 valid ones in order."""
+    entries = [
+        {"text": "", "type": "fact"},
+        point("one", "fact"),
+        point("two", "project"),
+        point("three", "preference"),
+        point("four", "session"),
+    ]
+    assert _write(monkeypatch, points_json(entries)) == entries[1:4]
+
+
+def test_fr39_writer_cap_keeps_first_three_of_four_valid(monkeypatch) -> None:
+    """Given 4 valid points, the first 3 are returned."""
+    entries = [point(f"point {i}", "fact") for i in range(4)]
+    assert _write(monkeypatch, points_json(entries)) == entries[:3]
+
+
+def test_fr39_writer_cap_follows_config(monkeypatch) -> None:
+    """The cap is config.WRITER_MAX_POINTS."""
+    monkeypatch.setattr(config, "WRITER_MAX_POINTS", 1)
+    entries = [point(f"point {i}", "fact") for i in range(3)]
+    assert _write(monkeypatch, points_json(entries)) == entries[:1]
+
+
+def test_fr39_writer_long_point_comes_back_unchanged(monkeypatch) -> None:
+    """A point over 12 words is neither dropped nor shortened here; the store rejects it later."""
+    long = point(" ".join(f"word{i}" for i in range(20)), "fact")
+    assert _write(monkeypatch, points_json([long])) == [long]
+
+
+def test_fr39_writer_client_error_propagates(monkeypatch) -> None:
+    """An exception from generate_content propagates out of write_memories unchanged."""
+    install_fake(monkeypatch, [ConnectionError("boom")])
+    with pytest.raises(ConnectionError, match="boom"):
+        llm.write_memories(WRITER_TURNS, fixed_now())
+
+
+def test_fr39_writer_does_not_touch_the_store(monkeypatch, db) -> None:
+    """write_memories neither calls nor modifies the store: the memories table is unchanged."""
+    import sqlite3
+
+    from server import store
+
+    store.remember("Existing memory", store.FACT, "2026-10-09T10:00:00+05:30")
+
+    def count() -> int:
+        with sqlite3.connect(db) as conn:
+            return conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+
+    before = count()
+    result = _write(monkeypatch, points_json([point("Studies LoRA", "project")]))
+    assert result == [point("Studies LoRA", "project")]
+    assert count() == before
